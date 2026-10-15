@@ -593,11 +593,15 @@ export const storageService = {
             'dashboard', 'produce', 'inbound', 'laser_inbound', 'welding_inbound',
             'glazing', 'labels', 'po', 'defects', 'working_hours', 'norms', 'odd_po', 'settings'
           ],
+          canApproveOddPO: true,
           isActive: true,
           createdAt: Date.now()
         };
         users = [defaultAdmin];
         try { localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users)); } catch {}
+      } else {
+        // Ensure all ADMIN accounts have canApproveOddPO enabled
+        users = users.map(u => u.role === 'ADMIN' ? { ...u, canApproveOddPO: true } : u);
       }
       return users;
     });
@@ -611,7 +615,7 @@ export const storageService = {
 
   getCurrentUser(): UserAccount | null {
     try {
-      const raw = localStorage.getItem('wip_current_user');
+      const raw = localStorage.getItem('wip_current_user') || sessionStorage.getItem('wip_current_user');
       if (raw) {
         const u = JSON.parse(raw);
         const users = this.getUsers();
@@ -619,24 +623,26 @@ export const storageService = {
         if (found && found.isActive) return found;
       }
     } catch {}
-    const users = this.getUsers();
-    const admin = users.find(u => u.role === 'ADMIN' && u.isActive) || users[0];
-    if (admin) {
-      try { localStorage.setItem('wip_current_user', JSON.stringify(admin)); } catch {}
-      return admin;
-    }
+    // Do NOT auto-login as admin when opening web. Require login unless user saved session.
     return null;
   },
 
-  setCurrentUser(user: UserAccount | null) {
+  setCurrentUser(user: UserAccount | null, remember: boolean = true) {
     if (user) {
-      localStorage.setItem('wip_current_user', JSON.stringify(user));
+      if (remember) {
+        localStorage.setItem('wip_current_user', JSON.stringify(user));
+        sessionStorage.removeItem('wip_current_user');
+      } else {
+        sessionStorage.setItem('wip_current_user', JSON.stringify(user));
+        localStorage.removeItem('wip_current_user');
+      }
     } else {
       localStorage.removeItem('wip_current_user');
+      sessionStorage.removeItem('wip_current_user');
     }
   },
 
-  authenticate(username: string, password?: string): { success: boolean; user?: UserAccount; error?: string } {
+  authenticate(username: string, password?: string, remember: boolean = true): { success: boolean; user?: UserAccount; error?: string } {
     const users = this.getUsers();
     const cleanUsername = username.trim().toLowerCase();
     const user = users.find(u => u.username.toLowerCase() === cleanUsername);
@@ -653,7 +659,7 @@ export const storageService = {
 
     user.lastLoginAt = Date.now();
     this.saveUsers(users);
-    this.setCurrentUser(user);
+    this.setCurrentUser(user, remember);
     return { success: true, user };
   },
 
@@ -3310,7 +3316,12 @@ export const storageService = {
     return masterPo;
   },
 
-  createSingleOddPO(partId: string, stageId: StageId, quantity: number): ProductionOrder {
+  createSingleOddPO(
+    partId: string, 
+    stageId: StageId, 
+    quantity: number, 
+    creator?: { username: string; fullName: string; role?: string; canApprove?: boolean }
+  ): ProductionOrder {
     const pos = this.getProductionOrders();
     const dateStr = format(Date.now(), 'ddMM');
     const cleanPart = partId.length > 8 ? partId.substring(0, 8).toUpperCase() : partId.toUpperCase();
@@ -3322,6 +3333,9 @@ export const storageService = {
       return newId;
     };
     const stageName = STAGES.find(s => s.id === stageId)?.name || stageId;
+    const canApprove = creator?.role === 'ADMIN' || creator?.canApprove === true;
+    const initialStatus = canApprove ? 'PENDING' : 'PENDING_APPROVAL';
+
     const newPo: ProductionOrder = {
       id: generateUniqueId(),
       partId: partId,
@@ -3329,13 +3343,49 @@ export const storageService = {
       targetQuantity: quantity,
       producedQuantity: 0,
       exportedQuantity: 0,
-      status: 'PENDING',
+      status: initialStatus,
       createdAt: Date.now(),
       isOddPO: true,
-      note: `PO Dư Lẻ (${stageName})`
+      note: `PO Dư Lẻ (${stageName})${canApprove ? '' : ' - Chờ Admin phê duyệt'}`,
+      createdBy: creator?.username,
+      createdByName: creator?.fullName,
+      approvedBy: canApprove ? creator?.username : undefined,
+      approvedByName: canApprove ? creator?.fullName : undefined,
+      approvedAt: canApprove ? Date.now() : undefined,
     };
     this.saveProductionOrders([newPo, ...pos]);
     return newPo;
+  },
+
+  approveOddPO(id: string, approver: { username: string; fullName: string }): { success: boolean; po?: ProductionOrder; error?: string } {
+    const pos = this.getProductionOrders();
+    const index = pos.findIndex(p => p.id === id);
+    if (index === -1) return { success: false, error: 'Không tìm thấy PO cần duyệt' };
+
+    pos[index] = {
+      ...pos[index],
+      status: 'PENDING',
+      approvedBy: approver.username,
+      approvedByName: approver.fullName,
+      approvedAt: Date.now(),
+      note: (pos[index].note || '').replace(' - Chờ Admin phê duyệt', '') + ' (Đã duyệt)'
+    };
+    this.saveProductionOrders(pos);
+    return { success: true, po: pos[index] };
+  },
+
+  rejectOddPO(id: string): { success: boolean; error?: string } {
+    const pos = this.getProductionOrders();
+    const index = pos.findIndex(p => p.id === id);
+    if (index === -1) return { success: false, error: 'Không tìm thấy PO' };
+
+    pos[index] = {
+      ...pos[index],
+      status: 'REJECTED',
+      note: (pos[index].note || '') + ' (Đã từ chối)'
+    };
+    this.saveProductionOrders(pos);
+    return { success: true };
   },
 
   deletePO(id: string) {

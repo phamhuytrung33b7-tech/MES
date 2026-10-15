@@ -754,6 +754,13 @@ export default function App() {
     setSuccess(`Xin chào, ${user.fullName || user.username}!`);
   };
 
+  const pendingOddPOCount = useMemo(() => {
+    return (productionOrders || []).filter(o => 
+      (o.isOddPO || o.id.startsWith('PO-LE') || (o.note && (o.note.includes('Dư Lẻ') || o.note.includes('Tồn Lẻ')))) && 
+      o.status === 'PENDING_APPROVAL'
+    ).length;
+  }, [productionOrders]);
+
   const dclrNorms = useMemo(() => storageService.getNorms().filter(n => n.stageId === 'DCLR'), [isImportingNorms, parts]);
   const dclrNormsMap = useMemo(() => new Map(dclrNorms.map(n => [n.partId, n.secondsPerUnit])), [dclrNorms]);
 
@@ -975,6 +982,15 @@ export default function App() {
     setSuccess('Đã sao chép mã QR vào bộ nhớ tạm!');
   };
 
+  if (!currentUser) {
+    return (
+      <LoginModal 
+        canCancel={false} 
+        onSuccess={handleLoginSuccess} 
+      />
+    );
+  }
+
   return (
     <div className="flex h-screen bg-[#F8F9FA] text-gray-900 font-sans overflow-hidden print:bg-white">
       <GlobalDialogs />
@@ -1138,6 +1154,11 @@ export default function App() {
               icon={<Layers size={24} />}
               label="PO dư lẻ"
               collapsed={!isSidebarOpen}
+              badge={pendingOddPOCount > 0 ? (
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-amber-500 text-white animate-pulse shadow-sm">
+                  {pendingOddPOCount}
+                </span>
+              ) : undefined}
             />
           )}
           {canAccessView('settings') && (
@@ -1442,6 +1463,7 @@ export default function App() {
                   parts={parts}
                   onUpdate={refreshData}
                   productionOrders={productionOrders}
+                  currentUser={currentUser}
                 />
               )}
               {currentView === 'labels' && (
@@ -1907,21 +1929,29 @@ function SupabaseModal({
   );
 }
 
-function SidebarLink({ active, onClick, icon, label, collapsed }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, collapsed: boolean }) {
+function SidebarLink({ active, onClick, icon, label, collapsed, badge }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, collapsed: boolean, badge?: React.ReactNode }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
-        "w-full flex items-center gap-3 p-3 rounded-lg transition-all duration-200 group",
+        "w-full flex items-center justify-between p-3 rounded-lg transition-all duration-200 group relative",
         active 
           ? "bg-[#F27D26] text-white shadow-lg shadow-[#F27D26]/20" 
           : "text-gray-500 hover:text-gray-900 hover:bg-gray-100"
       )}
     >
-      <div className={cn("transition-transform duration-200", active ? "scale-110" : "group-hover:scale-110")}>
-        {icon}
+      <div className="flex items-center gap-3">
+        <div className={cn("transition-transform duration-200", active ? "scale-110" : "group-hover:scale-110")}>
+          {icon}
+        </div>
+        {!collapsed && <span className="text-lg font-bold tracking-tight whitespace-nowrap">{label}</span>}
       </div>
-      {!collapsed && <span className="text-lg font-bold tracking-tight whitespace-nowrap">{label}</span>}
+      {!collapsed && badge}
+      {collapsed && badge && (
+        <div className="absolute top-1.5 right-1.5">
+          {badge}
+        </div>
+      )}
     </button>
   );
 }
@@ -6618,7 +6648,7 @@ function ProduceView({
 
   const allAvailablePos = useMemo(() => {
     return productionOrders.filter(p => {
-      if (p.stageId !== selectedStage || p.status === 'COMPLETED') return false;
+      if (p.stageId !== selectedStage || p.status === 'COMPLETED' || p.status === 'PENDING_APPROVAL' || p.status === 'REJECTED') return false;
       
       if (sourceLocation === 'IN') {
         return p.producedQuantity < p.targetQuantity;
@@ -7113,7 +7143,7 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
 
   const allAvailablePos = useMemo(() => {
     return (productionOrders || []).filter(
-      (p: any) => p.stageId === selectedStage && p.status !== 'COMPLETED'
+      (p: any) => p.stageId === selectedStage && p.status !== 'COMPLETED' && p.status !== 'PENDING_APPROVAL' && p.status !== 'REJECTED'
     );
   }, [selectedStage, productionOrders]);
 
@@ -7411,7 +7441,7 @@ function LaserInboundView({ parts, onManualInbound, setDefectModal, productionOr
 
   const allAvailablePos = useMemo(() => {
     return (productionOrders || []).filter(
-      (p: any) => p.stageId === selectedStage && p.status !== 'COMPLETED'
+      (p: any) => p.stageId === selectedStage && p.status !== 'COMPLETED' && p.status !== 'PENDING_APPROVAL' && p.status !== 'REJECTED'
     );
   }, [selectedStage, productionOrders]);
 
@@ -7720,15 +7750,29 @@ function LaserInboundView({ parts, onManualInbound, setDefectModal, productionOr
   );
 }
 
-function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: Part[], onUpdate: () => void, productionOrders: ProductionOrder[], key?: string }) {
+function OddProductionOrderView({ 
+  parts, 
+  onUpdate, 
+  productionOrders, 
+  currentUser 
+}: { 
+  parts: Part[]; 
+  onUpdate: () => void; 
+  productionOrders: ProductionOrder[]; 
+  currentUser?: UserAccount | null; 
+  key?: string; 
+}) {
   // Chỉ chuyên biệt cho công đoạn Cắt Laser
   const selectedStage: StageId = 'LASER';
   const [selectedPartId, setSelectedPartId] = useState<string>('');
   const [quantity, setQuantity] = useState<number>(0);
   const [isCreating, setIsCreating] = useState(false);
 
+  // Quyền duyệt: Admin hoặc tài khoản được Admin phân quyền duyệt PO dư lẻ
+  const canApprove = currentUser?.role === 'ADMIN' || currentUser?.canApproveOddPO === true;
+
   // Filters for PO list
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING' | 'IN_PROGRESS' | 'COMPLETED'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING_APPROVAL' | 'PENDING' | 'IN_PROGRESS' | 'COMPLETED'>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Modals for editing/deleting PO
@@ -7748,6 +7792,14 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
     return parts.find(p => p.id === selectedPartId);
   }, [parts, selectedPartId]);
 
+  // Đếm số lượng PO đang chờ duyệt
+  const pendingApprovalCount = useMemo(() => {
+    return (productionOrders || []).filter(o => 
+      (o.isOddPO || o.id.startsWith('PO-LE') || (o.note && (o.note.includes('Dư Lẻ') || o.note.includes('Tồn Lẻ')))) && 
+      o.status === 'PENDING_APPROVAL'
+    ).length;
+  }, [productionOrders]);
+
   // Tạo PO Dư Lẻ cho công đoạn Cắt Laser
   const handleCreateOddPO = (e: React.FormEvent) => {
     e.preventDefault();
@@ -7762,10 +7814,19 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
 
     setIsCreating(true);
     try {
-      const newPo = storageService.createSingleOddPO(selectedPartId, 'LASER', quantity);
+      const newPo = storageService.createSingleOddPO(selectedPartId, 'LASER', quantity, {
+        username: currentUser?.username || 'khach',
+        fullName: currentUser?.fullName || 'Người dùng',
+        role: currentUser?.role,
+        canApprove
+      });
       onUpdate();
       const partName = selectedPart?.name || selectedPartId;
-      alert(`Đã tạo thành công PO Dư Lẻ [${newPo.id}] cho linh kiện "${partName}" tại công đoạn Cắt Laser với số lượng ${quantity} ${selectedPart?.unit || 'cái'}!\n\nLưu ý: PO chỉ được tạo ở công đoạn Cắt Laser. Sau khi cắt xong và xuất kho OUT, linh kiện có thể nhập vào công đoạn tiếp theo hoặc dùng cho các PO khác cùng mã.`);
+      if (canApprove) {
+        alert(`Đã tạo và phê duyệt thành công PO Dư Lẻ [${newPo.id}] cho linh kiện "${partName}" với số lượng ${quantity} ${selectedPart?.unit || 'cái'}!\n\nLệnh đã sẵn sàng để công đoạn Cắt Laser thực hiện.`);
+      } else {
+        alert(`Đã gửi yêu cầu tạo PO Dư Lẻ [${newPo.id}] cho linh kiện "${partName}" với số lượng ${quantity} ${selectedPart?.unit || 'cái'}!\n\nLưu ý: Lệnh đang ở trạng thái [Chờ Admin duyệt]. Vui lòng báo Quản trị viên (Admin) phê duyệt trước khi bắt đầu sản xuất.`);
+      }
       setQuantity(0);
       setSelectedPartId('');
     } catch (err: any) {
@@ -7775,8 +7836,41 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
     }
   };
 
+  const handleApproveOddPO = (poId: string) => {
+    if (!canApprove) {
+      alert('Chỉ Quản trị viên hoặc tài khoản được Admin phân quyền mới có thể phê duyệt lệnh này!');
+      return;
+    }
+    const res = storageService.approveOddPO(poId, {
+      username: currentUser?.username || 'admin',
+      fullName: currentUser?.fullName || 'Quản trị viên'
+    });
+    if (res.success) {
+      alert(`Đã phê duyệt lệnh [${poId}] thành công! Lệnh đã sẵn sàng để công đoạn Cắt Laser gia công.`);
+      onUpdate();
+    } else {
+      alert(res.error || 'Có lỗi xảy ra');
+    }
+  };
+
+  const handleRejectOddPO = (poId: string) => {
+    if (!canApprove) {
+      alert('Chỉ Quản trị viên hoặc tài khoản được Admin phân quyền mới có thể từ chối lệnh này!');
+      return;
+    }
+    if (confirm(`Bạn có chắc muốn từ chối yêu cầu PO Dư Lẻ [${poId}] này không?`)) {
+      storageService.rejectOddPO(poId);
+      onUpdate();
+    }
+  };
+
   const handleDeletePO = () => {
-    if (password === 'admin123') {
+    if (!canApprove) {
+      alert('Chỉ Quản trị viên (Admin) hoặc tài khoản được phân quyền mới có thể xóa PO Dư Lẻ!');
+      return;
+    }
+    const isAuthorized = currentUser?.role === 'ADMIN' || password === 'admin123' || (currentUser?.password && password === currentUser.password);
+    if (isAuthorized) {
       if (showDeleteModal) {
         storageService.deletePO(showDeleteModal);
         onUpdate();
@@ -7784,12 +7878,17 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
         setPassword("");
       }
     } else {
-      alert('Mật khẩu không chính xác!');
+      alert('Mật khẩu xác nhận không chính xác!');
     }
   };
 
   const handleUpdatePoQty = () => {
-    if (password === 'admin123') {
+    if (!canApprove) {
+      alert('Chỉ Quản trị viên (Admin) hoặc tài khoản được phân quyền mới có thể chỉnh sửa số lượng PO Dư Lẻ!');
+      return;
+    }
+    const isAuthorized = currentUser?.role === 'ADMIN' || password === 'admin123' || (currentUser?.password && password === currentUser.password);
+    if (isAuthorized) {
       if (showEditModal) {
         storageService.updateSubPoQty(showEditModal.id, showEditModal.qty);
         onUpdate();
@@ -7797,7 +7896,7 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
         setPassword("");
       }
     } else {
-      alert('Mật khẩu không chính xác!');
+      alert('Mật khẩu xác nhận không chính xác!');
     }
   };
 
@@ -7840,9 +7939,22 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
               Chuyên biệt cho công đoạn Cắt Laser. Chỉ xuất hiện linh kiện Bậc 2. Chỉ tạo PO duy nhất tại công đoạn Cắt Laser. Sau khi cắt và xuất kho OUT, linh kiện có thể quét nhập vào công đoạn tiếp theo hoặc dùng cho các PO khác cùng mã.
             </p>
           </div>
-          <div className="bg-amber-50 border border-amber-200 px-4 py-2.5 rounded-2xl flex items-center gap-2.5 text-xs font-bold text-amber-900 shadow-sm">
-            <span className="text-base">⚡</span>
-            <span>Công đoạn: Cắt Laser (Bậc 2)</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {canApprove ? (
+              <div className="bg-emerald-50 border border-emerald-200 px-3.5 py-2 rounded-2xl flex items-center gap-2 text-xs font-bold text-emerald-800 shadow-xs">
+                <ShieldCheck size={16} className="text-emerald-600" />
+                <span>Quyền: Duyệt lệnh trực tiếp (Admin)</span>
+              </div>
+            ) : (
+              <div className="bg-amber-50 border border-amber-200 px-3.5 py-2 rounded-2xl flex items-center gap-2 text-xs font-bold text-amber-900 shadow-xs">
+                <Clock size={16} className="text-amber-600" />
+                <span>Cần Admin phê duyệt sau khi tạo</span>
+              </div>
+            )}
+            <div className="bg-amber-100/70 border border-amber-300 px-3.5 py-2 rounded-2xl flex items-center gap-1.5 text-xs font-bold text-amber-900 shadow-xs">
+              <span>⚡</span>
+              <span>Công đoạn: Cắt Laser (Bậc 2)</span>
+            </div>
           </div>
         </div>
 
@@ -7927,8 +8039,23 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
                   className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white p-4 rounded-2xl font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg shadow-amber-200 active:scale-95 text-sm"
                 >
                   <Plus size={18} />
-                  <span>{isCreating ? 'Đang tạo...' : 'Tạo PO Dư Lẻ (Cắt Laser)'}</span>
+                  <span>
+                    {isCreating 
+                      ? 'Đang xử lý...' 
+                      : canApprove 
+                        ? 'Tạo & Phê Duyệt PO Dư Lẻ (Cắt Laser)' 
+                        : 'Tạo Yêu Cầu PO Dư Lẻ (Chờ Admin Duyệt)'}
+                  </span>
                 </button>
+                {canApprove ? (
+                  <p className="text-[11px] text-emerald-700 font-medium text-center">
+                    ✓ Bạn có quyền quản trị/duyệt lệnh. Lệnh tạo ra sẽ được phê duyệt ngay và sẵn sàng sản xuất.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-amber-800 font-medium text-center">
+                    ⚠️ Tài khoản thông thường chỉ được phép tạo đề xuất. Lệnh sẽ ở trạng thái <strong>Chờ Admin duyệt</strong>.
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -7951,21 +8078,56 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
           <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
             {/* Status Filter */}
             <div className="flex bg-gray-100 p-1 rounded-xl">
-              {(['ALL', 'PENDING', 'IN_PROGRESS', 'COMPLETED'] as const).map(st => (
-                <button
-                  key={st}
-                  onClick={() => setStatusFilter(st)}
-                  className={cn(
-                    "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
-                    statusFilter === st ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                  )}
-                >
-                  {st === 'ALL' && 'Tất cả'}
-                  {st === 'PENDING' && 'Chờ SX'}
-                  {st === 'IN_PROGRESS' && 'Đang làm'}
-                  {st === 'COMPLETED' && 'Hoàn thành'}
-                </button>
-              ))}
+              <button
+                onClick={() => setStatusFilter('ALL')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                  statusFilter === 'ALL' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                Tất cả
+              </button>
+              <button
+                onClick={() => setStatusFilter('PENDING_APPROVAL')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5",
+                  statusFilter === 'PENDING_APPROVAL' ? "bg-white text-amber-900 shadow-sm" : "text-amber-700 hover:text-amber-900"
+                )}
+              >
+                <span>Chờ duyệt</span>
+                {pendingApprovalCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-500 text-white font-black animate-pulse">
+                    {pendingApprovalCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setStatusFilter('PENDING')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                  statusFilter === 'PENDING' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                Chờ SX
+              </button>
+              <button
+                onClick={() => setStatusFilter('IN_PROGRESS')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                  statusFilter === 'IN_PROGRESS' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                Đang làm
+              </button>
+              <button
+                onClick={() => setStatusFilter('COMPLETED')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                  statusFilter === 'COMPLETED' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                Hoàn thành
+              </button>
             </div>
 
             {/* Search */}
@@ -8000,7 +8162,10 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
               const pct = Math.min(100, Math.round((produced / target) * 100));
 
               return (
-                <div key={po.id} className="p-6 transition-colors hover:bg-gray-50/50 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                <div key={po.id} className={cn(
+                  "p-6 transition-colors flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4",
+                  po.status === 'PENDING_APPROVAL' ? "bg-amber-50/40 hover:bg-amber-50/70 border-l-4 border-amber-500" : "hover:bg-gray-50/50"
+                )}>
                   {/* Left: Info */}
                   <div className="space-y-1.5 flex-1">
                     <div className="flex items-center gap-3 flex-wrap">
@@ -8020,10 +8185,14 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
                         "px-2.5 py-0.5 rounded-full text-xs font-bold",
                         po.status === 'COMPLETED' ? "bg-green-100 text-green-700" :
                         po.status === 'IN_PROGRESS' ? "bg-blue-100 text-blue-700" :
+                        po.status === 'PENDING_APPROVAL' ? "bg-amber-100 text-amber-900 border border-amber-300 animate-pulse font-black" :
+                        po.status === 'REJECTED' ? "bg-rose-100 text-rose-700 border border-rose-200" :
                         "bg-gray-100 text-gray-600"
                       )}>
                         {po.status === 'COMPLETED' ? 'Hoàn thành' :
-                         po.status === 'IN_PROGRESS' ? 'Đang làm' : 'Chờ sản xuất'}
+                         po.status === 'IN_PROGRESS' ? 'Đang làm' :
+                         po.status === 'PENDING_APPROVAL' ? '⏳ Chờ Admin duyệt' :
+                         po.status === 'REJECTED' ? 'Đã từ chối' : 'Chờ sản xuất'}
                       </span>
                     </div>
 
@@ -8035,8 +8204,18 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
                       <span>Mục tiêu: <strong className="font-mono text-gray-900">{target}</strong> {partObj?.unit || 'cái'}</span>
                     </div>
 
-                    <div className="text-xs text-gray-400 flex items-center gap-4 pt-0.5 font-mono">
+                    <div className="text-xs text-gray-400 flex items-center gap-3 pt-0.5 font-mono flex-wrap">
                       <span>Tạo lúc: {format(po.createdAt || Date.now(), 'dd/MM/yyyy HH:mm')}</span>
+                      {po.createdBy && (
+                        <span className="text-amber-900 font-sans font-bold bg-amber-100/80 px-2 py-0.5 rounded border border-amber-200">
+                          Tạo bởi: @{po.createdBy} {po.createdByName ? `(${po.createdByName})` : ''}
+                        </span>
+                      )}
+                      {po.approvedBy && (
+                        <span className="text-emerald-800 font-sans font-bold bg-emerald-100/80 px-2 py-0.5 rounded border border-emerald-200">
+                          Duyệt bởi: @{po.approvedBy}
+                        </span>
+                      )}
                       {po.completedAt && (
                         <span className="text-green-600">Hoàn tất: {format(po.completedAt, 'dd/MM/yyyy HH:mm')}</span>
                       )}
@@ -8054,7 +8233,8 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
                         <div 
                           className={cn(
                             "h-full rounded-full transition-all",
-                            po.status === 'COMPLETED' ? "bg-green-600" : "bg-amber-600"
+                            po.status === 'COMPLETED' ? "bg-green-600" : 
+                            po.status === 'PENDING_APPROVAL' ? "bg-amber-400" : "bg-amber-600"
                           )}
                           style={{ width: `${pct}%` }}
                         />
@@ -8062,22 +8242,52 @@ function OddProductionOrderView({ parts, onUpdate, productionOrders }: { parts: 
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setShowEditModal({ id: po.id, qty: po.targetQuantity })}
-                        className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
-                        title="Sửa số lượng PO"
-                      >
-                        <Edit2 size={16} />
-                      </button>
+                      {/* Approval buttons when PENDING_APPROVAL */}
+                      {po.status === 'PENDING_APPROVAL' ? (
+                        canApprove ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleApproveOddPO(po.id)}
+                              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all shadow-md shadow-emerald-600/20 active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                              title="Phê duyệt lệnh PO Dư Lẻ này"
+                            >
+                              <Check size={14} strokeWidth={3} />
+                              <span>Duyệt lệnh</span>
+                            </button>
+                            <button
+                              onClick={() => handleRejectOddPO(po.id)}
+                              className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                              title="Từ chối yêu cầu PO Dư Lẻ này"
+                            >
+                              <X size={14} />
+                              <span>Từ chối</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xs font-bold text-amber-800 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-200">
+                            ⏳ Chờ Admin duyệt
+                          </span>
+                        )
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => setShowEditModal({ id: po.id, qty: po.targetQuantity })}
+                            className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
+                            title="Sửa số lượng PO"
+                          >
+                            <Edit2 size={16} />
+                          </button>
 
-                      {po.status !== 'COMPLETED' && (
-                        <button
-                          onClick={() => handleCompletePO(po.id)}
-                          className="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl text-xs font-bold transition-colors"
-                          title="Đánh dấu hoàn thành PO này"
-                        >
-                          Hoàn tất
-                        </button>
+                          {po.status !== 'COMPLETED' && po.status !== 'REJECTED' && (
+                            <button
+                              onClick={() => handleCompletePO(po.id)}
+                              className="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl text-xs font-bold transition-colors"
+                              title="Đánh dấu hoàn thành PO này"
+                            >
+                              Hoàn tất
+                            </button>
+                          )}
+                        </>
                       )}
 
                       <button

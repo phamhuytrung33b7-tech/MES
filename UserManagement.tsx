@@ -301,15 +301,32 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
                       {/* Role Badge */}
                       <td className="py-4 px-4 whitespace-nowrap">
                         {user.role === 'ADMIN' ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-orange-50 text-orange-700 border border-orange-200">
-                            <ShieldCheck size={14} className="text-orange-600" />
-                            Quản trị viên
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-orange-50 text-orange-700 border border-orange-200 w-fit">
+                              <ShieldCheck size={14} className="text-orange-600" />
+                              Quản trị viên
+                            </span>
+                            <span className="text-[10px] text-emerald-700 font-bold">
+                              ✓ Toàn quyền duyệt PO lẻ
+                            </span>
+                          </div>
                         ) : (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                            <UserCheck size={14} className="text-blue-600" />
-                            Nhân viên
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 w-fit">
+                              <UserCheck size={14} className="text-blue-600" />
+                              Nhân viên
+                            </span>
+                            {user.canApproveOddPO ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 w-fit">
+                                <ShieldCheck size={11} className="text-amber-600" />
+                                Có quyền duyệt PO lẻ
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-400">
+                                Chỉ được tạo (Chờ duyệt)
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
 
@@ -505,6 +522,7 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
   const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<UserRole>(initialData?.role || 'USER');
   const [isActive, setIsActive] = useState<boolean>(initialData?.isActive ?? true);
+  const [canApproveOddPO, setCanApproveOddPO] = useState<boolean>(initialData?.canApproveOddPO ?? false);
   const [allowedViews, setAllowedViews] = useState<View[]>(() => {
     if (initialData?.allowedViews) return [...initialData.allowedViews];
     return ['dashboard', 'produce', 'inbound'];
@@ -552,6 +570,7 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
       password: password.trim(),
       role,
       allowedViews: role === 'ADMIN' ? AVAILABLE_TABS.map(t => t.key) : allowedViews,
+      canApproveOddPO: role === 'ADMIN' ? true : canApproveOddPO,
       isActive,
     });
   };
@@ -682,6 +701,31 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
             </label>
           </div>
 
+          {/* Quyền phê duyệt PO dư lẻ (Cắt Laser) */}
+          <div className="flex items-center justify-between p-3.5 bg-amber-50/80 rounded-xl border border-amber-200">
+            <div>
+              <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                <ShieldCheck size={16} className="text-amber-600" />
+                <span>Quyền Phê Duyệt PO Dư Lẻ (Cắt Laser)</span>
+              </span>
+              <p className="text-[11px] text-amber-700 mt-0.5">
+                {role === 'ADMIN' 
+                  ? 'Quản trị viên (Admin) luôn có toàn quyền phê duyệt trực tiếp mọi lệnh PO dư lẻ' 
+                  : 'Cho phép tài khoản nhân viên này duyệt lệnh PO dư lẻ do người khác tạo'}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={role === 'ADMIN' || canApproveOddPO}
+                disabled={role === 'ADMIN'}
+                onChange={(e) => setCanApproveOddPO(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+            </label>
+          </div>
+
           {/* Permissions selection (13 tabs) */}
           <div className="space-y-3 pt-2">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -805,6 +849,7 @@ export function LoginModal({ onSuccess, onCancel, canCancel = false }: LoginModa
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -819,7 +864,7 @@ export function LoginModal({ onSuccess, onCancel, canCancel = false }: LoginModa
     setErrorMsg(null);
 
     setTimeout(() => {
-      const res = storageService.authenticate(username, password);
+      const res = storageService.authenticate(username, password, rememberMe);
       setLoading(false);
       if (res.success && res.user) {
         onSuccess(res.user);
@@ -832,7 +877,7 @@ export function LoginModal({ onSuccess, onCancel, canCancel = false }: LoginModa
   const quickLogin = (u: string, p: string) => {
     setUsername(u);
     setPassword(p);
-    const res = storageService.authenticate(u, p);
+    const res = storageService.authenticate(u, p, true);
     if (res.success && res.user) {
       onSuccess(res.user);
     } else {
@@ -841,7 +886,7 @@ export function LoginModal({ onSuccess, onCancel, canCancel = false }: LoginModa
   };
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[9999] bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
       <motion.div
         initial={{ opacity: 0, scale: 0.9, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -912,6 +957,21 @@ export function LoginModal({ onSuccess, onCancel, canCancel = false }: LoginModa
             </div>
           </div>
 
+          {/* Remember Login Checkbox */}
+          <div className="flex items-center justify-between pt-1">
+            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="w-4 h-4 text-orange-500 rounded border-gray-300 focus:ring-orange-500"
+              />
+              <span className="text-xs font-semibold text-gray-700">
+                Ghi nhớ đăng nhập <span className="text-gray-400 font-normal">(Tự động vào lần sau)</span>
+              </span>
+            </label>
+          </div>
+
           <button
             type="submit"
             disabled={loading}
@@ -922,17 +982,35 @@ export function LoginModal({ onSuccess, onCancel, canCancel = false }: LoginModa
         </form>
 
         {/* Quick test credentials hint */}
-        <div className="mt-6 pt-5 border-t border-gray-100 text-center">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Tài khoản mặc định:</span>
-          <div className="flex items-center justify-center gap-2 mt-2">
-            <button
-              type="button"
-              onClick={() => quickLogin('admin', 'admin123')}
-              className="px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-lg text-xs font-bold transition-colors"
-            >
-              Admin: admin / admin123
-            </button>
+        <div className="mt-6 pt-5 border-t border-gray-100">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
+              Tài khoản trong hệ thống:
+            </span>
+            <span className="text-[10px] text-gray-400 italic">Nhấn để điền & đăng nhập</span>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {storageService.getUsers().filter(u => u.isActive).map(u => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => quickLogin(u.username, u.password || '')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border flex items-center gap-1.5 active:scale-95 cursor-pointer ${
+                  u.role === 'ADMIN'
+                    ? 'bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200'
+                    : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200'
+                }`}
+                title={`Đăng nhập nhanh với tài khoản @${u.username}`}
+              >
+                <span>{u.role === 'ADMIN' ? '👑' : '👤'}</span>
+                <span>{u.fullName || u.username}</span>
+                <span className="opacity-50 font-mono text-[10px]">(@{u.username})</span>
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-gray-400 mt-3 text-center italic">
+            💡 Khi chọn "Ghi nhớ đăng nhập", hệ thống sẽ lưu phiên và tự động đăng nhập khi mở web lần sau.
+          </p>
         </div>
       </motion.div>
     </div>

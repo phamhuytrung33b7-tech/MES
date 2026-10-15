@@ -74,7 +74,7 @@ export interface ProductionOrder {
   targetQuantity: number;
   producedQuantity: number;
   exportedQuantity: number;
-  status: 'PENDING' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED';
+  status: 'PENDING' | 'IN_PROGRESS' | 'PAUSED' | 'COMPLETED' | 'PENDING_APPROVAL' | 'REJECTED';
   createdAt: number;
   completedAt?: number;
   plannedStartTime?: number;
@@ -83,6 +83,11 @@ export interface ProductionOrder {
   note?: string;
   isOddPO?: boolean;
   excelRequiredDate?: number;
+  createdBy?: string;
+  createdByName?: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: number;
 }
 
 export interface ProductivityNorm {
@@ -221,6 +226,7 @@ export interface UserAccount {
   fullName: string;
   role: UserRole;
   allowedViews: View[];
+  canApproveOddPO?: boolean;
   isActive: boolean;
   createdAt: number;
   lastLoginAt?: number;
