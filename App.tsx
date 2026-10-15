@@ -82,6 +82,7 @@ import { SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection, isSupabaseCo
 import { exportPreparationReport } from './exportPreparationReport';
 import { exportDetailedProductionPlan } from './exportDetailedPlan';
 import { importExcelToPO, downloadSamplePOExcelTemplate, MissingBomModelInfo } from './importExcelToPO';
+import { downloadNormTemplate } from './downloadNormTemplate';
 import { importExcelToGlazingPlan, MissingNormModelInfo } from './importExcelToGlazingPlan';
 import { UserManagementView, LoginModal, ChangePasswordModal } from './UserManagement';
 
@@ -2040,7 +2041,8 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
       const systemModels = Array.from(new Set(storageService.getModelBOM().map(b => b.modelId)));
       const result = await importExcelToPO(file, systemModels);
       
-      setMissingBomList(result.missingBomModels || []);
+      const missing = result.missingBomModels || [];
+      setMissingBomList(missing);
       setExcelImportList(result.orders);
       setExcelImportStats({
         grandTotal: result.grandTotalFileQty,
@@ -2048,9 +2050,11 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
         missingTotal: result.missingTotalQty
       });
 
-      if (result.orders.length === 0 && result.missingBomModels && result.missingBomModels.length > 0) {
+      // Nếu có bất kỳ model nào thiếu định mức BOM, tự động chuyển sang tab MISSING_BOM và cảnh báo
+      if (missing.length > 0) {
         setModalTab('MISSING_BOM');
-      } else if (result.orders.length === 0 && (!result.missingBomModels || result.missingBomModels.length === 0)) {
+        alert(`CẢNH BÁO: Phát hiện ${missing.length} mã model trong file Excel CHƯA CÓ ĐỊNH MỨC BOM!\n\nTheo quy định hệ thống: Phải khai báo định mức BOM đầy đủ cho 100% các model có trong file mới được phép tạo Lệnh Sản Xuất.`);
+      } else if (result.orders.length === 0) {
         alert('Không tìm thấy dữ liệu số lượng kế hoạch sản xuất (> 0) trong các cột ngày của file Excel!');
       }
     } catch (err: any) {
@@ -2063,6 +2067,55 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
 
   const handleConfirmBatchCreatePO = () => {
     if (!excelImportList || excelImportList.length === 0) return;
+
+    // 1. BẮT BUỘC: Nếu có bất kỳ model nào thiếu định mức thì KHÔNG CHO TẠO, phải đủ mới cho tạo
+    if (missingBomList && missingBomList.length > 0) {
+      setModalTab('MISSING_BOM');
+      alert(`KHÔNG THỂ TẠO LỆNH SẢN XUẤT!\n\nHiện tại có ${missingBomList.length} mã Model chưa có định mức BOM (${missingBomList.map(m => m.modelId).slice(0, 5).join(', ')}${missingBomList.length > 5 ? '...' : ''}).\n\nYêu cầu bắt buộc: Phải khai báo đủ định mức Model (BOM) cho tất cả các mã trước khi tạo lệnh sản xuất!`);
+      return;
+    }
+
+    // 2. CHỐNG NHÂN BẢN / TRÙNG LẶP: Kiểm tra PO tổng kế hoạch cùng ngày cùng tháng, cùng số lượng
+    const currentOrders = storageService.getProductionOrders();
+    const existingMasterOrders = currentOrders.filter(o => !o.masterPoId && !o.isOddPO);
+
+    const duplicateItems: { modelId: string; dateStr: string; qty: number; existingId: string }[] = [];
+
+    const getDayMonthKey = (ts?: number) => {
+      if (!ts) return '';
+      const d = new Date(ts);
+      return `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+    };
+
+    for (const po of excelImportList) {
+      const planDayMonth = getDayMonthKey(po.excelRequiredDate || po.expectedCompletionTime);
+      const isDuplicated = existingMasterOrders.find(existPo => {
+        // Cùng model
+        if (existPo.partId !== po.partId) return false;
+        // Cùng số lượng
+        if (existPo.targetQuantity !== po.targetQuantity) return false;
+        // Cùng ngày cùng tháng
+        const existDayMonth = getDayMonthKey(existPo.excelRequiredDate || existPo.expectedCompletionTime);
+        return existDayMonth === planDayMonth;
+      });
+
+      if (isDuplicated) {
+        duplicateItems.push({
+          modelId: po.partId,
+          dateStr: planDayMonth,
+          qty: po.targetQuantity,
+          existingId: isDuplicated.id
+        });
+      }
+    }
+
+    if (duplicateItems.length > 0) {
+      const sampleDuplicates = duplicateItems.slice(0, 3).map(d => `- Model ${d.modelId} (Ngày ${d.dateStr}, SL: ${d.qty}) trùng với [${d.existingId}]`).join('\n');
+      const moreMsg = duplicateItems.length > 3 ? `\nvà ${duplicateItems.length - 3} lệnh khác...` : '';
+      alert(`CẢNH BÁO TRÙNG LẶP / NHÂN BẢN!\n\nPhát hiện ${duplicateItems.length} kế hoạch sản xuất trong file đã tồn tại trên hệ thống (cùng ngày/tháng, cùng mã model và cùng số lượng):\n\n${sampleDuplicates}${moreMsg}\n\nHệ thống đã chặn tạo trùng lặp để tránh nhân đôi lệnh xóa rất mất công! Vui lòng kiểm tra lại danh sách hoặc xóa lệnh cũ trước nếu muốn tạo lại.`);
+      return;
+    }
+
     setIsBatchCreating(true);
     setTimeout(() => {
       try {
@@ -3193,7 +3246,15 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
               </div>
 
               {/* Action Buttons */}
-              <div className="flex gap-3 pt-4 border-t border-gray-100 mt-4">
+              {missingBomList.length > 0 && (
+                <div className="bg-rose-50 border border-rose-300 rounded-xl p-3 text-xs text-rose-800 font-bold flex items-center gap-2 mt-3">
+                  <AlertCircle size={18} className="text-rose-600 shrink-0" />
+                  <span>
+                    Chặn tạo lệnh: Có {missingBomList.length} mã model chưa khai báo định mức BOM. Cần bổ sung đầy đủ định mức 100% các model trước khi tạo Lệnh Sản Xuất!
+                  </span>
+                </div>
+              )}
+              <div className="flex gap-3 pt-4 border-t border-gray-100 mt-3">
                 <button
                   onClick={() => setExcelImportList(null)}
                   className="flex-1 py-3.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold text-sm uppercase transition-all cursor-pointer"
@@ -3202,11 +3263,23 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
                 </button>
                 <button
                   onClick={handleConfirmBatchCreatePO}
-                  disabled={isBatchCreating || excelImportList.length === 0}
-                  className="flex-2 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm uppercase transition-all shadow-lg shadow-emerald-200 flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 cursor-pointer"
+                  disabled={isBatchCreating || excelImportList.length === 0 || missingBomList.length > 0}
+                  className={cn(
+                    "flex-2 py-3.5 rounded-xl font-bold text-sm uppercase transition-all shadow-lg flex items-center justify-center gap-2",
+                    missingBomList.length > 0 
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed shadow-none" 
+                      : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200 active:scale-95 cursor-pointer disabled:opacity-50"
+                  )}
+                  title={missingBomList.length > 0 ? "Chưa thể tạo: Cần bổ sung đầy đủ định mức BOM cho các model" : undefined}
                 >
                   <CheckCircle2 size={18} />
-                  <span>{isBatchCreating ? 'Đang tạo lệnh...' : `Xác Nhận Tạo Hàng Loạt (${excelImportList.length} PO)`}</span>
+                  <span>
+                    {isBatchCreating 
+                      ? 'Đang tạo lệnh...' 
+                      : missingBomList.length > 0 
+                        ? `Chưa Đủ Định Mức BOM (${missingBomList.length} Model Thiếu)` 
+                        : `Xác Nhận Tạo Hàng Loạt (${excelImportList.length} PO)`}
+                  </span>
                 </button>
               </div>
             </motion.div>
@@ -7810,8 +7883,8 @@ function OddProductionOrderView({
   // Quyền duyệt: Admin hoặc tài khoản được Admin phân quyền duyệt PO dư lẻ
   const canApprove = currentUser?.role === 'ADMIN' || currentUser?.canApproveOddPO === true;
 
-  // Filters for PO list
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING_APPROVAL' | 'PENDING' | 'IN_PROGRESS' | 'COMPLETED'>('ALL');
+  // Filters for PO list: Đặt 'PENDING_APPROVAL' (Chờ duyệt) lên hàng đầu theo yêu cầu
+  const [statusFilter, setStatusFilter] = useState<'PENDING_APPROVAL' | 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'ALL'>('PENDING_APPROVAL');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Modals for editing/deleting PO
@@ -8115,27 +8188,18 @@ function OddProductionOrderView({
           </div>
 
           <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-            {/* Status Filter */}
+            {/* Status Filter: Đưa Chờ duyệt lên trước, Tất cả ở cuối cùng */}
             <div className="flex bg-gray-100 p-1 rounded-xl">
-              <button
-                onClick={() => setStatusFilter('ALL')}
-                className={cn(
-                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
-                  statusFilter === 'ALL' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                )}
-              >
-                Tất cả
-              </button>
               <button
                 onClick={() => setStatusFilter('PENDING_APPROVAL')}
                 className={cn(
                   "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5",
-                  statusFilter === 'PENDING_APPROVAL' ? "bg-white text-amber-900 shadow-sm" : "text-amber-700 hover:text-amber-900"
+                  statusFilter === 'PENDING_APPROVAL' ? "bg-amber-500 text-white shadow-sm" : "text-amber-700 hover:text-amber-900"
                 )}
               >
                 <span>Chờ duyệt</span>
                 {pendingApprovalCount > 0 && (
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-500 text-white font-black animate-pulse">
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-white text-amber-600 font-black animate-pulse">
                     {pendingApprovalCount}
                   </span>
                 )}
@@ -8166,6 +8230,15 @@ function OddProductionOrderView({
                 )}
               >
                 Hoàn thành
+              </button>
+              <button
+                onClick={() => setStatusFilter('ALL')}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                  statusFilter === 'ALL' ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                Tất cả
               </button>
             </div>
 
@@ -8202,31 +8275,31 @@ function OddProductionOrderView({
 
               return (
                 <div key={po.id} className={cn(
-                  "p-6 transition-colors flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4",
-                  po.status === 'PENDING_APPROVAL' ? "bg-amber-50/40 hover:bg-amber-50/70 border-l-4 border-amber-500" : "hover:bg-gray-50/50"
+                  "p-6 transition-all flex flex-col lg:flex-row justify-between items-start lg:items-center gap-5 hover:shadow-sm",
+                  po.status === 'PENDING_APPROVAL' ? "bg-amber-50/50 hover:bg-amber-50/80 border-l-4 border-amber-500" : "hover:bg-gray-50/60"
                 )}>
-                  {/* Left: Info */}
-                  <div className="space-y-1.5 flex-1">
+                  {/* Left: Info & Prominent Target Quantity Badge */}
+                  <div className="space-y-2 flex-1">
                     <div className="flex items-center gap-3 flex-wrap">
-                      <span className="font-mono font-bold text-amber-800 text-base">
+                      <span className="font-mono font-black text-amber-900 text-lg tracking-tight">
                         {po.id}
                       </span>
-                      <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-900 px-2.5 py-0.5 rounded-full text-xs font-bold">
+                      <span className="inline-flex items-center gap-1.5 bg-amber-100/90 text-amber-950 px-3 py-1 rounded-full text-xs font-bold border border-amber-200">
                         <span>{stageIcon}</span>
                         <span>{stageName}</span>
                       </span>
                       {partObj?.level && (
-                        <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-[11px] font-bold">
+                        <span className="bg-blue-100 text-blue-900 px-2.5 py-1 rounded-md text-xs font-bold">
                           Bậc {partObj.level}
                         </span>
                       )}
                       <span className={cn(
-                        "px-2.5 py-0.5 rounded-full text-xs font-bold",
-                        po.status === 'COMPLETED' ? "bg-green-100 text-green-700" :
-                        po.status === 'IN_PROGRESS' ? "bg-blue-100 text-blue-700" :
+                        "px-3 py-1 rounded-full text-xs font-bold",
+                        po.status === 'COMPLETED' ? "bg-green-100 text-green-800" :
+                        po.status === 'IN_PROGRESS' ? "bg-blue-100 text-blue-800" :
                         po.status === 'PENDING_APPROVAL' ? "bg-amber-100 text-amber-900 border border-amber-300 animate-pulse font-black" :
-                        po.status === 'REJECTED' ? "bg-rose-100 text-rose-700 border border-rose-200" :
-                        "bg-gray-100 text-gray-600"
+                        po.status === 'REJECTED' ? "bg-rose-100 text-rose-800 border border-rose-200" :
+                        "bg-gray-100 text-gray-700"
                       )}>
                         {po.status === 'COMPLETED' ? 'Hoàn thành' :
                          po.status === 'IN_PROGRESS' ? 'Đang làm' :
@@ -8235,28 +8308,39 @@ function OddProductionOrderView({
                       </span>
                     </div>
 
-                    <div className="text-sm text-gray-700 flex items-center gap-2 flex-wrap">
-                      <span className="font-mono font-bold text-gray-900">{po.partId}</span>
-                      <span className="text-gray-400">•</span>
-                      <span className="font-medium">{partObj?.name || po.partId}</span>
-                      <span className="text-gray-400">•</span>
-                      <span>Mục tiêu: <strong className="font-mono text-gray-900">{target}</strong> {partObj?.unit || 'cái'}</span>
+                    {/* Prominent Product Info & Quantity Display */}
+                    <div className="flex items-center gap-3 flex-wrap pt-1">
+                      {/* Big prominent quantity badge */}
+                      <div className="inline-flex items-baseline gap-1.5 bg-amber-100/80 border-2 border-amber-300/80 px-3 py-1 rounded-xl shadow-xs">
+                        <span className="text-xs uppercase font-extrabold text-amber-900">Mục tiêu:</span>
+                        <span className="font-mono font-black text-2xl text-amber-950 leading-none">{target.toLocaleString('vi-VN')}</span>
+                        <span className="text-xs font-bold text-amber-900 uppercase">{partObj?.unit || 'cái'}</span>
+                      </div>
+
+                      <div className="text-base text-gray-800 flex items-center gap-2 flex-wrap">
+                        <span className="font-mono font-black text-gray-950 bg-gray-100 px-2.5 py-1 rounded-lg border border-gray-200">
+                          {po.partId}
+                        </span>
+                        <span className="font-bold text-gray-900 text-base">
+                          {partObj?.name || po.partId}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="text-xs text-gray-400 flex items-center gap-3 pt-0.5 font-mono flex-wrap">
+                    <div className="text-xs text-gray-500 flex items-center gap-3 pt-1 font-mono flex-wrap">
                       <span>Tạo lúc: {format(po.createdAt || Date.now(), 'dd/MM/yyyy HH:mm')}</span>
                       {po.createdBy && (
-                        <span className="text-amber-900 font-sans font-bold bg-amber-100/80 px-2 py-0.5 rounded border border-amber-200">
+                        <span className="text-amber-950 font-sans font-bold bg-amber-100/90 px-2.5 py-0.5 rounded border border-amber-200">
                           Tạo bởi: @{po.createdBy} {po.createdByName ? `(${po.createdByName})` : ''}
                         </span>
                       )}
                       {po.approvedBy && (
-                        <span className="text-emerald-800 font-sans font-bold bg-emerald-100/80 px-2 py-0.5 rounded border border-emerald-200">
+                        <span className="text-emerald-950 font-sans font-bold bg-emerald-100 px-2.5 py-0.5 rounded border border-emerald-300">
                           Duyệt bởi: @{po.approvedBy}
                         </span>
                       )}
                       {po.completedAt && (
-                        <span className="text-green-600">Hoàn tất: {format(po.completedAt, 'dd/MM/yyyy HH:mm')}</span>
+                        <span className="text-green-700 font-bold">Hoàn tất: {format(po.completedAt, 'dd/MM/yyyy HH:mm')}</span>
                       )}
                     </div>
                   </div>
@@ -8264,11 +8348,14 @@ function OddProductionOrderView({
                   {/* Right: Progress & Actions */}
                   <div className="flex items-center gap-6 w-full lg:w-auto justify-between lg:justify-end">
                     <div className="text-right">
-                      <div className="text-xs text-gray-400 uppercase font-bold">Tiến độ SX / Xuất OUT</div>
-                      <div className="font-mono font-bold text-sm text-gray-800">
-                        SX: {produced}/{target} • Xuất: {exported}/{target} ({pct}%)
+                      <div className="text-xs text-gray-500 uppercase font-bold tracking-wide">Tiến độ SX / Xuất OUT</div>
+                      <div className="font-mono font-black text-base text-gray-900 mt-0.5">
+                        <span className="text-emerald-700">SX: {produced}/{target}</span>
+                        <span className="text-gray-300 mx-1.5">•</span>
+                        <span className="text-blue-700">Xuất: {exported}/{target}</span>
+                        <span className="ml-1.5 text-xs font-bold text-amber-700">({pct}%)</span>
                       </div>
-                      <div className="w-36 bg-gray-200 h-2 rounded-full overflow-hidden mt-1">
+                      <div className="w-44 bg-gray-200 h-2.5 rounded-full overflow-hidden mt-1.5 shadow-inner">
                         <div 
                           className={cn(
                             "h-full rounded-full transition-all",
@@ -8287,18 +8374,18 @@ function OddProductionOrderView({
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => handleApproveOddPO(po.id)}
-                              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all shadow-md shadow-emerald-600/20 active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all shadow-md shadow-emerald-600/20 active:scale-95 flex items-center gap-1.5 cursor-pointer"
                               title="Phê duyệt lệnh PO Dư Lẻ này"
                             >
-                              <Check size={14} strokeWidth={3} />
+                              <Check size={15} strokeWidth={3} />
                               <span>Duyệt lệnh</span>
                             </button>
                             <button
                               onClick={() => handleRejectOddPO(po.id)}
-                              className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                              className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
                               title="Từ chối yêu cầu PO Dư Lẻ này"
                             >
-                              <X size={14} />
+                              <X size={15} />
                               <span>Từ chối</span>
                             </button>
                           </div>
@@ -12871,7 +12958,17 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                 : 'Quản lý thời gian sản xuất dự kiến trên mỗi đơn vị linh kiện'}
             </p>
           </div>
-          <div className="flex gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Nút Tải File Mẫu cho từng Tab */}
+            <button
+              onClick={() => downloadNormTemplate(activeTab)}
+              className="flex items-center gap-2 px-5 py-3.5 bg-white border-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm cursor-pointer"
+              title="Tải file Excel mẫu chuẩn cho tab hiện tại"
+            >
+              <FileDown size={18} className="text-emerald-600" />
+              <span>Tải file mẫu Excel</span>
+            </button>
+
             {/* Nút Xóa Tất Cả cho từng tab */}
             {((activeTab === 'NESTING' && nesting.length > 0) ||
               (activeTab === 'LASER_HSQD' && laserHSQD.length > 0) ||
@@ -12902,16 +12999,17 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                     }
                   }
                 }}
-                className="px-6 py-4 border border-red-200 text-red-600 rounded-xl text-sm font-bold uppercase hover:bg-red-50 transition-all font-mono cursor-pointer"
+                className="px-5 py-3.5 border border-red-200 text-red-600 rounded-xl text-xs font-bold uppercase hover:bg-red-50 transition-all font-mono cursor-pointer"
               >
                 Xóa tất cả
               </button>
             )}
+
             <label className={cn(
-              "flex items-center gap-3 px-8 py-4 bg-[#141414] text-white rounded-xl text-sm font-bold uppercase tracking-widest cursor-pointer hover:bg-black transition-all shadow-xl font-mono",
+              "flex items-center gap-2.5 px-6 py-3.5 bg-[#141414] text-white rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer hover:bg-black transition-all shadow-md font-mono",
               isImporting && "opacity-50 cursor-not-allowed"
             )}>
-              <FileUp size={20} />
+              <FileUp size={18} />
               {isImporting ? 'Đang nhập...' : `Nhập ${activeTab === 'NESTING' ? 'file Tổ hợp' : activeTab === 'LASER_HSQD' ? 'HSQĐ Laser' : activeTab === 'BW_HSQD' ? 'HSQĐ Chấn/Hàn' : (activeTab === 'DCLR' || activeTab === 'GLAZING') ? `HSQĐ ${STAGES.find(s => s.id === activeTab)?.name}` : `định mức ${activeTab}`}`}
               <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImport} disabled={isImporting} />
             </label>
@@ -13088,11 +13186,21 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {norms.filter(n => n.stageId === activeTab).map((norm, idx) => {
-                  const part = parts.find(p => p.id === norm.partId);
+                  const part = parts.find(p => 
+                    p.id === norm.partId || 
+                    p.id.toUpperCase() === norm.partId.toUpperCase() ||
+                    p.name.trim().toLowerCase() === norm.partId.trim().toLowerCase()
+                  );
                   return (
                     <tr key={idx} className="hover:bg-gray-50/30 transition-colors">
                       <td className="p-8 pl-12 font-mono text-lg font-bold">{norm.partId}</td>
-                      <td className="p-8 text-lg font-medium text-gray-600">{part?.name || 'N/A'}</td>
+                      <td className="p-8 text-lg font-medium text-gray-700">
+                        {part?.name ? (
+                          <span className="font-semibold text-gray-800">{part.name}</span>
+                        ) : (
+                          <span className="text-gray-400 italic font-mono text-sm">Chưa có tên trong danh mục</span>
+                        )}
+                      </td>
                       <td className="p-8 text-center">
                         <span className={cn("font-mono text-2xl font-black", (activeTab === 'DCLR' || activeTab === 'GLAZING') ? "text-emerald-600" : "text-blue-600")}>
                           {norm.secondsPerUnit}
@@ -13108,7 +13216,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                             storageService.saveNorms(updated);
                             onNormsChange();
                           }}
-                          className="p-3 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                          className="p-3 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
                         >
                           <Trash2 size={24} />
                         </button>

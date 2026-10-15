@@ -2883,6 +2883,49 @@ export const storageService = {
     const findPart = (id: string): Part | undefined => {
       return partsMap.get(id.trim().toUpperCase());
     };
+
+    // Helper tra cứu định mức linh hoạt (theo partId, mã viết hoa, hoặc tên linh kiện / cleanKey)
+    const normalizeKey = (s: any): string => {
+      if (!s) return '';
+      return String(s)
+        .replace(/\u00A0/g, ' ')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/Đ/g, 'd')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+    };
+
+    const findNormByPart = (partId: string, stageId: StageId): ProductivityNorm | undefined => {
+      // 1. Khớp chính xác partId
+      let match = norms.find(n => n.stageId === stageId && n.partId === partId);
+      if (match) return match;
+
+      // 2. Khớp không phân biệt hoa thường
+      const upperId = partId.trim().toUpperCase();
+      match = norms.find(n => n.stageId === stageId && n.partId.trim().toUpperCase() === upperId);
+      if (match) return match;
+
+      // 3. Khớp theo Tên linh kiện (nếu partId trong định mức lưu là tên linh kiện hoặc ngược lại)
+      const partObj = findPart(partId);
+      const partName = partObj?.name;
+      if (partName) {
+        match = norms.find(n => n.stageId === stageId && (
+          n.partId.trim().toLowerCase() === partName.trim().toLowerCase() ||
+          normalizeKey(n.partId) === normalizeKey(partName)
+        ));
+        if (match) return match;
+      }
+
+      // 4. Khớp theo normalizeKey của partId
+      const cleanId = normalizeKey(partId);
+      match = norms.find(n => n.stageId === stageId && normalizeKey(n.partId) === cleanId);
+      if (match) return match;
+
+      return undefined;
+    };
+
     const modelBom = context?.modelBom || this.getModelBOM();
     const bomV2 = context?.bomV2 || this.getBOMV2();
 
@@ -2991,6 +3034,69 @@ export const storageService = {
     paintingPOs.sort(sortByLevelDesc);
 
     const laserNesting = context?.laserNesting || this.getLaserNesting();
+    const laserHSQDArray = this.getLaserHSQD();
+
+    const findLaserNestingItem = (poPartId: string, targetNestingId?: string): LaserNesting | undefined => {
+      const cleanPoPart = normalizeKey(poPartId);
+      const partObj = findPart(poPartId);
+      const cleanPartName = partObj ? normalizeKey(partObj.name) : '';
+      const cleanPartId = partObj ? normalizeKey(partObj.id) : '';
+
+      const isMatch = (ln: LaserNesting) => {
+        if (targetNestingId && ln.nestingId !== targetNestingId) return false;
+        
+        if (ln.applicableModel) {
+          const cleanAppModel = normalizeKey(ln.applicableModel);
+          const cleanCurrentModel = normalizeKey(modelId);
+          if (cleanAppModel && cleanCurrentModel && !cleanAppModel.includes(cleanCurrentModel) && !cleanCurrentModel.includes(cleanAppModel)) {
+            return false;
+          }
+        }
+
+        const cleanLnPart = normalizeKey(ln.partId);
+        if (!cleanLnPart) return false;
+
+        if (cleanLnPart === cleanPoPart) return true;
+        if (cleanPartId && cleanLnPart === cleanPartId) return true;
+        if (cleanPartName && cleanLnPart === cleanPartName) return true;
+
+        if (cleanPartName && cleanPartName.length >= 4 && (cleanLnPart.includes(cleanPartName) || cleanPartName.includes(cleanLnPart))) return true;
+        if (cleanPoPart && cleanPoPart.length >= 4 && (cleanLnPart.includes(cleanPoPart) || cleanPoPart.includes(cleanLnPart))) return true;
+
+        return false;
+      };
+
+      // 1. First priority: match with applicableModel matching modelId
+      let match = laserNesting.find(ln => ln.applicableModel && normalizeKey(ln.applicableModel) === normalizeKey(modelId) && isMatch(ln));
+      if (match) return match;
+
+      // 2. Second priority: any matching item in laserNesting
+      return laserNesting.find(isMatch);
+    };
+
+    const getIndividualLaserSecs = (poPartId: string): number => {
+      const norm = findNormByPart(poPartId, 'LASER');
+      if (norm && norm.secondsPerUnit > 0) return norm.secondsPerUnit;
+
+      const partObj = findPart(poPartId);
+      const cleanPoPart = normalizeKey(poPartId);
+      const cleanPartName = partObj ? normalizeKey(partObj.name) : '';
+
+      const hsqdItem = laserHSQDArray.find(h => {
+        const cleanH = normalizeKey(h.partId);
+        if (cleanH === cleanPoPart) return true;
+        if (cleanPartName && cleanH === cleanPartName) return true;
+        if (h.partName && normalizeKey(h.partName) === cleanPoPart) return true;
+        if (cleanPartName && cleanPartName.length >= 4 && (cleanH.includes(cleanPartName) || cleanPartName.includes(cleanH))) return true;
+        return false;
+      });
+
+      if (hsqdItem && hsqdItem.hsqd > 0) {
+        return hsqdItem.hsqd * 30; // 30s per unit scaled by HSQD
+      }
+
+      return 30; // Default estimate 30s per unit so duration is never zero
+    };
 
     const runForwardPass = (globalStart: number) => {
       const outChildPOs: ProductionOrder[] = [];
@@ -3016,7 +3122,7 @@ export const storageService = {
         const individualLaserPOs: ProductionOrder[] = [];
         laserPOs.forEach(po => {
           const p = {...po};
-          const nest = laserNesting.find(ln => ln.partId === po.partId && (!ln.applicableModel || ln.applicableModel === modelId));
+          const nest = findLaserNestingItem(po.partId);
           if (nest) {
             const group = nestedGroupMap.get(nest.nestingId) || [];
             group.push(p);
@@ -3028,14 +3134,13 @@ export const storageService = {
         individualLaserPOs.forEach(p => {
           const start = this.getNextWorkingTime(fFreeLaser, 'LASER', shiftConfigs);
           p.plannedStartTime = start;
-          const norm = norms.find(n => n.partId === p.partId && n.stageId === 'LASER');
+          const secsPerUnit = getIndividualLaserSecs(p.partId);
           
-          // Worker override for individual laser PO
           const partName = partsList.find(pl => pl.id === p.partId)?.name;
           const override = laserConfig?.workerOverrides?.find(o => o.modelId === p.partId || o.modelId === partName || o.modelId === modelId);
           const currentLaserWorkers = override ? override.workerCount : (laserConfig?.workerCount || 1);
 
-          const duration = norm ? (p.targetQuantity * norm.secondsPerUnit * 1000) / currentLaserWorkers : 0;
+          const duration = (p.targetQuantity * secsPerUnit * 1000) / currentLaserWorkers;
           const end = this.calculateEndTime(start, duration, 'LASER', shiftConfigs);
           p.expectedCompletionTime = end;
           fFreeLaser = end;
@@ -3046,21 +3151,18 @@ export const storageService = {
           let maxPlates = 0;
           let secondsPerSheet = 0;
           
-          // Find the best worker count for the nesting group
           let groupMaxWorkers = laserConfig?.workerCount || 1;
           const batchModelOverride = laserConfig?.workerOverrides?.find(o => o.modelId === modelId);
           if (batchModelOverride) groupMaxWorkers = batchModelOverride.workerCount;
 
-          // Calculate max required plates for this nesting group
           groupPOs.forEach(p => {
-            const nest = laserNesting.find(ln => ln.partId === p.partId && ln.nestingId === nestingId && (!ln.applicableModel || ln.applicableModel === modelId));
+            const nest = findLaserNestingItem(p.partId, nestingId);
             if (nest && nest.qtyPerSheet > 0) {
               const plates = Math.ceil(p.targetQuantity / nest.qtyPerSheet);
               if (plates > maxPlates) maxPlates = plates;
               if (nest.secondsPerSheet) secondsPerSheet = nest.secondsPerSheet;
             }
 
-            // Check if this specific part in the group has an override
             const partName = partsList.find(pl => pl.id === p.partId)?.name;
             const pOverride = laserConfig?.workerOverrides?.find(o => o.modelId === p.partId || o.modelId === partName);
             if (pOverride && pOverride.workerCount > groupMaxWorkers) {
@@ -3068,6 +3170,12 @@ export const storageService = {
             }
           });
           
+          if (secondsPerSheet === 0) secondsPerSheet = 120;
+          if (maxPlates === 0) {
+            const totalQty = groupPOs.reduce((acc, item) => acc + item.targetQuantity, 0);
+            maxPlates = Math.ceil(totalQty / 10) || 1;
+          }
+
           const totalDur = maxPlates * secondsPerSheet * 1000;
           const adjustedDur = totalDur / groupMaxWorkers;
           const start = this.getNextWorkingTime(fFreeLaser, 'LASER', shiftConfigs);
@@ -3085,13 +3193,13 @@ export const storageService = {
           const p = {...po};
           const start = this.getNextWorkingTime(fFreeLaser, 'LASER', shiftConfigs);
           p.plannedStartTime = start;
-          const norm = norms.find(n => n.partId === p.partId && n.stageId === 'LASER');
+          const secsPerUnit = getIndividualLaserSecs(p.partId);
 
           const partName = partsList.find(pl => pl.id === p.partId)?.name;
           const override = laserConfig?.workerOverrides?.find(o => o.modelId === p.partId || o.modelId === partName || o.modelId === modelId);
           const currentLaserWorkers = override ? override.workerCount : (laserConfig?.workerCount || 1);
 
-          const duration = norm ? (p.targetQuantity * norm.secondsPerUnit * 1000) / currentLaserWorkers : 0;
+          const duration = (p.targetQuantity * secsPerUnit * 1000) / currentLaserWorkers;
           const end = this.calculateEndTime(start, duration, 'LASER', shiftConfigs);
           p.expectedCompletionTime = end;
           fFreeLaser = end;
@@ -3112,7 +3220,7 @@ export const storageService = {
         const laserEnd = getFinishTime(p.partId, 'LASER');
         const start = this.getNextWorkingTime(Math.max(fFreeBending, laserEnd), 'BENDING', shiftConfigs);
         p.plannedStartTime = start;
-        const norm = norms.find(n => n.partId === p.partId && n.stageId === 'BENDING');
+        const norm = findNormByPart(p.partId, 'BENDING');
         const duration = norm ? (p.targetQuantity * norm.secondsPerUnit * 1000) / bendWorkers : 0;
         const end = this.calculateEndTime(start, duration, 'BENDING', shiftConfigs);
         p.expectedCompletionTime = end;
@@ -3145,7 +3253,7 @@ export const storageService = {
         
         const start = this.getNextWorkingTime(Math.max(fFreeWelding, componentsReadyTime, myReadyTime), 'WELDING', shiftConfigs);
         p.plannedStartTime = start;
-        const norm = norms.find(n => n.partId === p.partId && n.stageId === 'WELDING');
+        const norm = findNormByPart(p.partId, 'WELDING');
         const duration = norm ? (p.targetQuantity * norm.secondsPerUnit * 1000) / weldWorkers : 0;
         const end = this.calculateEndTime(start, duration, 'WELDING', shiftConfigs);
         p.expectedCompletionTime = end;
@@ -3170,7 +3278,7 @@ export const storageService = {
 
         const start = this.getNextWorkingTime(Math.max(fFreePainting, readyTime), 'PAINTING', shiftConfigs);
         p.plannedStartTime = start;
-        const norm = norms.find(n => n.partId === p.partId && n.stageId === 'PAINTING');
+        const norm = findNormByPart(p.partId, 'PAINTING');
         const duration = norm ? (p.targetQuantity * norm.secondsPerUnit * 1000) / paintWorkers : 0;
         const end = this.calculateEndTime(start, duration, 'PAINTING', shiftConfigs);
         p.expectedCompletionTime = end;
