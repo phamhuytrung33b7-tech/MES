@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation } from './types';
+import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, UserAccount, View } from './types';
 import { format, addMilliseconds, setHours, setMinutes, setSeconds, getHours, getMinutes, isBefore, isAfter, startOfDay, addDays } from 'date-fns';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
@@ -36,6 +36,7 @@ const STORAGE_KEYS = {
   BENDING_WELDING_HSQD: 'wip_bending_welding_hsqd',
   LASER_HSQD: 'wip_laser_hsqd',
   STAGE_PLANNED_WORKERS: 'wip_stage_planned_workers',
+  USERS: 'wip_users',
 };
 
 // In-memory cache to eliminate redundant reads & preserve Free tier egress
@@ -573,6 +574,162 @@ export const storageService = {
     effectivePartIdCache.clear();
     queueConfigPersist(STORAGE_KEYS.TRANSFORMATIONS, transformations);
   },
+
+  getUsers(): UserAccount[] {
+    return getCached(STORAGE_KEYS.USERS, () => {
+      const data = localStorage.getItem(STORAGE_KEYS.USERS);
+      let users: UserAccount[] = [];
+      if (data) {
+        try { users = JSON.parse(data); } catch {}
+      }
+      if (!users || !Array.isArray(users) || users.length === 0) {
+        const defaultAdmin: UserAccount = {
+          id: 'usr_admin',
+          username: 'admin',
+          password: 'admin123',
+          fullName: 'Quản trị viên Hệ thống',
+          role: 'ADMIN',
+          allowedViews: [
+            'dashboard', 'produce', 'inbound', 'laser_inbound', 'welding_inbound',
+            'glazing', 'labels', 'po', 'defects', 'working_hours', 'norms', 'odd_po', 'settings'
+          ],
+          isActive: true,
+          createdAt: Date.now()
+        };
+        users = [defaultAdmin];
+        try { localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users)); } catch {}
+      }
+      return users;
+    });
+  },
+
+  saveUsers(users: UserAccount[]) {
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    cache[STORAGE_KEYS.USERS] = users;
+    queueConfigPersist(STORAGE_KEYS.USERS, users);
+  },
+
+  getCurrentUser(): UserAccount | null {
+    try {
+      const raw = localStorage.getItem('wip_current_user');
+      if (raw) {
+        const u = JSON.parse(raw);
+        const users = this.getUsers();
+        const found = users.find(x => x.id === u.id || x.username.toLowerCase() === u.username.toLowerCase());
+        if (found && found.isActive) return found;
+      }
+    } catch {}
+    const users = this.getUsers();
+    const admin = users.find(u => u.role === 'ADMIN' && u.isActive) || users[0];
+    if (admin) {
+      try { localStorage.setItem('wip_current_user', JSON.stringify(admin)); } catch {}
+      return admin;
+    }
+    return null;
+  },
+
+  setCurrentUser(user: UserAccount | null) {
+    if (user) {
+      localStorage.setItem('wip_current_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('wip_current_user');
+    }
+  },
+
+  authenticate(username: string, password?: string): { success: boolean; user?: UserAccount; error?: string } {
+    const users = this.getUsers();
+    const cleanUsername = username.trim().toLowerCase();
+    const user = users.find(u => u.username.toLowerCase() === cleanUsername);
+
+    if (!user) {
+      return { success: false, error: 'Tài khoản không tồn tại trên hệ thống.' };
+    }
+    if (!user.isActive) {
+      return { success: false, error: 'Tài khoản này đã bị khóa hoặc vô hiệu hóa. Vui lòng liên hệ Admin.' };
+    }
+    if (user.password && password !== undefined && user.password !== password) {
+      return { success: false, error: 'Mật khẩu không chính xác.' };
+    }
+
+    user.lastLoginAt = Date.now();
+    this.saveUsers(users);
+    this.setCurrentUser(user);
+    return { success: true, user };
+  },
+
+  createUser(newUserData: Omit<UserAccount, 'id' | 'createdAt'>): { success: boolean; user?: UserAccount; error?: string } {
+    const users = this.getUsers();
+    const cleanUsername = newUserData.username.trim().toLowerCase();
+    if (!cleanUsername) {
+      return { success: false, error: 'Tên đăng nhập không được để trống.' };
+    }
+    if (users.some(u => u.username.toLowerCase() === cleanUsername)) {
+      return { success: false, error: `Tên đăng nhập "${newUserData.username}" đã tồn tại.` };
+    }
+
+    const newUser: UserAccount = {
+      ...newUserData,
+      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      username: newUserData.username.trim(),
+      createdAt: Date.now()
+    };
+
+    users.push(newUser);
+    this.saveUsers(users);
+    return { success: true, user: newUser };
+  },
+
+  updateUser(id: string, updates: Partial<Omit<UserAccount, 'id' | 'createdAt'>>): { success: boolean; error?: string } {
+    const users = this.getUsers();
+    const index = users.findIndex(u => u.id === id);
+    if (index === -1) {
+      return { success: false, error: 'Không tìm thấy tài khoản cần cập nhật.' };
+    }
+
+    if (updates.username) {
+      const cleanUsername = updates.username.trim().toLowerCase();
+      const duplicate = users.find(u => u.id !== id && u.username.toLowerCase() === cleanUsername);
+      if (duplicate) {
+        return { success: false, error: `Tên đăng nhập "${updates.username}" đã được sử dụng bởi người khác.` };
+      }
+    }
+
+    users[index] = { ...users[index], ...updates };
+    this.saveUsers(users);
+
+    const current = this.getCurrentUser();
+    if (current && current.id === id) {
+      this.setCurrentUser(users[index]);
+    }
+
+    return { success: true };
+  },
+
+  deleteUser(id: string): { success: boolean; error?: string } {
+    const users = this.getUsers();
+    const target = users.find(u => u.id === id);
+    if (!target) {
+      return { success: false, error: 'Không tìm thấy người dùng cần xóa.' };
+    }
+
+    if (target.role === 'ADMIN') {
+      const adminCount = users.filter(u => u.role === 'ADMIN' && u.isActive).length;
+      if (adminCount <= 1) {
+        return { success: false, error: 'Không thể xóa tài khoản Quản trị viên (Admin) duy nhất còn lại của hệ thống.' };
+      }
+    }
+
+    const filtered = users.filter(u => u.id !== id);
+    this.saveUsers(filtered);
+
+    const current = this.getCurrentUser();
+    if (current && current.id === id) {
+      this.setCurrentUser(null);
+    }
+
+    return { success: true };
+  },
+
 
   getGlazingConfigs(): import('./types').GlazingConfig[] {
     return getCached(STORAGE_KEYS.GLAZING_CONFIGS, () => {
@@ -3959,6 +4116,7 @@ export const storageService = {
         STORAGE_KEYS.HOURLY_PEOPLE_GLAZING,
         STORAGE_KEYS.HOURLY_PEOPLE_BENDING,
         STORAGE_KEYS.HOURLY_PEOPLE_WELDING,
+        STORAGE_KEYS.USERS,
       ];
 
       const configRows: { key: string; value: any }[] = [];

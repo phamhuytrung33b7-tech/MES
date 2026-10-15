@@ -194,3 +194,57 @@ export const DEFECT_REASONS = [
 ];
 
 export const INITIAL_PARTS: Part[] = [];
+
+export type View = 
+  | 'dashboard' 
+  | 'produce' 
+  | 'inbound' 
+  | 'laser_inbound' 
+  | 'welding_inbound' 
+  | 'glazing' 
+  | 'labels' 
+  | 'po' 
+  | 'defects' 
+  | 'working_hours' 
+  | 'norms' 
+  | 'odd_po' 
+  | 'settings' 
+  | 'history'
+  | 'users';
+
+export type UserRole = 'ADMIN' | 'USER';
+
+export interface UserAccount {
+  id: string;
+  username: string;
+  password?: string;
+  fullName: string;
+  role: UserRole;
+  allowedViews: View[];
+  isActive: boolean;
+  createdAt: number;
+  lastLoginAt?: number;
+}
+
+export interface TabPermissionConfig {
+  key: View;
+  label: string;
+  description: string;
+  category: 'production' | 'warehouse' | 'planning' | 'system';
+}
+
+export const AVAILABLE_TABS: TabPermissionConfig[] = [
+  { key: 'dashboard', label: 'Tổng quan (Dashboard)', description: 'Xem biểu đồ sản lượng, năng suất và tồn kho WIP', category: 'production' },
+  { key: 'produce', label: 'Xuất kho (Finish)', description: 'Thực hiện xuất kho công đoạn và in nhãn QR', category: 'warehouse' },
+  { key: 'inbound', label: 'Nhập kho (Quét mã)', description: 'Quét camera/máy quét QR nhập kho các công đoạn', category: 'warehouse' },
+  { key: 'laser_inbound', label: 'Nhập kho Laser', description: 'Nhập kho thủ công phôi cắt tấm laser', category: 'warehouse' },
+  { key: 'welding_inbound', label: 'Nhập kho Hàn', description: 'Nhập kho thủ công phôi công đoạn hàn', category: 'warehouse' },
+  { key: 'glazing', label: 'Công đoạn Dán Kính', description: 'Theo dõi và thực hiện kế hoạch dán kính, in nhãn thành phẩm', category: 'production' },
+  { key: 'labels', label: 'Danh sách nhãn QR', description: 'Xem và in lại danh sách nhãn mã QR đã tạo', category: 'warehouse' },
+  { key: 'po', label: 'Lệnh sản xuất (PO)', description: 'Quản lý, import Excel và tạo các lệnh sản xuất PO', category: 'planning' },
+  { key: 'defects', label: 'Báo cáo lỗi (Defect)', description: 'Ghi nhận và thống kê linh kiện lỗi, phế phẩm', category: 'production' },
+  { key: 'working_hours', label: 'Thời gian Ca & Nghỉ', description: 'Cấu hình ca làm việc, giờ nghỉ giải lao xưởng', category: 'planning' },
+  { key: 'norms', label: 'Định mức Năng suất', description: 'Cài đặt định mức thời gian sản xuất linh kiện', category: 'planning' },
+  { key: 'odd_po', label: 'PO dư lẻ', description: 'Quản lý các lệnh sản xuất dư thừa, lẻ theo công đoạn', category: 'planning' },
+  { key: 'settings', label: 'Cài đặt & Sao lưu dữ liệu', description: 'Quản lý BOM, danh mục vật tư, sao lưu và đồng bộ Cloud', category: 'system' },
+];

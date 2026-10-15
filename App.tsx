@@ -49,7 +49,12 @@ import {
   Calendar,
   Cloud,
   CloudOff,
-  Server
+  Server,
+  Key,
+  Lock,
+  LogOut,
+  ShieldCheck,
+  UserCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -71,13 +76,14 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { STAGES, INITIAL_PARTS, StageId, Part, InventoryItem, Transaction, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, DEFECT_REASONS, StagePlannedWorkers } from './types';
+import { STAGES, INITIAL_PARTS, StageId, Part, InventoryItem, Transaction, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, DEFECT_REASONS, StagePlannedWorkers, UserAccount, View } from './types';
 import { storageService } from './storage';
 import { SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection } from './supabaseClient';
 import { exportPreparationReport } from './exportPreparationReport';
 import { exportDetailedProductionPlan } from './exportDetailedPlan';
 import { importExcelToPO, downloadSamplePOExcelTemplate, MissingBomModelInfo } from './importExcelToPO';
 import { importExcelToGlazingPlan, MissingNormModelInfo } from './importExcelToGlazingPlan';
+import { UserManagementView, LoginModal, ChangePasswordModal } from './UserManagement';
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -213,8 +219,6 @@ function getProcessValue(value: string | undefined, part: Part | undefined, stag
   // Consistently use " - [SUFFIX]"
   return `${value} - ${suffix}`;
 }
-
-type View = 'dashboard' | 'produce' | 'inbound' | 'laser_inbound' | 'welding_inbound' | 'odd_po' | 'history' | 'settings' | 'labels' | 'po' | 'norms' | 'working_hours' | 'defects' | 'glazing';
 
 function SearchableSelect({ 
   options, 
@@ -712,6 +716,44 @@ export default function App() {
   const [labelSettings, setLabelSettings] = useState(storageService.getLabelSettings());
   const [defectModal, setDefectModal] = useState<{ partId: string, stageId: StageId, poId?: string } | null>(null);
 
+  // Authentication & RBAC State
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => storageService.getCurrentUser());
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+
+  // RBAC Permission check
+  const canAccessView = useCallback((v: View): boolean => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'ADMIN') return true;
+    if (v === 'users') return false; // Admin only
+    return currentUser.allowedViews?.includes(v) ?? false;
+  }, [currentUser]);
+
+  // Guard: if currentView is not allowed for the user, redirect to their first permitted tab
+  useEffect(() => {
+    if (currentUser && !canAccessView(currentView)) {
+      const allowed = currentUser.allowedViews?.find(v => v !== 'users') || 'dashboard';
+      setCurrentView(allowed);
+    }
+  }, [currentUser, currentView, canAccessView]);
+
+  const handleLogout = () => {
+    storageService.setCurrentUser(null);
+    setCurrentUser(null);
+    setShowLoginModal(true);
+    setShowUserDropdown(false);
+  };
+
+  const handleLoginSuccess = (user: UserAccount) => {
+    setCurrentUser(user);
+    setShowLoginModal(false);
+    setShowUserDropdown(false);
+    const firstAllowed = user.role === 'ADMIN' ? 'dashboard' : (user.allowedViews?.[0] || 'dashboard');
+    setCurrentView(firstAllowed);
+    setSuccess(`Xin chào, ${user.fullName || user.username}!`);
+  };
+
   const dclrNorms = useMemo(() => storageService.getNorms().filter(n => n.stageId === 'DCLR'), [isImportingNorms, parts]);
   const dclrNormsMap = useMemo(() => new Map(dclrNorms.map(n => [n.partId, n.secondsPerUnit])), [dclrNorms]);
 
@@ -989,99 +1031,137 @@ export default function App() {
         "bg-white border-r border-gray-200 transition-all duration-300 flex flex-col z-50",
         isSidebarOpen ? "w-64" : "w-20"
       )}>
-        <nav className="flex-1 pt-2 px-3 space-y-1">
-          <SidebarLink 
-            active={currentView === 'dashboard'} 
-            onClick={() => setCurrentView('dashboard')}
-            icon={<LayoutDashboard size={24} />}
-            label="Tổng quan (Dashboard)"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'produce'} 
-            onClick={() => setCurrentView('produce')}
-            icon={<PackagePlus size={24} />}
-            label="Xuất kho (Finish)"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'inbound'} 
-            onClick={() => setCurrentView('inbound')}
-            icon={<QrCode size={24} />}
-            label="Nhập kho (Quét mã)"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'laser_inbound'} 
-            onClick={() => setCurrentView('laser_inbound')}
-            icon={<Layers size={24} />}
-            label="Nhập kho Laser"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'welding_inbound'} 
-            onClick={() => setCurrentView('welding_inbound')}
-            icon={<Flame size={24} />}
-            label="Nhập kho Hàn"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'glazing'} 
-            onClick={() => setCurrentView('glazing')}
-            icon={<Square size={24} />}
-            label="Công đoạn Dán Kính"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'labels'} 
-            onClick={() => setCurrentView('labels')}
-            icon={<QrCode size={24} />}
-            label="Danh sách nhãn QR"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'po'} 
-            onClick={() => setCurrentView('po')}
-            icon={<ClipboardList size={24} />}
-            label="Lệnh sản xuất (PO)"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'defects'} 
-            onClick={() => setCurrentView('defects')}
-            icon={<AlertCircle size={24} className="text-red-500" />}
-            label="Báo cáo lỗi (Defect)"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'working_hours'} 
-            onClick={() => setCurrentView('working_hours')}
-            icon={<Clock size={24} />}
-            label="Thời gian Ca & Nghỉ"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'norms'} 
-            onClick={() => setCurrentView('norms')}
-            icon={<Monitor size={24} />}
-            label="Định mức Năng suất"
-            collapsed={!isSidebarOpen}
-          />
+        <nav className="flex-1 pt-2 px-3 space-y-1 overflow-y-auto">
+          {canAccessView('dashboard') && (
+            <SidebarLink 
+              active={currentView === 'dashboard'} 
+              onClick={() => setCurrentView('dashboard')}
+              icon={<LayoutDashboard size={24} />}
+              label="Tổng quan (Dashboard)"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('produce') && (
+            <SidebarLink 
+              active={currentView === 'produce'} 
+              onClick={() => setCurrentView('produce')}
+              icon={<PackagePlus size={24} />}
+              label="Xuất kho (Finish)"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('inbound') && (
+            <SidebarLink 
+              active={currentView === 'inbound'} 
+              onClick={() => setCurrentView('inbound')}
+              icon={<QrCode size={24} />}
+              label="Nhập kho (Quét mã)"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('laser_inbound') && (
+            <SidebarLink 
+              active={currentView === 'laser_inbound'} 
+              onClick={() => setCurrentView('laser_inbound')}
+              icon={<Layers size={24} />}
+              label="Nhập kho Laser"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('welding_inbound') && (
+            <SidebarLink 
+              active={currentView === 'welding_inbound'} 
+              onClick={() => setCurrentView('welding_inbound')}
+              icon={<Flame size={24} />}
+              label="Nhập kho Hàn"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('glazing') && (
+            <SidebarLink 
+              active={currentView === 'glazing'} 
+              onClick={() => setCurrentView('glazing')}
+              icon={<Square size={24} />}
+              label="Công đoạn Dán Kính"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('labels') && (
+            <SidebarLink 
+              active={currentView === 'labels'} 
+              onClick={() => setCurrentView('labels')}
+              icon={<QrCode size={24} />}
+              label="Danh sách nhãn QR"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('po') && (
+            <SidebarLink 
+              active={currentView === 'po'} 
+              onClick={() => setCurrentView('po')}
+              icon={<ClipboardList size={24} />}
+              label="Lệnh sản xuất (PO)"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('defects') && (
+            <SidebarLink 
+              active={currentView === 'defects'} 
+              onClick={() => setCurrentView('defects')}
+              icon={<AlertCircle size={24} className="text-red-500" />}
+              label="Báo cáo lỗi (Defect)"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('working_hours') && (
+            <SidebarLink 
+              active={currentView === 'working_hours'} 
+              onClick={() => setCurrentView('working_hours')}
+              icon={<Clock size={24} />}
+              label="Thời gian Ca & Nghỉ"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('norms') && (
+            <SidebarLink 
+              active={currentView === 'norms'} 
+              onClick={() => setCurrentView('norms')}
+              icon={<Monitor size={24} />}
+              label="Định mức Năng suất"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('odd_po') && (
+            <SidebarLink 
+              active={currentView === 'odd_po'} 
+              onClick={() => setCurrentView('odd_po')}
+              icon={<Layers size={24} />}
+              label="PO dư lẻ"
+              collapsed={!isSidebarOpen}
+            />
+          )}
+          {canAccessView('settings') && (
+            <SidebarLink 
+              active={currentView === 'settings'} 
+              onClick={() => setCurrentView('settings')}
+              icon={<Settings size={24} />}
+              label="Cài đặt & Sao lưu dữ liệu"
+              collapsed={!isSidebarOpen}
+            />
+          )}
 
-          <SidebarLink 
-            active={currentView === 'odd_po'} 
-            onClick={() => setCurrentView('odd_po')}
-            icon={<Layers size={24} />}
-            label="PO dư lẻ"
-            collapsed={!isSidebarOpen}
-          />
-          <SidebarLink 
-            active={currentView === 'settings'} 
-            onClick={() => setCurrentView('settings')}
-            icon={<Settings size={24} />}
-            label="Cài đặt & Sao lưu dữ liệu"
-            collapsed={!isSidebarOpen}
-          />
+          {/* Admin User Management Tab */}
+          {currentUser?.role === 'ADMIN' && (
+            <div className="pt-2 mt-2 border-t border-gray-100">
+              <SidebarLink 
+                active={currentView === 'users'} 
+                onClick={() => setCurrentView('users')}
+                icon={<Users size={24} className="text-orange-500" />}
+                label="Quản lý Tài khoản"
+                collapsed={!isSidebarOpen}
+              />
+            </div>
+          )}
         </nav>
 
         <div className="p-4 border-t border-gray-100">
@@ -1111,6 +1191,7 @@ export default function App() {
               {currentView === 'norms' && 'Định mức năng suất sản xuất'}
               {currentView === 'working_hours' && 'Cài đặt Ca làm việc & Nghỉ ngơi'}
               {currentView === 'settings' && 'Cài đặt linh kiện & Sao lưu Local Storage'}
+              {currentView === 'users' && 'Quản trị Người dùng & Phân quyền'}
             </h2>
           </div>
           <div className="flex items-center gap-4">
@@ -1156,6 +1237,112 @@ export default function App() {
               <Database size={15} className="text-emerald-600" />
               <span>Sao lưu / Nạp JSON</span>
             </button>
+
+            {/* User Account / Profile Dropdown */}
+            <div className="relative">
+              {currentUser ? (
+                <div>
+                  <button
+                    onClick={() => setShowUserDropdown(!showUserDropdown)}
+                    className="flex items-center gap-2.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl transition-all shadow-xs cursor-pointer active:scale-95"
+                    title={`Đang đăng nhập: @${currentUser.username}`}
+                  >
+                    <div className={cn(
+                      "w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs uppercase shadow-xs",
+                      currentUser.role === 'ADMIN' ? "bg-orange-500 text-white" : "bg-blue-600 text-white"
+                    )}>
+                      {currentUser.fullName ? currentUser.fullName.substring(0, 2) : currentUser.username.substring(0, 2)}
+                    </div>
+                    <div className="text-left hidden md:block">
+                      <div className="text-xs font-bold text-gray-900 leading-tight">
+                        {currentUser.fullName || currentUser.username}
+                      </div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                        {currentUser.role === 'ADMIN' ? 'Quản trị viên' : 'Nhân viên'}
+                      </div>
+                    </div>
+                    <ChevronDown size={14} className="text-gray-400 ml-0.5" />
+                  </button>
+
+                  <AnimatePresence>
+                    {showUserDropdown && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-40" 
+                          onClick={() => setShowUserDropdown(false)} 
+                        />
+                        <div className="absolute right-0 top-full mt-2 w-60 bg-white border border-gray-200 rounded-2xl shadow-xl z-50 py-2 divide-y divide-gray-100">
+                          <div className="px-4 py-2.5">
+                            <p className="text-xs font-bold text-gray-900 truncate">{currentUser.fullName}</p>
+                            <p className="text-[11px] text-gray-500 font-mono">@{currentUser.username}</p>
+                            <span className={cn(
+                              "inline-block mt-1 px-2 py-0.5 text-[10px] font-black rounded-md",
+                              currentUser.role === 'ADMIN' ? "bg-orange-100 text-orange-700" : "bg-blue-100 text-blue-700"
+                            )}>
+                              {currentUser.role === 'ADMIN' ? 'Quản trị viên (Admin)' : 'Nhân viên'}
+                            </span>
+                          </div>
+
+                          <div className="py-1">
+                            {currentUser.role === 'ADMIN' && (
+                              <button
+                                onClick={() => {
+                                  setCurrentView('users');
+                                  setShowUserDropdown(false);
+                                }}
+                                className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-gray-700 hover:bg-orange-50 hover:text-orange-600 transition-colors text-left cursor-pointer"
+                              >
+                                <Users size={15} />
+                                <span>Quản lý Tài khoản</span>
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                setShowChangePasswordModal(true);
+                                setShowUserDropdown(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors text-left cursor-pointer"
+                            >
+                              <Key size={15} />
+                              <span>Đổi mật khẩu</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                setShowLoginModal(true);
+                                setShowUserDropdown(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors text-left cursor-pointer"
+                            >
+                              <UserCheck size={15} />
+                              <span>Chuyển tài khoản</span>
+                            </button>
+                          </div>
+
+                          <div className="py-1">
+                            <button
+                              onClick={handleLogout}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                            >
+                              <LogOut size={15} />
+                              <span>Đăng xuất</span>
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowLoginModal(true)}
+                  className="flex items-center gap-2 px-3.5 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-xs font-black shadow-md shadow-orange-500/20 active:scale-95 cursor-pointer"
+                >
+                  <Lock size={14} />
+                  <span>Đăng nhập</span>
+                </button>
+              )}
+            </div>
+
             <div className="h-6 w-px bg-gray-200" />
             <div className="flex flex-col items-end">
               <span className="text-xs font-mono opacity-50 uppercase">Terminal ID</span>
@@ -1298,16 +1485,28 @@ export default function App() {
                   }}
                 />
               )}
+              {currentView === 'users' && currentUser?.role === 'ADMIN' && (
+                <UserManagementView 
+                  key="users" 
+                  currentUser={currentUser} 
+                  onUserUpdated={() => {
+                    setCurrentUser(storageService.getCurrentUser());
+                    refreshData();
+                  }} 
+                />
+              )}
             </AnimatePresence>
           </div>
         </main>
 
         {/* Status Bar */}
         <footer className="bg-white border-t border-gray-200 text-gray-500 px-8 py-3 flex justify-between items-center text-xs font-mono uppercase tracking-widest">
-          <div className="flex gap-6">
-            <span>User: Huy Trung</span>
+          <div className="flex gap-6 items-center">
+            <span>User: <strong className="text-gray-800">{currentUser?.fullName || currentUser?.username || 'Chưa đăng nhập'}</strong></span>
             <span className="opacity-30">|</span>
-            <span>Shift: Day</span>
+            <span>Vai trò: <strong className={currentUser?.role === 'ADMIN' ? 'text-orange-600' : 'text-blue-600'}>{currentUser?.role === 'ADMIN' ? 'Admin' : currentUser?.role === 'USER' ? 'Nhân viên' : 'Khách'}</strong></span>
+            <span className="opacity-30">|</span>
+            <span>Ca: Ngày</span>
           </div>
           <div className="font-bold">
             {format(new Date(), 'dd/MM/yyyy HH:mm:ss')}
@@ -1338,6 +1537,31 @@ export default function App() {
           onDataChanged={refreshData} 
         />
       )}
+
+      {/* Login Modal */}
+      <AnimatePresence>
+        {showLoginModal && (
+          <LoginModal 
+            canCancel={!!currentUser} 
+            onCancel={() => setShowLoginModal(false)} 
+            onSuccess={handleLoginSuccess} 
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Change Password Modal */}
+      <AnimatePresence>
+        {showChangePasswordModal && currentUser && (
+          <ChangePasswordModal 
+            currentUser={currentUser} 
+            onClose={() => setShowChangePasswordModal(false)} 
+            onSuccess={() => {
+              setShowChangePasswordModal(false);
+              setSuccess('Đã đổi mật khẩu thành công!');
+            }} 
+          />
+        )}
+      </AnimatePresence>
 
       {/* Notification Overlay */}
       <AnimatePresence>
@@ -5506,8 +5730,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         </div>
 
         {/* Chart View */}
-        <div className="h-[520px] w-full mt-4">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-[520px] w-full mt-4 min-h-[520px] min-w-[300px] relative" style={{ minHeight: '520px', width: '100%' }}>
+          <ResponsiveContainer width="100%" height={520} minWidth={300} minHeight={520} debounce={50}>
             <ComposedChart data={productionChartData} margin={{ top: 35, right: 35, left: -10, bottom: 20 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
               <XAxis 
