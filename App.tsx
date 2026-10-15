@@ -78,7 +78,7 @@ import { twMerge } from 'tailwind-merge';
 
 import { STAGES, INITIAL_PARTS, StageId, Part, InventoryItem, Transaction, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, DEFECT_REASONS, StagePlannedWorkers, UserAccount, View } from './types';
 import { storageService } from './storage';
-import { SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection } from './supabaseClient';
+import { SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection, isSupabaseConfigured } from './supabaseClient';
 import { exportPreparationReport } from './exportPreparationReport';
 import { exportDetailedProductionPlan } from './exportDetailedPlan';
 import { importExcelToPO, downloadSamplePOExcelTemplate, MissingBomModelInfo } from './importExcelToPO';
@@ -876,17 +876,22 @@ export default function App() {
     };
   }, []);
 
-  const refreshData = useCallback(() => {
+  const refreshData = useCallback(async () => {
+    if (isSupabaseConfigured) {
+      try {
+        await storageService.init();
+      } catch (err) {
+        console.warn('[Sync] Auto-refresh error:', err);
+      }
+    }
     setInventory(storageService.getInventory());
     setTransactions(storageService.getTransactions());
     setLabels(storageService.getLabels());
     setProductionOrders(storageService.getProductionOrders());
     const currentParts = storageService.getParts();
     setParts(currentParts);
-    if (currentParts.length > 0 && !selectedPart) {
-      setSelectedPart(currentParts[0].id);
-    }
-  }, [selectedPart]);
+    setSelectedPart(prev => (!prev && currentParts.length > 0 ? currentParts[0].id : prev));
+  }, []);
 
   // Polling & Visibility Change Auto-Refresh Effect (Every 30s, paused when tab is hidden)
   useEffect(() => {
