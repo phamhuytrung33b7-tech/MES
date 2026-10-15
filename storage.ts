@@ -1845,49 +1845,121 @@ export const storageService = {
     // Welding stage specific logic (BOM V2):
     if (stageId === 'WELDING') {
       const bomV2 = this.getBOMV2();
-      // Only deduct ingredients that DON'T skip welding
-      const allIngredients = bomV2.filter(b => b.resultPartId === cleanId && (!b.applicableModel || b.applicableModel === currentModelId));
-      const ingredients = allIngredients.filter(ing => {
-        const p = parts.find(part => part.id === ing.ingredientPartId);
-        return !p?.skipWelding;
-      });
-      
-      if (ingredients.length > 0) {
-        const inventory = this.getInventory();
-        for (const ing of ingredients) {
-          const needed = quantity * ing.quantity;
-          const effectiveIngId = this.getEffectivePartId(ing.ingredientPartId, 'WELDING', poId);
-          
-          const partInCatalog = parts.find(p => p.id.toUpperCase() === effectiveIngId.toUpperCase());
-          const targetName = partInCatalog ? partInCatalog.name.toUpperCase().trim() : '';
+      if (bomV2 && bomV2.length > 0) {
+        const cleanPartStr = (s: string): string => {
+          if (!s) return '';
+          let str = s.normalize('NFC').trim().toUpperCase();
+          str = str.replace(/\s*-\s*(H|CD|S|C|GLZ|OUT|IN)$/i, '');
+          str = str.replace(/-(H|CD|S|C|GLZ|OUT|IN)$/i, '');
+          return str.trim();
+        };
 
-          const matchingStocks = inventory.filter(i => {
-            const itemPartId = i.partId.toUpperCase().trim();
-            const matchesPart = itemPartId === effectiveIngId.toUpperCase() || (targetName && itemPartId === targetName);
-            return matchesPart && i.stageId === 'WELDING' && i.location === 'IN';
-          });
-          const totalStock = matchingStocks.reduce((sum, i) => sum + i.quantity, 0);
+        const matchPartFlexible = (strA: string, strB: string): boolean => {
+          if (!strA || !strB) return false;
+          const cA = cleanPartStr(strA);
+          const cB = cleanPartStr(strB);
+          if (cA === cB) return true;
 
-          if (totalStock < needed) {
-            const ingPart = parts.find(p => p.id === effectiveIngId);
-            throw new Error(`Lỗi: Không đủ tồn kho ${ingPart?.name || effectiveIngId} tại WELDING_IN. Cần ${needed} ${ingPart?.unit || ''}, hiện có ${totalStock}`);
+          const resolveParts = (term: string) => {
+            const c = cleanPartStr(term);
+            return parts.filter(p => {
+              const pId = cleanPartStr(p.id);
+              const pName = cleanPartStr(p.name);
+              const pCode = p.code ? cleanPartStr(p.code) : '';
+              return pId === c || pName === c || (pCode && pCode === c) ||
+                (c.length > 3 && (pId.includes(c) || c.includes(pId) || pName.includes(c) || c.includes(pName)));
+            });
+          };
+
+          const partsA = resolveParts(strA);
+          const partsB = resolveParts(strB);
+
+          if (partsA.length > 0 && partsB.length > 0) {
+            return partsA.some(pa => partsB.some(pb => pa.id === pb.id));
           }
-        }
-        for (const ing of ingredients) {
-          const effectiveIngId = this.getEffectivePartId(ing.ingredientPartId, 'WELDING', poId);
-          const partInCatalog = parts.find(p => p.id.toUpperCase() === effectiveIngId.toUpperCase());
-          const targetName = partInCatalog ? partInCatalog.name.toUpperCase().trim() : '';
-          const matchingStocks = inventory.filter(i => {
-            const itemPartId = i.partId.toUpperCase().trim();
-            const matchesPart = itemPartId === effectiveIngId.toUpperCase() || (targetName && itemPartId === targetName);
-            return matchesPart && i.stageId === 'WELDING' && i.location === 'IN';
-          });
-          let remainingToDeduct = quantity * ing.quantity;
-          for (const stock of matchingStocks) {
-            if (remainingToDeduct <= 0) break;
-            const toTake = Math.min(stock.quantity, remainingToDeduct);
-            this.updateInventory(stock.partId, 'WELDING', 'IN', -toTake, stock.originalPartId);
-            remainingToDeduct -= toTake;
+
+          if (cA.length >= 5 && cB.length >= 5) {
+            if (cA.includes(cB) || cB.includes(cA)) return true;
+          }
+
+          return false;
+        };
+
+        const matchModelFlexible = (appModel?: string, currentModel?: string): boolean => {
+          if (!appModel || appModel.trim() === '') return true;
+          if (!currentModel || currentModel.trim() === '') return true;
+          const cleanApp = cleanPartStr(appModel);
+          const cleanCurr = cleanPartStr(currentModel);
+          if (cleanApp === cleanCurr) return true;
+          if (cleanApp.includes(cleanCurr) || cleanCurr.includes(cleanApp)) return true;
+          return false;
+        };
+
+        // Find ingredients defined in BOM V2 for this Level 1 result part
+        const allIngredients = bomV2.filter(b => 
+          matchPartFlexible(b.resultPartId, partId) && 
+          matchModelFlexible(b.applicableModel, currentModelId)
+        );
+
+        const ingredients = allIngredients.filter(ing => {
+          const matchingPart = parts.find(p => matchPartFlexible(p.id, ing.ingredientPartId));
+          return !matchingPart?.skipWelding;
+        });
+
+        if (ingredients.length > 0) {
+          const inventory = this.getInventory();
+
+          // Deduct/Check ingredients grouped by component part ID
+          const ingredientMap = new Map<string, { ing: import('./types').BOMDefinitionV2; totalNeeded: number }>();
+          for (const ing of ingredients) {
+            const key = ing.ingredientPartId.trim();
+            const qtyForThis = quantity * ing.quantity;
+            const existing = ingredientMap.get(key);
+            if (existing) {
+              existing.totalNeeded += qtyForThis;
+            } else {
+              ingredientMap.set(key, { ing, totalNeeded: qtyForThis });
+            }
+          }
+
+          // 1. First Pass: Check stock for ALL required ingredients in WELDING_IN
+          for (const { ing, totalNeeded } of ingredientMap.values()) {
+            const effectiveIngId = this.getEffectivePartId(ing.ingredientPartId, 'WELDING', poId);
+
+            const matchingStocks = inventory.filter(i => {
+              if (i.stageId !== 'WELDING' || i.location !== 'IN') return false;
+              return matchPartFlexible(i.partId, effectiveIngId) || 
+                     matchPartFlexible(i.partId, ing.ingredientPartId) ||
+                     (i.originalPartId && (matchPartFlexible(i.originalPartId, effectiveIngId) || matchPartFlexible(i.originalPartId, ing.ingredientPartId)));
+            });
+
+            const totalStock = matchingStocks.reduce((sum, i) => sum + i.quantity, 0);
+
+            if (totalStock < totalNeeded) {
+              const ingPartObj = parts.find(p => matchPartFlexible(p.id, ing.ingredientPartId));
+              const ingDisplayName = ingPartObj ? `${ingPartObj.name} (${ingPartObj.id})` : ing.ingredientPartId;
+              const ingUnit = ingPartObj?.unit || 'bộ';
+              throw new Error(`Lỗi thiếu linh kiện thành phần khi nhập kho HÀN (BOM v2):\n\nLinh kiện thành phần: "${ingDisplayName}"\nCần tiêu hao tại WELDING_IN: ${totalNeeded} ${ingUnit}\nTồn kho hiện có tại WELDING_IN: ${totalStock} ${ingUnit}.\n\nThao tác bị hủy! Vui lòng nhập kho IN cho linh kiện thành phần trước khi thực hiện nhập kho Hàn.`);
+            }
+          }
+
+          // 2. Second Pass: Deduct required quantities from WELDING_IN
+          for (const { ing, totalNeeded } of ingredientMap.values()) {
+            const effectiveIngId = this.getEffectivePartId(ing.ingredientPartId, 'WELDING', poId);
+            const matchingStocks = inventory.filter(i => {
+              if (i.stageId !== 'WELDING' || i.location !== 'IN') return false;
+              return matchPartFlexible(i.partId, effectiveIngId) || 
+                     matchPartFlexible(i.partId, ing.ingredientPartId) ||
+                     (i.originalPartId && (matchPartFlexible(i.originalPartId, effectiveIngId) || matchPartFlexible(i.originalPartId, ing.ingredientPartId)));
+            });
+
+            let remainingToDeduct = totalNeeded;
+            for (const stock of matchingStocks) {
+              if (remainingToDeduct <= 0) break;
+              const toTake = Math.min(stock.quantity, remainingToDeduct);
+              this.updateInventory(stock.partId, 'WELDING', 'IN', -toTake, stock.originalPartId);
+              remainingToDeduct -= toTake;
+            }
           }
         }
       }
