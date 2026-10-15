@@ -876,7 +876,7 @@ export default function App() {
     };
   }, []);
 
-  const refreshData = () => {
+  const refreshData = useCallback(() => {
     setInventory(storageService.getInventory());
     setTransactions(storageService.getTransactions());
     setLabels(storageService.getLabels());
@@ -886,7 +886,41 @@ export default function App() {
     if (currentParts.length > 0 && !selectedPart) {
       setSelectedPart(currentParts[0].id);
     }
-  };
+  }, [selectedPart]);
+
+  // Polling & Visibility Change Auto-Refresh Effect (Every 30s, paused when tab is hidden)
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
+    const startPolling = () => {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(() => {
+        if (!document.hidden) {
+          refreshData();
+        }
+      }, 30000);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      } else {
+        refreshData();
+        startPolling();
+      }
+    };
+
+    startPolling();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [refreshData]);
 
   const handleProduce = async (e: React.FormEvent, sourceLocation: 'IN' | 'OUT' = 'IN', targetStageId?: StageId, poId?: string) => {
     e.preventDefault();
