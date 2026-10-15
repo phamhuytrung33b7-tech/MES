@@ -93,9 +93,8 @@ let poSaveTimer: any = null;
 
 function queueProductionOrdersPersist(orders: ProductionOrder[]) {
   pendingPoSave = orders;
-  if (!poSaveTimer) {
-    poSaveTimer = setTimeout(flushPendingPoSaves, 500);
-  }
+  if (poSaveTimer) clearTimeout(poSaveTimer);
+  poSaveTimer = setTimeout(flushPendingPoSaves, 50);
 }
 
 async function flushPendingPoSaves() {
@@ -106,6 +105,16 @@ async function flushPendingPoSaves() {
   await persistProductionOrdersToSupabase(orders);
 }
 
+function toBigIntOrNull(val: any): number | null {
+  if (val === null || val === undefined || isNaN(Number(val))) return null;
+  return Math.round(Number(val));
+}
+
+function toBigIntOrDefault(val: any, defaultVal: number = 0): number {
+  if (val === null || val === undefined || isNaN(Number(val))) return Math.round(defaultVal);
+  return Math.round(Number(val));
+}
+
 async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
   if (!isSupabaseConfigured || !orders) return;
   try {
@@ -114,18 +123,18 @@ async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
       master_po_id: po.masterPoId || null,
       part_id: po.partId,
       stage_id: po.stageId || null,
-      target_quantity: po.targetQuantity,
-      produced_quantity: po.producedQuantity || 0,
-      exported_quantity: po.exportedQuantity || 0,
+      target_quantity: toBigIntOrDefault(po.targetQuantity, 0),
+      produced_quantity: toBigIntOrDefault(po.producedQuantity, 0),
+      exported_quantity: toBigIntOrDefault(po.exportedQuantity, 0),
       status: po.status || 'PENDING',
-      created_at: po.createdAt || Date.now(),
-      completed_at: po.completedAt || null,
-      planned_start_time: po.plannedStartTime || null,
-      lead_time: po.leadTime || null,
-      expected_completion_time: po.expectedCompletionTime || null,
+      created_at: toBigIntOrDefault(po.createdAt, Date.now()),
+      completed_at: toBigIntOrNull(po.completedAt),
+      planned_start_time: toBigIntOrNull(po.plannedStartTime),
+      lead_time: toBigIntOrNull(po.leadTime),
+      expected_completion_time: toBigIntOrNull(po.expectedCompletionTime),
       note: po.note || null,
       is_odd_po: Boolean(po.isOddPO),
-      excel_required_date: po.excelRequiredDate || null,
+      excel_required_date: toBigIntOrNull(po.excelRequiredDate),
     }));
     // Batch upsert in chunks of 150 to keep request size optimal
     for (let i = 0; i < dbOrders.length; i += 150) {
@@ -174,7 +183,7 @@ async function persistInventoryToSupabase(inventory: InventoryItem[]) {
       original_part_id: item.originalPartId || '',
       stage_id: item.stageId,
       location: item.location,
-      quantity: item.quantity
+      quantity: toBigIntOrDefault(item.quantity, 0)
     }));
     for (let i = 0; i < dbRows.length; i += 150) {
       const chunk = dbRows.slice(i, i + 150);
@@ -226,18 +235,18 @@ async function flushPendingTransactions() {
 async function persistTransactionsToSupabase(transactions: Transaction[]) {
   if (!isSupabaseConfigured || !transactions || transactions.length === 0) return;
   try {
-    const cutoff = Date.now() - 35 * 24 * 60 * 60 * 1000;
-    const recent = transactions.filter(t => t && t.timestamp && t.timestamp >= cutoff);
+    const cutoff = Math.round(Date.now() - 35 * 24 * 60 * 60 * 1000);
+    const recent = transactions.filter(t => t && t.timestamp && Math.round(Number(t.timestamp)) >= cutoff);
     const dbRows = recent.map(t => ({
       id: t.id,
       type: t.type,
       part_id: t.partId,
       part_name: t.partName || null,
       original_part_id: t.originalPartId || null,
-      quantity: t.quantity,
+      quantity: toBigIntOrDefault(t.quantity, 0),
       stage_id: t.stageId,
       location: t.location || null,
-      timestamp: t.timestamp,
+      timestamp: toBigIntOrDefault(t.timestamp, Date.now()),
       qr_data: t.qrData || null,
       source_stage_id: t.sourceStageId || null,
       target_stage_id: t.targetStageId || null,
@@ -282,15 +291,15 @@ async function persistGlazingPlansToSupabase(plans: import('./types').GlazingPla
     const dbRows = plans.map(p => ({
       id: p.id,
       model_id: p.modelId,
-      target_quantity: p.targetQuantity,
-      target_completion_time: p.targetCompletionTime,
-      planned_start_time: p.plannedStartTime || null,
-      expected_completion_time: p.expectedCompletionTime || null,
-      created_at: p.createdAt,
+      target_quantity: toBigIntOrDefault(p.targetQuantity, 0),
+      target_completion_time: toBigIntOrNull(p.targetCompletionTime),
+      planned_start_time: toBigIntOrNull(p.plannedStartTime),
+      expected_completion_time: toBigIntOrNull(p.expectedCompletionTime),
+      created_at: toBigIntOrDefault(p.createdAt, Date.now()),
       status: p.status || 'PENDING',
       produced_quantities: p.producedQuantities || {},
       note: p.note || null,
-      excel_required_date: p.excelRequiredDate || null
+      excel_required_date: toBigIntOrNull(p.excelRequiredDate)
     }));
     for (let i = 0; i < dbRows.length; i += 150) {
       const chunk = dbRows.slice(i, i + 150);
@@ -332,14 +341,14 @@ async function flushPendingLabels() {
 async function persistLabelsToSupabase(labels: Transaction[]) {
   if (!isSupabaseConfigured || !labels || labels.length === 0) return;
   try {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const recent = labels.filter(l => l && l.timestamp && l.timestamp >= cutoff);
+    const cutoff = Math.round(Date.now() - 24 * 60 * 60 * 1000);
+    const recent = labels.filter(l => l && l.timestamp && Math.round(Number(l.timestamp)) >= cutoff);
     const dbRows = recent.map(l => ({
       id: l.id,
       part_id: l.partId || null,
       stage_id: l.stageId || null,
-      quantity: l.quantity || 0,
-      timestamp: l.timestamp,
+      quantity: toBigIntOrDefault(l.quantity, 0),
+      timestamp: toBigIntOrDefault(l.timestamp, Date.now()),
       qr_data: l.qrData || null,
       metadata: l
     }));
@@ -4075,8 +4084,8 @@ export const storageService = {
         .from('production_orders')
         .select('id, master_po_id, part_id, stage_id, target_quantity, produced_quantity, exported_quantity, status, created_at, completed_at, planned_start_time, lead_time, expected_completion_time, note, is_odd_po, excel_required_date');
 
-      if (!poErr && poRows && poRows.length > 0) {
-        const pos: ProductionOrder[] = poRows.map((r: any) => ({
+      if (!poErr && poRows) {
+        const remotePos: ProductionOrder[] = poRows.map((r: any) => ({
           id: r.id,
           masterPoId: r.master_po_id || undefined,
           partId: r.part_id,
@@ -4094,11 +4103,40 @@ export const storageService = {
           isOddPO: Boolean(r.is_odd_po),
           excelRequiredDate: r.excel_required_date ? Number(r.excel_required_date) : undefined
         }));
-        const validPos = this.filterExpiredCompletedPOs(pos);
+
+        const localPos: ProductionOrder[] = cache[STORAGE_KEYS.PRODUCTION_ORDERS] || this.getProductionOrders();
+        const poMap = new Map<string, ProductionOrder>();
+
+        // 1. Put remote POs into map
+        remotePos.forEach(p => poMap.set(p.id, p));
+
+        // 2. Preserve any local POs that are missing on remote or have local updates
+        const unsyncedPos: ProductionOrder[] = [];
+        localPos.forEach(lp => {
+          const rp = poMap.get(lp.id);
+          if (!rp) {
+            poMap.set(lp.id, lp);
+            unsyncedPos.push(lp);
+          } else {
+            // Keep local version if local has higher progress
+            if ((lp.producedQuantity || 0) > (rp.producedQuantity || 0) || (lp.exportedQuantity || 0) > (rp.exportedQuantity || 0)) {
+              poMap.set(lp.id, lp);
+              unsyncedPos.push(lp);
+            }
+          }
+        });
+
+        const mergedPos = Array.from(poMap.values());
+        const validPos = this.filterExpiredCompletedPOs(mergedPos);
         cache[STORAGE_KEYS.PRODUCTION_ORDERS] = validPos;
         try {
           localStorage.setItem(STORAGE_KEYS.PRODUCTION_ORDERS, JSON.stringify(validPos));
         } catch {}
+
+        // Re-persist unsynced local POs to Supabase automatically
+        if (unsyncedPos.length > 0) {
+          persistProductionOrdersToSupabase(validPos);
+        }
       }
 
       // 3. Fetch wip_inventory (selective columns)
