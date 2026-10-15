@@ -981,37 +981,6 @@ export function LoginModal({ onSuccess, onCancel, canCancel = false }: LoginModa
           </button>
         </form>
 
-        {/* Quick test credentials hint */}
-        <div className="mt-6 pt-5 border-t border-gray-100">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
-              Tài khoản trong hệ thống:
-            </span>
-            <span className="text-[10px] text-gray-400 italic">Nhấn để điền & đăng nhập</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {storageService.getUsers().filter(u => u.isActive).map(u => (
-              <button
-                key={u.id}
-                type="button"
-                onClick={() => quickLogin(u.username, u.password || '')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border flex items-center gap-1.5 active:scale-95 cursor-pointer ${
-                  u.role === 'ADMIN'
-                    ? 'bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200'
-                    : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200'
-                }`}
-                title={`Đăng nhập nhanh với tài khoản @${u.username}`}
-              >
-                <span>{u.role === 'ADMIN' ? '👑' : '👤'}</span>
-                <span>{u.fullName || u.username}</span>
-                <span className="opacity-50 font-mono text-[10px]">(@{u.username})</span>
-              </button>
-            ))}
-          </div>
-          <p className="text-[11px] text-gray-400 mt-3 text-center italic">
-            💡 Khi chọn "Ghi nhớ đăng nhập", hệ thống sẽ lưu phiên và tự động đăng nhập khi mở web lần sau.
-          </p>
-        </div>
       </motion.div>
     </div>
   );
