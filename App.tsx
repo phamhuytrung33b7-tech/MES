@@ -1381,12 +1381,53 @@ export default function App() {
               />
             </div>
           )}
+
+          {/* Mobile System Status & Cloud Tools (Hidden on desktop header, shown in mobile drawer) */}
+          <div className="pt-3 mt-3 border-t border-gray-100 space-y-2 md:hidden">
+            <div className="px-2 py-1 text-[10px] font-black uppercase text-gray-400 tracking-wider">
+              Hệ thống & Đồng bộ
+            </div>
+            <button
+              onClick={() => {
+                setShowSupabaseModal(true);
+                setIsSidebarOpen(false);
+              }}
+              className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold rounded-xl border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <Server size={16} className={syncStatus.connected && !syncStatus.error ? "text-emerald-600" : "text-amber-600"} />
+                <span>Supabase Cloud</span>
+              </div>
+              <span className={cn(
+                "px-2 py-0.5 text-[10px] rounded-full font-bold",
+                syncStatus.connected && !syncStatus.error ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+              )}>
+                {syncStatus.connected && !syncStatus.error ? "Online" : "Cấu hình"}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                setCurrentView('settings');
+                setIsSidebarOpen(false);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl border border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100 cursor-pointer"
+            >
+              <Database size={16} className="text-emerald-600" />
+              <span>Sao lưu / Nạp JSON</span>
+            </button>
+
+            <div className="px-3 py-2 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-between text-[11px] font-mono text-gray-600">
+              <span className="opacity-70">Terminal ID:</span>
+              <span className="font-bold text-gray-900">DESKTOP-WS-01</span>
+            </div>
+          </div>
         </nav>
 
         <div className="p-4 border-t border-gray-100">
           <button 
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="w-full flex items-center justify-center p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-400"
+            className="w-full flex items-center justify-center p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-400 cursor-pointer"
           >
             <Menu size={20} />
           </button>
@@ -1400,12 +1441,12 @@ export default function App() {
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
             <button
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className="p-2 -ml-1 hover:bg-gray-100 rounded-xl transition-colors text-gray-700 md:hidden cursor-pointer"
+              className="p-2 -ml-1 hover:bg-gray-100 rounded-xl transition-colors text-gray-700 md:hidden cursor-pointer shrink-0"
               title="Menu Bảng điều khiển"
             >
               <Menu size={22} />
             </button>
-            <h2 className="font-bold text-sm sm:text-2xl uppercase tracking-tight truncate">
+            <h2 className="font-bold text-xs sm:text-lg md:text-xl uppercase tracking-tight truncate max-w-[180px] sm:max-w-none">
               {currentView === 'dashboard' && 'Báo cáo tồn kho WIP'}
               {currentView === 'produce' && 'Xuất kho & In nhãn QR'}
               {currentView === 'inbound' && 'Nhập kho (Quét mã QR)'}
@@ -1420,13 +1461,13 @@ export default function App() {
               {currentView === 'users' && 'Quản trị Người dùng & Phân quyền'}
             </h2>
           </div>
-          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            {/* Supabase Cloud Status Button */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* Supabase Cloud Status Button (Hidden on Mobile, shown in Mobile Drawer) */}
             <button
               onClick={() => setShowSupabaseModal(true)}
               title="Quản lý đồng bộ Supabase Cloud Database"
               className={cn(
-                "flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-bold border transition-all shadow-xs active:scale-95 cursor-pointer",
+                "hidden md:flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-bold border transition-all shadow-xs active:scale-95 cursor-pointer",
                 syncStatus.syncing 
                   ? "bg-blue-50 text-blue-700 border-blue-200" 
                   : syncStatus.connected && !syncStatus.error
@@ -1437,28 +1478,29 @@ export default function App() {
               {syncStatus.syncing ? (
                 <>
                   <RefreshCw size={14} className="animate-spin text-blue-600" />
-                  <span className="hidden sm:inline">Đang đồng bộ...</span>
+                  <span className="hidden lg:inline">Đang đồng bộ...</span>
                 </>
               ) : syncStatus.connected && !syncStatus.error ? (
                 <>
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   <Server size={14} className="text-emerald-600" />
-                  <span className="hidden sm:inline">Supabase Online</span>
+                  <span className="hidden lg:inline">Supabase Online</span>
                 </>
               ) : (
                 <>
                   <CloudOff size={14} className="text-amber-600" />
-                  <span className="hidden sm:inline">Cấu hình Supabase</span>
+                  <span className="hidden lg:inline">Cấu hình Supabase</span>
                 </>
               )}
             </button>
 
+            {/* Backup/Restore JSON Button (Hidden on Mobile) */}
             <button
               onClick={() => {
                 setCurrentView('settings');
               }}
               title="Mở giao diện Sao lưu & Nạp dữ liệu Local Storage"
-              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-[11px] sm:text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
+              className="hidden md:flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-[11px] sm:text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
             >
               <Database size={15} className="text-emerald-600" />
               <span className="hidden lg:inline">Sao lưu / Nạp JSON</span>
@@ -1470,11 +1512,11 @@ export default function App() {
                 <div>
                   <button
                     onClick={() => setShowUserDropdown(!showUserDropdown)}
-                    className="flex items-center gap-2.5 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl transition-all shadow-xs cursor-pointer active:scale-95"
+                    className="flex items-center gap-1.5 sm:gap-2.5 px-2.5 sm:px-3 py-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl transition-all shadow-xs cursor-pointer active:scale-95"
                     title={`Đang đăng nhập: @${currentUser.username}`}
                   >
                     <div className={cn(
-                      "w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs uppercase shadow-xs",
+                      "w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs uppercase shadow-xs shrink-0",
                       currentUser.role === 'ADMIN' ? "bg-orange-500 text-white" : "bg-blue-600 text-white"
                     )}>
                       {currentUser.fullName ? currentUser.fullName.substring(0, 2) : currentUser.username.substring(0, 2)}
@@ -1524,6 +1566,26 @@ export default function App() {
                             )}
                             <button
                               onClick={() => {
+                                setShowSupabaseModal(true);
+                                setShowUserDropdown(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors text-left cursor-pointer md:hidden"
+                            >
+                              <Server size={15} />
+                              <span>Cấu hình Supabase Cloud</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                setCurrentView('settings');
+                                setShowUserDropdown(false);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-gray-700 hover:bg-emerald-50 hover:text-emerald-600 transition-colors text-left cursor-pointer md:hidden"
+                            >
+                              <Database size={15} />
+                              <span>Sao lưu / Nạp JSON</span>
+                            </button>
+                            <button
+                              onClick={() => {
                                 setShowChangePasswordModal(true);
                                 setShowUserDropdown(false);
                               }}
@@ -1561,7 +1623,7 @@ export default function App() {
               ) : (
                 <button
                   onClick={() => setShowLoginModal(true)}
-                  className="flex items-center gap-2 px-3.5 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-xs font-black shadow-md shadow-orange-500/20 active:scale-95 cursor-pointer"
+                  className="flex items-center gap-2 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-xs font-black shadow-md shadow-orange-500/20 active:scale-95 cursor-pointer"
                 >
                   <Lock size={14} />
                   <span>Đăng nhập</span>
@@ -1569,13 +1631,13 @@ export default function App() {
               )}
             </div>
 
-            <div className="h-6 w-px bg-gray-200" />
-            <div className="flex flex-col items-end">
+            <div className="h-6 w-px bg-gray-200 hidden md:block" />
+            <div className="hidden md:flex flex-col items-end">
               <span className="text-xs font-mono opacity-50 uppercase">Terminal ID</span>
               <span className="text-sm font-mono font-bold">DESKTOP-WS-01</span>
             </div>
-            <div className="h-6 w-px bg-gray-200" />
-            <div className="flex items-center gap-2.5">
+            <div className="h-6 w-px bg-gray-200 hidden md:block" />
+            <div className="hidden md:flex items-center gap-2.5">
               <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
               <span className="text-xs font-mono opacity-70 uppercase tracking-widest">Sẵn sàng</span>
             </div>
@@ -1583,7 +1645,7 @@ export default function App() {
         </header>
 
         {/* Scrollable Content */}
-        <main className="flex-1 overflow-y-auto p-8 bg-[#F8F9FA]">
+        <main className="flex-1 overflow-y-auto p-2.5 sm:p-6 md:p-8 bg-[#F8F9FA]">
           <div className="w-full max-w-[1600px] mx-auto">
             <AnimatePresence initial={false}>
               {currentView === 'dashboard' && (
