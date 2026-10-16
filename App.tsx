@@ -54,7 +54,8 @@ import {
   Lock,
   LogOut,
   ShieldCheck,
-  UserCheck
+  UserCheck,
+  Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -83,8 +84,10 @@ import { exportPreparationReport } from './exportPreparationReport';
 import { exportDetailedProductionPlan } from './exportDetailedPlan';
 import { importExcelToPO, downloadSamplePOExcelTemplate, MissingBomModelInfo } from './importExcelToPO';
 import { downloadNormTemplate } from './downloadNormTemplate';
+import { MobileQRScannerModal } from './components/MobileQRScanner';
 import { importExcelToGlazingPlan, MissingNormModelInfo } from './importExcelToGlazingPlan';
 import { UserManagementView, LoginModal, ChangePasswordModal } from './UserManagement';
+import { smartFuzzySearch, normalizeVietnamese, buildSearchIndex, searchIndexedItems } from './utils/search';
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -225,7 +228,7 @@ function SearchableSelect({
   options, 
   value, 
   onChange, 
-  placeholder = "Tìm kiếm...", 
+  placeholder = "Gõ từ khóa tìm linh kiện / PO...", 
   className = "" 
 }: { 
   options: { id: string, label: string }[], 
@@ -236,19 +239,42 @@ function SearchableSelect({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
+  // 1. Debounce mechanism (200ms delay) to prevent UI lag during typing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // 2. Pre-index options in RAM memory ONCE when options change (0ms string allocation per keystroke)
+  const preindexedOptions = useMemo(() => {
+    const searchableItems = options.map(opt => ({
+      id: opt.id,
+      label: opt.label,
+      code: opt.id
+    }));
+    return buildSearchIndex(searchableItems, ['id', 'label', 'code']);
+  }, [options]);
+
+  // 3. Fast search lookup over pre-indexed RAM cache
   const filteredOptions = useMemo(() => {
-    if (!search.trim()) return options;
-    const s = search.toLowerCase();
-    return options.filter(opt => 
-      opt.label.toLowerCase().includes(s) || 
-      opt.id.toLowerCase().includes(s)
-    );
-  }, [options, search]);
+    if (!debouncedSearch.trim()) return options;
+    const matchedItems = searchIndexedItems(debouncedSearch, preindexedOptions);
+    return matchedItems.map(item => ({ id: item.id, label: item.label }));
+  }, [options, preindexedOptions, debouncedSearch]);
 
   const selectedOption = useMemo(() => options.find(opt => opt.id === value), [options, value]);
-  const displayedOptions = useMemo(() => filteredOptions.slice(0, 100), [filteredOptions]);
+  const displayedOptions = useMemo(() => filteredOptions.slice(0, 80), [filteredOptions]);
+
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [search]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -260,64 +286,144 @@ function SearchableSelect({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  const handleSelect = (optId: string) => {
+    onChange(optId);
+    setIsOpen(false);
+    setSearch("");
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') {
+        setIsOpen(true);
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedIndex(prev => (prev + 1) % Math.max(1, displayedOptions.length));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedIndex(prev => (prev - 1 + displayedOptions.length) % Math.max(1, displayedOptions.length));
+    } else if (e.key === 'Enter') {
+      if (displayedOptions.length > 0) {
+        e.preventDefault();
+        handleSelect(displayedOptions[highlightedIndex]?.id || displayedOptions[0].id);
+      }
+    } else if (e.key === 'Escape') {
+      setIsOpen(false);
+    }
+  };
+
   return (
-    <div className={cn("relative", className)} ref={containerRef}>
+    <div className={cn("relative text-left", className)} ref={containerRef}>
       <div 
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full p-5 rounded-xl border-2 border-gray-100 font-bold text-lg focus:border-blue-600 outline-none bg-white cursor-pointer flex justify-between items-center"
+        onClick={() => {
+          setIsOpen(!isOpen);
+          if (!isOpen) {
+            setTimeout(() => inputRef.current?.focus(), 60);
+          }
+        }}
+        className="w-full p-3.5 sm:p-5 rounded-xl sm:rounded-2xl border-2 border-gray-200 hover:border-blue-500 font-bold text-sm sm:text-lg focus:border-blue-600 outline-none bg-white cursor-pointer flex justify-between items-center transition-all shadow-xs active:scale-[0.99]"
       >
-        <span className={selectedOption ? "text-gray-900" : "text-gray-400"}>
-          {selectedOption ? selectedOption.label : placeholder}
-        </span>
-        <ChevronDown size={20} className={cn("transition-transform", isOpen && "rotate-180")} />
+        <div className="flex items-center gap-2.5 truncate min-w-0 pr-2">
+          <Search size={18} className="text-blue-600 shrink-0" />
+          <span className={selectedOption ? "text-gray-900 truncate" : "text-gray-400 font-normal truncate"}>
+            {selectedOption ? selectedOption.label : placeholder}
+          </span>
+        </div>
+        <ChevronDown size={20} className={cn("text-gray-400 transition-transform shrink-0", isOpen && "rotate-180")} />
       </div>
 
       <AnimatePresence>
         {isOpen && (
           <motion.div 
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="absolute z-[100] w-full mt-2 bg-white border-2 border-gray-100 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[400px]"
+            initial={{ opacity: 0, y: -10, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.98 }}
+            transition={{ duration: 0.15 }}
+            className="absolute z-[120] left-0 right-0 mt-2 bg-white border-2 border-blue-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[380px] sm:max-h-[420px]"
           >
-            <div className="p-3 border-b border-gray-100 bg-gray-50">
-              <div className="relative">
-                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            {/* Search Input Header */}
+            <div className="p-3 border-b border-gray-100 bg-gray-50/90 backdrop-blur-xs sticky top-0 z-10">
+              <div className="relative flex items-center">
+                <Search size={18} className="absolute left-3.5 text-blue-600 shrink-0" />
                 <input 
+                  ref={inputRef}
                   autoFocus
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Gõ để tìm kiếm..."
-                  className="w-full pl-10 pr-4 py-3 rounded-lg border border-gray-200 text-base outline-none focus:border-blue-600"
+                  onKeyDown={handleKeyDown}
+                  placeholder="Gõ từ khóa không dấu (VD: 'sha 766', 'tan tu', '001')..."
+                  className="w-full pl-10 pr-9 py-3 rounded-xl border-2 border-blue-400 bg-white text-sm sm:text-base font-bold outline-none focus:ring-4 ring-blue-500/20 shadow-xs placeholder:text-gray-400 placeholder:font-normal"
                 />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch('')}
+                    className="absolute right-2.5 p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 cursor-pointer"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
+              <div className="flex justify-between items-center mt-2 px-1 text-[11px] font-bold text-gray-500">
+                <span>Gợi ý ({filteredOptions.length} kết quả)</span>
+                <span className="text-blue-600 font-mono text-[10px]">Tự động sắp xếp theo độ khớp</span>
               </div>
             </div>
-            <div className="overflow-y-auto flex-1">
+
+            {/* Suggestions List */}
+            <div className="overflow-y-auto flex-1 divide-y divide-gray-100">
               {displayedOptions.length > 0 ? (
-                displayedOptions.map(opt => (
-                  <div 
-                    key={opt.id}
-                    onClick={() => {
-                      onChange(opt.id);
-                      setIsOpen(false);
-                      setSearch("");
-                    }}
-                    className={cn(
-                      "p-4 hover:bg-blue-50 cursor-pointer transition-colors border-b border-gray-50 last:border-0",
-                      value === opt.id && "bg-blue-50 text-blue-700 font-bold"
-                    )}
-                  >
-                    <div className="text-base">{opt.label}</div>
-                    <div className="text-xs font-mono opacity-70">{opt.id}</div>
-                  </div>
-                ))
+                displayedOptions.map((opt, idx) => {
+                  const isSelected = value === opt.id;
+                  const isHighlighted = idx === highlightedIndex;
+
+                  return (
+                    <div 
+                      key={opt.id + '_' + idx}
+                      onClick={() => handleSelect(opt.id)}
+                      onMouseEnter={() => setHighlightedIndex(idx)}
+                      className={cn(
+                        "p-3.5 px-4 cursor-pointer transition-colors flex items-center justify-between gap-3 text-left",
+                        isSelected
+                          ? "bg-blue-50 text-blue-900 font-bold"
+                          : isHighlighted
+                            ? "bg-gray-100 text-gray-900 font-semibold"
+                            : "hover:bg-gray-50 text-gray-800"
+                      )}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs sm:text-sm font-bold text-gray-900 leading-snug">
+                          {opt.label}
+                        </div>
+                        {opt.id !== opt.label && (
+                          <div className="text-[11px] font-mono text-gray-500 mt-0.5">
+                            Mã: <span className="font-bold text-blue-700">{opt.id}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {isSelected && (
+                        <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0">
+                          <Check size={12} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               ) : (
-                <div className="p-8 text-center text-gray-700 italic">Không tìm thấy kết quả</div>
+                <div className="p-8 text-center text-gray-400 text-xs sm:text-sm font-medium flex flex-col items-center justify-center gap-2">
+                  <AlertCircle size={24} className="text-gray-300" />
+                  <span>Không tìm thấy kết quả phù hợp với từ khóa "{search}"</span>
+                </div>
               )}
-              {filteredOptions.length > 100 && (
-                <div className="p-2 text-center text-xs text-gray-400 italic bg-gray-50 border-t border-gray-100">
-                  Hiển thị 100 / {filteredOptions.length} kết quả đầu tiên. Gõ để tìm kiếm chính xác hơn.
+              {filteredOptions.length > 80 && (
+                <div className="p-2.5 text-center text-[11px] text-gray-500 italic bg-gray-50 border-t border-gray-100 font-medium">
+                  Hiển thị 80 / {filteredOptions.length} kết quả khớp nhất. Gõ thêm ký tự để thu hẹp tìm kiếm.
                 </div>
               )}
             </div>
@@ -1082,16 +1188,29 @@ export default function App() {
         )}
       </div>
 
+      {/* Mobile Sidebar Overlay Backdrop */}
+      {isSidebarOpen && (
+        <div 
+          onClick={() => setIsSidebarOpen(false)} 
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs z-40 md:hidden animate-in fade-in duration-200" 
+        />
+      )}
+
       {/* Sidebar */}
       <aside className={cn(
-        "bg-white border-r border-gray-200 transition-all duration-300 flex flex-col z-50",
-        isSidebarOpen ? "w-64" : "w-20"
+        "bg-white border-r border-gray-200 transition-all duration-300 flex flex-col z-50 fixed inset-y-0 left-0 md:static md:z-auto shadow-2xl md:shadow-none",
+        isSidebarOpen 
+          ? "w-64 translate-x-0" 
+          : "-translate-x-full md:translate-x-0 md:w-20"
       )}>
         <nav className="flex-1 pt-2 px-3 space-y-1 overflow-y-auto">
           {canAccessView('dashboard') && (
             <SidebarLink 
               active={currentView === 'dashboard'} 
-              onClick={() => setCurrentView('dashboard')}
+              onClick={() => {
+                setCurrentView('dashboard');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<LayoutDashboard size={24} />}
               label="Tổng quan (Dashboard)"
               collapsed={!isSidebarOpen}
@@ -1100,7 +1219,10 @@ export default function App() {
           {canAccessView('produce') && (
             <SidebarLink 
               active={currentView === 'produce'} 
-              onClick={() => setCurrentView('produce')}
+              onClick={() => {
+                setCurrentView('produce');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<PackagePlus size={24} />}
               label="Xuất kho (Finish)"
               collapsed={!isSidebarOpen}
@@ -1109,7 +1231,10 @@ export default function App() {
           {canAccessView('inbound') && (
             <SidebarLink 
               active={currentView === 'inbound'} 
-              onClick={() => setCurrentView('inbound')}
+              onClick={() => {
+                setCurrentView('inbound');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<QrCode size={24} />}
               label="Nhập kho (Quét mã)"
               collapsed={!isSidebarOpen}
@@ -1118,7 +1243,10 @@ export default function App() {
           {canAccessView('laser_inbound') && (
             <SidebarLink 
               active={currentView === 'laser_inbound'} 
-              onClick={() => setCurrentView('laser_inbound')}
+              onClick={() => {
+                setCurrentView('laser_inbound');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<Layers size={24} />}
               label="Nhập kho Laser"
               collapsed={!isSidebarOpen}
@@ -1127,7 +1255,10 @@ export default function App() {
           {canAccessView('welding_inbound') && (
             <SidebarLink 
               active={currentView === 'welding_inbound'} 
-              onClick={() => setCurrentView('welding_inbound')}
+              onClick={() => {
+                setCurrentView('welding_inbound');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<Flame size={24} />}
               label="Nhập kho Hàn"
               collapsed={!isSidebarOpen}
@@ -1136,7 +1267,10 @@ export default function App() {
           {canAccessView('glazing') && (
             <SidebarLink 
               active={currentView === 'glazing'} 
-              onClick={() => setCurrentView('glazing')}
+              onClick={() => {
+                setCurrentView('glazing');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<Square size={24} />}
               label="Công đoạn Dán Kính"
               collapsed={!isSidebarOpen}
@@ -1145,7 +1279,10 @@ export default function App() {
           {canAccessView('labels') && (
             <SidebarLink 
               active={currentView === 'labels'} 
-              onClick={() => setCurrentView('labels')}
+              onClick={() => {
+                setCurrentView('labels');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<QrCode size={24} />}
               label="Danh sách nhãn QR"
               collapsed={!isSidebarOpen}
@@ -1154,7 +1291,10 @@ export default function App() {
           {canAccessView('po') && (
             <SidebarLink 
               active={currentView === 'po'} 
-              onClick={() => setCurrentView('po')}
+              onClick={() => {
+                setCurrentView('po');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<ClipboardList size={24} />}
               label="Lệnh sản xuất (PO)"
               collapsed={!isSidebarOpen}
@@ -1163,7 +1303,10 @@ export default function App() {
           {canAccessView('defects') && (
             <SidebarLink 
               active={currentView === 'defects'} 
-              onClick={() => setCurrentView('defects')}
+              onClick={() => {
+                setCurrentView('defects');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<AlertCircle size={24} className="text-red-500" />}
               label="Báo cáo lỗi (Defect)"
               collapsed={!isSidebarOpen}
@@ -1172,7 +1315,10 @@ export default function App() {
           {canAccessView('working_hours') && (
             <SidebarLink 
               active={currentView === 'working_hours'} 
-              onClick={() => setCurrentView('working_hours')}
+              onClick={() => {
+                setCurrentView('working_hours');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<Clock size={24} />}
               label="Thời gian Ca & Nghỉ"
               collapsed={!isSidebarOpen}
@@ -1181,7 +1327,10 @@ export default function App() {
           {canAccessView('norms') && (
             <SidebarLink 
               active={currentView === 'norms'} 
-              onClick={() => setCurrentView('norms')}
+              onClick={() => {
+                setCurrentView('norms');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<Monitor size={24} />}
               label="Định mức Năng suất"
               collapsed={!isSidebarOpen}
@@ -1190,7 +1339,10 @@ export default function App() {
           {canAccessView('odd_po') && (
             <SidebarLink 
               active={currentView === 'odd_po'} 
-              onClick={() => setCurrentView('odd_po')}
+              onClick={() => {
+                setCurrentView('odd_po');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<Layers size={24} />}
               label="PO dư lẻ"
               collapsed={!isSidebarOpen}
@@ -1204,7 +1356,10 @@ export default function App() {
           {canAccessView('settings') && (
             <SidebarLink 
               active={currentView === 'settings'} 
-              onClick={() => setCurrentView('settings')}
+              onClick={() => {
+                setCurrentView('settings');
+                if (window.innerWidth < 768) setIsSidebarOpen(false);
+              }}
               icon={<Settings size={24} />}
               label="Cài đặt & Sao lưu dữ liệu"
               collapsed={!isSidebarOpen}
@@ -1216,7 +1371,10 @@ export default function App() {
             <div className="pt-2 mt-2 border-t border-gray-100">
               <SidebarLink 
                 active={currentView === 'users'} 
-                onClick={() => setCurrentView('users')}
+                onClick={() => {
+                  setCurrentView('users');
+                  if (window.innerWidth < 768) setIsSidebarOpen(false);
+                }}
                 icon={<Users size={24} className="text-orange-500" />}
                 label="Quản lý Tài khoản"
                 collapsed={!isSidebarOpen}
@@ -1236,11 +1394,18 @@ export default function App() {
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Top Header */}
-        <header className="bg-white border-b border-gray-200 py-3 px-6 flex justify-between items-center shadow-sm z-40">
-          <div className="flex items-center gap-4">
-            <h2 className="font-bold text-2xl uppercase tracking-tight">
+        <header className="bg-white border-b border-gray-200 py-2.5 px-3 sm:px-6 flex justify-between items-center shadow-xs z-40 gap-2">
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="p-2 -ml-1 hover:bg-gray-100 rounded-xl transition-colors text-gray-700 md:hidden cursor-pointer"
+              title="Menu Bảng điều khiển"
+            >
+              <Menu size={22} />
+            </button>
+            <h2 className="font-bold text-sm sm:text-2xl uppercase tracking-tight truncate">
               {currentView === 'dashboard' && 'Báo cáo tồn kho WIP'}
               {currentView === 'produce' && 'Xuất kho & In nhãn QR'}
               {currentView === 'inbound' && 'Nhập kho (Quét mã QR)'}
@@ -1255,13 +1420,13 @@ export default function App() {
               {currentView === 'users' && 'Quản trị Người dùng & Phân quyền'}
             </h2>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
             {/* Supabase Cloud Status Button */}
             <button
               onClick={() => setShowSupabaseModal(true)}
               title="Quản lý đồng bộ Supabase Cloud Database"
               className={cn(
-                "flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold border transition-all shadow-sm active:scale-95 cursor-pointer",
+                "flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-bold border transition-all shadow-xs active:scale-95 cursor-pointer",
                 syncStatus.syncing 
                   ? "bg-blue-50 text-blue-700 border-blue-200" 
                   : syncStatus.connected && !syncStatus.error
@@ -1272,18 +1437,18 @@ export default function App() {
               {syncStatus.syncing ? (
                 <>
                   <RefreshCw size={14} className="animate-spin text-blue-600" />
-                  <span>Đang đồng bộ...</span>
+                  <span className="hidden sm:inline">Đang đồng bộ...</span>
                 </>
               ) : syncStatus.connected && !syncStatus.error ? (
                 <>
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   <Server size={14} className="text-emerald-600" />
-                  <span>Supabase Online</span>
+                  <span className="hidden sm:inline">Supabase Online</span>
                 </>
               ) : (
                 <>
                   <CloudOff size={14} className="text-amber-600" />
-                  <span>Cấu hình Supabase</span>
+                  <span className="hidden sm:inline">Cấu hình Supabase</span>
                 </>
               )}
             </button>
@@ -1293,10 +1458,10 @@ export default function App() {
                 setCurrentView('settings');
               }}
               title="Mở giao diện Sao lưu & Nạp dữ liệu Local Storage"
-              className="flex items-center gap-2 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95"
+              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-[11px] sm:text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer"
             >
               <Database size={15} className="text-emerald-600" />
-              <span>Sao lưu / Nạp JSON</span>
+              <span className="hidden lg:inline">Sao lưu / Nạp JSON</span>
             </button>
 
             {/* User Account / Profile Dropdown */}
@@ -10429,6 +10594,7 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
   const [targetLocation, setTargetLocation] = useState<'IN' | 'OUT'>('IN');
   const [scanInput, setScanInput] = useState('');
   const [lastScanned, setLastScanned] = useState<any>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -10439,44 +10605,48 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
     e.preventDefault();
     if (scanInput.trim()) {
       const input = scanInput.trim();
-      const qrParts = input.split('|');
-      
-      try {
-        onScanSuccess(input, targetLocation);
-        
-        if (qrParts.length >= 5) {
-          const pId = qrParts[0];
-          const sId = qrParts[2];
-          setLastScanned({
-            partId: pId,
-            quantity: qrParts[1],
-            sourceStageId: sId,
-            partName: parts.find((p: any) => p.id === pId)?.name || pId,
-            sourceName: STAGES.find(s => s.id === sId)?.name || sId,
-            status: 'success'
-          });
-        }
-      } catch (err) {
-        if (qrParts.length >= 5) {
-          const pId = qrParts[0];
-          const sId = qrParts[2];
-          setLastScanned({
-            partId: pId,
-            quantity: qrParts[1],
-            sourceStageId: sId,
-            partName: parts.find((p: any) => p.id === pId)?.name || pId,
-            sourceName: STAGES.find(s => s.id === sId)?.name || sId,
-            status: 'error',
-            errorMsg: err instanceof Error ? err.message : 'Lỗi không xác định'
-          });
-        } else {
-          setLastScanned({
-            status: 'error',
-            errorMsg: 'Định dạng mã QR không hợp lệ'
-          });
-        }
-      }
+      processQrCodeInput(input);
       setScanInput('');
+    }
+  };
+
+  const processQrCodeInput = (input: string) => {
+    const qrParts = input.split('|');
+    
+    try {
+      onScanSuccess(input, targetLocation);
+      
+      if (qrParts.length >= 5) {
+        const pId = qrParts[0];
+        const sId = qrParts[2];
+        setLastScanned({
+          partId: pId,
+          quantity: qrParts[1],
+          sourceStageId: sId,
+          partName: parts.find((p: any) => p.id === pId)?.name || pId,
+          sourceName: STAGES.find(s => s.id === sId)?.name || sId,
+          status: 'success'
+        });
+      }
+    } catch (err) {
+      if (qrParts.length >= 5) {
+        const pId = qrParts[0];
+        const sId = qrParts[2];
+        setLastScanned({
+          partId: pId,
+          quantity: qrParts[1],
+          sourceStageId: sId,
+          partName: parts.find((p: any) => p.id === pId)?.name || pId,
+          sourceName: STAGES.find(s => s.id === sId)?.name || sId,
+          status: 'error',
+          errorMsg: err instanceof Error ? err.message : 'Lỗi không xác định'
+        });
+      } else {
+        setLastScanned({
+          status: 'error',
+          errorMsg: 'Định dạng mã QR không hợp lệ'
+        });
+      }
     }
   };
 
@@ -10485,55 +10655,65 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="grid grid-cols-1 lg:grid-cols-2 gap-8"
+      className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8"
     >
-      <div className="bg-white p-10 rounded-3xl border border-gray-200 shadow-xl space-y-8">
-        <div className="flex items-center gap-4 mb-2">
-          <div className="bg-blue-600 p-3 rounded-xl text-white">
-            <QrCode size={24} />
+      <div className="bg-white p-4 sm:p-10 rounded-2xl sm:rounded-3xl border border-gray-200 shadow-xl space-y-6 sm:space-y-8">
+        <div className="flex items-center gap-3 sm:gap-4 mb-2">
+          <div className="bg-blue-600 p-2.5 sm:p-3 rounded-xl text-white">
+            <QrCode size={22} />
           </div>
           <div>
-            <h3 className="text-xl font-bold uppercase tracking-tight">Nhập kho bằng mã QR</h3>
-            <p className="text-sm text-gray-500">Sử dụng súng quét để nhập linh kiện vào kho</p>
+            <h3 className="text-base sm:text-xl font-bold uppercase tracking-tight">Nhập kho bằng mã QR</h3>
+            <p className="text-xs sm:text-sm text-gray-500">Dùng súng quét hoặc Camera điện thoại để nhập kho</p>
           </div>
         </div>
 
-        <div className="space-y-8">
-          <div className="grid grid-cols-2 gap-8">
-            <div className="space-y-4 text-left">
-              <label className="text-sm font-bold uppercase tracking-widest opacity-50">Công đoạn tiếp nhận:</label>
+        {/* Camera QR Scanner Trigger Button for Mobile */}
+        <button
+          type="button"
+          onClick={() => setIsCameraOpen(true)}
+          className="w-full py-3.5 sm:py-4 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-2xl font-bold text-sm sm:text-base uppercase tracking-wider transition-all flex items-center justify-center gap-2.5 shadow-lg active:scale-95 cursor-pointer"
+        >
+          <Camera size={22} />
+          <span>Quét mã bằng Camera điện thoại</span>
+        </button>
+
+        <div className="space-y-6 sm:space-y-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
+            <div className="space-y-2 sm:space-y-4 text-left">
+              <label className="text-xs sm:text-sm font-bold uppercase tracking-widest opacity-50">Công đoạn tiếp nhận:</label>
               <select 
                 value={selectedStage}
                 onChange={(e) => setSelectedStage(e.target.value as StageId)}
-                className="w-full p-5 rounded-xl border-2 border-gray-100 font-bold text-lg focus:border-blue-600 outline-none bg-white cursor-pointer"
+                className="w-full p-3.5 sm:p-5 rounded-xl border-2 border-gray-100 font-bold text-sm sm:text-lg focus:border-blue-600 outline-none bg-white cursor-pointer"
               >
                 {STAGES.filter(s => s.id !== 'LASER').map(stage => (
                   <option key={stage.id} value={stage.id}>{stage.name}</option>
                 ))}
               </select>
             </div>
-            <div className="space-y-4 text-left">
-              <label className="text-sm font-bold uppercase tracking-widest opacity-50">Vị trí nhập:</label>
-              <div className="flex bg-gray-100 p-1 rounded-xl h-[68px]">
-                <div className="flex-1 rounded-lg font-bold text-sm uppercase bg-gray-900 text-white shadow-sm flex items-center justify-center">
+            <div className="space-y-2 sm:space-y-4 text-left">
+              <label className="text-xs sm:text-sm font-bold uppercase tracking-widest opacity-50">Vị trí nhập:</label>
+              <div className="flex bg-gray-100 p-1 rounded-xl h-[52px] sm:h-[68px]">
+                <div className="flex-1 rounded-lg font-bold text-xs sm:text-sm uppercase bg-gray-900 text-white shadow-xs flex items-center justify-center">
                   Kho IN
                 </div>
               </div>
             </div>
           </div>
 
-          <form onSubmit={handleScanSubmit} className="space-y-8">
+          <form onSubmit={handleScanSubmit} className="space-y-6 sm:space-y-8">
             <div className="relative">
               <input 
                 ref={inputRef}
                 type="text"
                 value={scanInput}
                 onChange={(e) => setScanInput(e.target.value)}
-                placeholder="Nhập mã hoặc dùng súng quét..."
-                className="w-full p-10 rounded-3xl border-4 border-gray-900 bg-gray-50 text-center font-mono text-3xl font-bold focus:ring-8 ring-black/5 outline-none placeholder:text-gray-300"
+                placeholder="Nhập mã hoặc quét QR..."
+                className="w-full p-4 sm:p-10 rounded-2xl sm:rounded-3xl border-2 sm:border-4 border-gray-900 bg-gray-50 text-center font-mono text-base sm:text-3xl font-bold focus:ring-4 sm:ring-8 ring-black/5 outline-none placeholder:text-gray-300"
                 autoComplete="off"
               />
-              <div className="absolute right-8 top-1/2 -translate-y-1/2 flex items-center gap-3 text-xs font-mono font-bold text-blue-600 bg-blue-50 px-4 py-2 rounded-full border border-blue-100">
+              <div className="hidden sm:flex absolute right-8 top-1/2 -translate-y-1/2 items-center gap-3 text-xs font-mono font-bold text-blue-600 bg-blue-50 px-4 py-2 rounded-full border border-blue-100">
                 <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
                 READY
               </div>
@@ -10541,24 +10721,35 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
             <div className="flex gap-4">
               <button 
                 type="submit"
-                className="flex-1 h-20 bg-gray-900 text-white rounded-3xl font-bold uppercase tracking-widest hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl"
+                className="flex-1 h-14 sm:h-20 bg-gray-900 text-white rounded-2xl sm:rounded-3xl font-bold text-sm sm:text-base uppercase tracking-widest hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl active:scale-95 cursor-pointer"
               >
-                <CheckCircle2 size={24} />
+                <CheckCircle2 size={22} />
                 Xác nhận
               </button>
             </div>
           </form>
         </div>
 
-        <div className="p-8 bg-blue-50 border border-blue-100 rounded-3xl text-left space-y-3">
-          <div className="flex items-center gap-3 text-blue-600">
-            <AlertCircle size={22} />
-            <span className="font-bold text-sm uppercase">Hướng dẫn</span>
+        <div className="p-4 sm:p-8 bg-blue-50 border border-blue-100 rounded-2xl sm:rounded-3xl text-left space-y-2 sm:space-y-3">
+          <div className="flex items-center gap-2 sm:gap-3 text-blue-600">
+            <AlertCircle size={20} />
+            <span className="font-bold text-xs sm:text-sm uppercase">Hướng dẫn</span>
           </div>
-          <p className="text-sm text-blue-800 leading-relaxed">
-            Súng quét sẽ tự động gửi mã và phím "Enter". Nếu súng không tự gửi, hãy nhấn Enter trên bàn phím.
+          <p className="text-xs sm:text-sm text-blue-800 leading-relaxed">
+            Bạn có thể bấm nút <b>"Quét bằng Camera"</b> để quét trực tiếp từ điện thoại di động hoặc dùng súng quét mã barcode.
           </p>
         </div>
+
+        {/* Mobile Camera Modal */}
+        <MobileQRScannerModal
+          isOpen={isCameraOpen}
+          onClose={() => setIsCameraOpen(false)}
+          onScan={(qr) => {
+            processQrCodeInput(qr);
+            setIsCameraOpen(false);
+          }}
+          title="Quét mã QR Nhập kho"
+        />
       </div>
 
       <div className="flex flex-col">
