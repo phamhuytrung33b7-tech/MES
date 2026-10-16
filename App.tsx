@@ -84,10 +84,10 @@ import { exportPreparationReport } from './exportPreparationReport';
 import { exportDetailedProductionPlan } from './exportDetailedPlan';
 import { importExcelToPO, downloadSamplePOExcelTemplate, MissingBomModelInfo } from './importExcelToPO';
 import { downloadNormTemplate } from './downloadNormTemplate';
-import { MobileQRScannerModal } from './components/MobileQRScanner';
+import { MobileQRScannerModal } from './MobileQRScanner';
 import { importExcelToGlazingPlan, MissingNormModelInfo } from './importExcelToGlazingPlan';
 import { UserManagementView, LoginModal, ChangePasswordModal } from './UserManagement';
-import { smartFuzzySearch, normalizeVietnamese, buildSearchIndex, searchIndexedItems } from './utils/search';
+import { smartFuzzySearch, normalizeVietnamese, buildSearchIndex, searchIndexedItems } from './search';
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
