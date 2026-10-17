@@ -4980,6 +4980,33 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   const [showExportPreparationModal, setShowExportPreparationModal] = useState(false);
   const [showExportHourlyModal, setShowExportHourlyModal] = useState(false);
   const [activeChartTab, setActiveChartTab] = useState<'MECHANICAL' | 'STAGES'>('MECHANICAL');
+  const [isChartReady, setIsChartReady] = useState(false);
+  const chartWrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const checkDimensions = () => {
+      if (chartWrapperRef.current) {
+        const { clientWidth, clientHeight } = chartWrapperRef.current;
+        if (clientWidth > 0 && clientHeight > 0) {
+          if (active) setIsChartReady(true);
+          return;
+        }
+      }
+      if (active) {
+        requestAnimationFrame(() => {
+          if (active) setIsChartReady(true);
+        });
+      }
+    };
+
+    // Ensure DOM paint and framer-motion transition have stabilized container dimensions
+    const timer = setTimeout(checkDimensions, 100);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [activeChartTab]);
 
   const getPastDateStr = (days: number) => {
     const d = new Date();
@@ -6105,9 +6132,14 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
             <span>↔ Vuốt ngang xem đủ 12 khung giờ</span>
           </div>
           <div className="w-full overflow-x-auto no-scrollbar rounded-xl">
-            <div className="h-[380px] sm:h-[480px] md:h-[520px] min-w-[580px] sm:min-w-full relative" style={{ minHeight: '380px', width: '100%' }}>
-              <ResponsiveContainer width="100%" height="100%" minWidth={300} debounce={50}>
-                <ComposedChart data={productionChartData} margin={{ top: 25, right: 25, left: -15, bottom: 15 }}>
+            <div 
+              ref={chartWrapperRef}
+              className="h-[380px] sm:h-[480px] md:h-[520px] min-h-[380px] min-w-[580px] sm:min-w-full relative" 
+              style={{ minHeight: '380px', height: '480px', width: '100%' }}
+            >
+              {isChartReady ? (
+                <ResponsiveContainer width="100%" height={450} minHeight={350} minWidth={300} debounce={50}>
+                  <ComposedChart data={productionChartData} margin={{ top: 25, right: 25, left: -15, bottom: 15 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
               <XAxis 
                 dataKey="name" 
@@ -6349,6 +6381,14 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
               )}
             </ComposedChart>
           </ResponsiveContainer>
+        ) : (
+          <div className="w-full h-[450px] min-h-[350px] flex items-center justify-center bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+            <div className="flex flex-col items-center gap-2 text-gray-400 font-bold text-xs">
+              <span className="w-4 h-4 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
+              <span>Đang khởi tạo biểu đồ...</span>
+            </div>
+          </div>
+        )}
         </div>
       </div>
     </div>
