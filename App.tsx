@@ -962,11 +962,9 @@ export default function App() {
     let isMounted = true;
     (async () => {
       try {
-        await storageService.init();
+        await storageService.init(true);
         if (isMounted) refreshData();
-      } catch (err) {
-        console.warn('Initial Supabase fetch error:', err);
-      }
+      } catch {}
       try {
         await storageService.autoCleanupOldData();
         if (isMounted) refreshData();
@@ -983,14 +981,8 @@ export default function App() {
     };
   }, []);
 
-  const refreshData = useCallback(async () => {
-    if (isSupabaseConfigured) {
-      try {
-        await storageService.init();
-      } catch (err) {
-        console.warn('[Sync] Auto-refresh error:', err);
-      }
-    }
+  // Instant local state update (0ms lag, 0 Supabase network queries)
+  const refreshData = useCallback(() => {
     setInventory(storageService.getInventory());
     setTransactions(storageService.getTransactions());
     setLabels(storageService.getLabels());
@@ -1000,7 +992,16 @@ export default function App() {
     setSelectedPart(prev => (!prev && currentParts.length > 0 ? currentParts[0].id : prev));
   }, []);
 
-  // Polling & Visibility Change Auto-Refresh Effect (Every 30s, paused when tab is hidden)
+  // Throttled remote sync (uses 60s cooldown to eliminate redundant queries)
+  const syncWithRemote = useCallback(async (force: boolean = false) => {
+    if (!isSupabaseConfigured) return;
+    try {
+      await storageService.init(force);
+      refreshData();
+    } catch {}
+  }, [refreshData]);
+
+  // Polling & Visibility Change Auto-Refresh Effect (Every 90s, paused when tab is hidden)
   useEffect(() => {
     let intervalId: NodeJS.Timeout | null = null;
 
@@ -1008,9 +1009,9 @@ export default function App() {
       if (intervalId) clearInterval(intervalId);
       intervalId = setInterval(() => {
         if (!document.hidden) {
-          refreshData();
+          syncWithRemote(false);
         }
-      }, 30000);
+      }, 90000); // 90 seconds interval (reduces Supabase log queries by ~70%)
     };
 
     const handleVisibilityChange = () => {
@@ -1020,7 +1021,7 @@ export default function App() {
           intervalId = null;
         }
       } else {
-        refreshData();
+        syncWithRemote(false);
         startPolling();
       }
     };
@@ -1032,7 +1033,7 @@ export default function App() {
       if (intervalId) clearInterval(intervalId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshData]);
+  }, [syncWithRemote]);
 
   const handleProduce = async (e: React.FormEvent, sourceLocation: 'IN' | 'OUT' = 'IN', targetStageId?: StageId, poId?: string) => {
     e.preventDefault();
@@ -11063,8 +11064,6 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws) as any[];
 
-        console.log('Raw BOM data:', data);
-
         const bomMap = new Map<string, BOMDefinition>();
         
         data.forEach(row => {
@@ -11133,7 +11132,7 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
         onPartsChange();
         alert(`Đã nhập thành công ${importedBOM.length} định mức sản xuất!`);
       } catch (err) {
-        console.error('BOM Import Error:', err);
+        if ((import.meta as any).env?.DEV) console.error('BOM Import Error:', err);
         alert('Lỗi khi đọc file định mức.');
       } finally {
         setIsImportingBOM(false);
@@ -11224,7 +11223,7 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
         onPartsChange();
         alert(`Đã nhập thành công ${importedParts.length} linh kiện!`);
       } catch (err) {
-        console.error('Excel Import Error:', err);
+        if ((import.meta as any).env?.DEV) console.error('Excel Import Error:', err);
         alert('Lỗi khi đọc file Excel. Vui lòng đảm bảo file đúng định dạng.');
       } finally {
         setIsImporting(false);

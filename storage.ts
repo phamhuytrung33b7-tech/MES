@@ -61,6 +61,19 @@ function notifySyncChange() {
   });
 }
 
+// Throttled quiet logger to eliminate spamming console and log queries
+const lastLogMap = new Map<string, number>();
+function quietWarn(key: string, message: string, err?: any) {
+  const now = Date.now();
+  const last = lastLogMap.get(key) || 0;
+  if (now - last > 60000) {
+    lastLogMap.set(key, now);
+    if ((import.meta as any).env?.DEV) {
+      console.warn(`[Supabase] ${message}`, err?.message || err || '');
+    }
+  }
+}
+
 // ---------------------------------------------------------
 // Background Async Persistence Queues (Batch & Debounce)
 // ---------------------------------------------------------
@@ -84,7 +97,7 @@ async function flushPendingConfigSaves() {
     const { error } = await supabase.from('system_configs').upsert(rows, { onConflict: 'key' });
     if (error) throw error;
   } catch (err: any) {
-    console.warn('[Supabase] Failed to persist system_configs:', err?.message || err);
+    quietWarn('system_configs', 'Failed to persist system_configs:', err);
   }
 }
 
@@ -93,8 +106,9 @@ let poSaveTimer: any = null;
 
 function queueProductionOrdersPersist(orders: ProductionOrder[]) {
   pendingPoSave = orders;
-  if (poSaveTimer) clearTimeout(poSaveTimer);
-  poSaveTimer = setTimeout(flushPendingPoSaves, 50);
+  if (!poSaveTimer) {
+    poSaveTimer = setTimeout(flushPendingPoSaves, 400);
+  }
 }
 
 async function flushPendingPoSaves() {
@@ -116,7 +130,7 @@ function toBigIntOrDefault(val: any, defaultVal: number = 0): number {
 }
 
 async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
-  if (!isSupabaseConfigured || !orders) return;
+  if (!isSupabaseConfigured || !orders || orders.length === 0) return;
   try {
     const dbOrders = orders.map(po => ({
       id: po.id,
@@ -143,7 +157,7 @@ async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
       if (error) throw error;
     }
   } catch (err: any) {
-    console.warn('[Supabase] persistProductionOrders error:', err?.message || err);
+    quietWarn('persistProductionOrders', 'persistProductionOrders error:', err);
   }
 }
 
@@ -152,7 +166,7 @@ async function deletePOFromSupabase(id: string) {
   try {
     await supabase.from('production_orders').delete().or(`id.eq.${id},master_po_id.eq.${id}`);
   } catch (err: any) {
-    console.warn('[Supabase] deletePO error:', err?.message || err);
+    quietWarn('deletePO', 'deletePO error:', err);
   }
 }
 
@@ -191,7 +205,7 @@ async function persistInventoryToSupabase(inventory: InventoryItem[]) {
       if (error) throw error;
     }
   } catch (err: any) {
-    console.warn('[Supabase] persistInventory error:', err?.message || err);
+    quietWarn('persistInventory', 'persistInventory error:', err);
   }
 }
 
@@ -201,7 +215,7 @@ async function deleteInventoryFromSupabase(partId: string, stageId: StageId, loc
     const rowId = `${partId}_${stageId}_${location}_${originalPartId || ''}`;
     await supabase.from('wip_inventory').delete().eq('id', rowId);
   } catch (err: any) {
-    console.warn('[Supabase] deleteInventory error:', err?.message || err);
+    quietWarn('deleteInventory', 'deleteInventory error:', err);
   }
 }
 
@@ -210,7 +224,7 @@ async function clearStageInventoryFromSupabase(stageId: StageId, location: strin
   try {
     await supabase.from('wip_inventory').delete().eq('stage_id', stageId).eq('location', location);
   } catch (err: any) {
-    console.warn('[Supabase] clearStageInventory error:', err?.message || err);
+    quietWarn('clearStageInventory', 'clearStageInventory error:', err);
   }
 }
 
@@ -263,7 +277,7 @@ async function persistTransactionsToSupabase(transactions: Transaction[]) {
       if (error) throw error;
     }
   } catch (err: any) {
-    console.warn('[Supabase] persistTransactions error:', err?.message || err);
+    quietWarn('persistTransactions', 'persistTransactions error:', err);
   }
 }
 
@@ -307,7 +321,7 @@ async function persistGlazingPlansToSupabase(plans: import('./types').GlazingPla
       if (error) throw error;
     }
   } catch (err: any) {
-    console.warn('[Supabase] persistGlazingPlans error:', err?.message || err);
+    quietWarn('persistGlazingPlans', 'persistGlazingPlans error:', err);
   }
 }
 
@@ -316,7 +330,7 @@ async function deleteGlazingPlanFromSupabase(id: string) {
   try {
     await supabase.from('glazing_plans').delete().eq('id', id);
   } catch (err: any) {
-    console.warn('[Supabase] deleteGlazingPlan error:', err?.message || err);
+    quietWarn('deleteGlazingPlan', 'deleteGlazingPlan error:', err);
   }
 }
 
@@ -358,7 +372,7 @@ async function persistLabelsToSupabase(labels: Transaction[]) {
       if (error) throw error;
     }
   } catch (err: any) {
-    console.warn('[Supabase] persistLabels error:', err?.message || err);
+    quietWarn('persistLabels', 'persistLabels error:', err);
   }
 }
 
@@ -367,7 +381,7 @@ async function deleteLabelFromSupabase(id: string) {
   try {
     await supabase.from('qr_labels').delete().eq('id', id);
   } catch (err: any) {
-    console.warn('[Supabase] deleteLabel error:', err?.message || err);
+    quietWarn('deleteLabel', 'deleteLabel error:', err);
   }
 }
 
@@ -389,6 +403,9 @@ function clearCache(key?: string) {
     effectivePartIdCache.clear();
   }
 }
+
+let lastRemoteInitTime = 0;
+const REMOTE_INIT_COOLDOWN_MS = 60000; // 60s cooldown between full Supabase table queries
 
 export const storageService = {
   normalize(s: string): string {
@@ -2484,7 +2501,7 @@ export const storageService = {
         const repairId = deductedFromOriginalId || cleanId;
         this.createMasterPO(repairId, quantity, Date.now(), undefined, "REPAIR", stageId);
       } catch (err) {
-        console.error("Failed to create supplementary PO:", err);
+        quietWarn('supplPO', 'Failed to create supplementary PO', err);
       }
     }
 
@@ -4118,8 +4135,13 @@ export const storageService = {
    * Initializes data from Supabase online into memory cache
    * Uses selective columns to optimize egress on Free tier
    */
-  async init(): Promise<boolean> {
+  async init(force: boolean = false): Promise<boolean> {
     if (!isSupabaseConfigured) return false;
+    const now = Date.now();
+    if (!force && now - lastRemoteInitTime < REMOTE_INIT_COOLDOWN_MS) {
+      return true;
+    }
+    lastRemoteInitTime = now;
     isSyncing = true;
     syncError = null;
     notifySyncChange();
@@ -4207,7 +4229,7 @@ export const storageService = {
 
         // Re-persist unsynced local POs to Supabase automatically
         if (unsyncedPos.length > 0) {
-          persistProductionOrdersToSupabase(validPos);
+          persistProductionOrdersToSupabase(unsyncedPos);
         }
       }
 
@@ -4324,7 +4346,7 @@ export const storageService = {
       const isOnlineEmpty = (!configRows || configRows.length === 0) && (!poRows || poRows.length === 0);
       const hasLocalData = (localStorage.getItem(STORAGE_KEYS.PARTS) || localStorage.getItem(STORAGE_KEYS.PRODUCTION_ORDERS));
       if (isOnlineEmpty && hasLocalData) {
-        this.syncLocalToSupabase().catch(e => console.warn('[Supabase] Initial seed error:', e));
+        this.syncLocalToSupabase().catch(e => quietWarn('initialSeed', 'Initial seed error:', e));
       }
 
       lastSyncTime = Date.now();
@@ -4336,14 +4358,14 @@ export const storageService = {
       isSyncing = false;
       syncError = err?.message || 'Lỗi kết nối Supabase';
       notifySyncChange();
-      console.warn('[Supabase] Init error:', err);
+      quietWarn('init', 'Init error:', err);
       return false;
     }
   },
 
   async refreshFromSupabase(): Promise<boolean> {
     clearCache();
-    return await this.init();
+    return await this.init(true);
   },
 
   /**

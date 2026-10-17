@@ -14,12 +14,16 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
-    detectSessionInUrl: false
+    detectSessionInUrl: false,
+    debug: false,
   },
   global: {
     headers: {
       'x-application-name': 'wip-inventory-manager'
     }
+  },
+  db: {
+    schema: 'public'
   }
 });
 
