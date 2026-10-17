@@ -15,6 +15,8 @@ import {
   Trash2,
   ArrowRight,
   ArrowUpRight,
+  ArrowDownLeft,
+  Boxes,
   CheckCircle2, 
   AlertCircle,
   Printer,
@@ -1789,19 +1791,6 @@ export default function App() {
           </div>
         </main>
 
-        {/* Status Bar */}
-        <footer className="bg-white border-t border-gray-200 text-gray-500 px-8 py-3 flex justify-between items-center text-xs font-mono uppercase tracking-widest">
-          <div className="flex gap-6 items-center">
-            <span>User: <strong className="text-gray-800">{currentUser?.fullName || currentUser?.username || 'Chưa đăng nhập'}</strong></span>
-            <span className="opacity-30">|</span>
-            <span>Vai trò: <strong className={currentUser?.role === 'ADMIN' ? 'text-orange-600' : 'text-blue-600'}>{currentUser?.role === 'ADMIN' ? 'Admin' : currentUser?.role === 'USER' ? 'Nhân viên' : 'Khách'}</strong></span>
-            <span className="opacity-30">|</span>
-            <span>Ca: Ngày</span>
-          </div>
-          <div className="font-bold">
-            {format(new Date(), 'dd/MM/yyyy HH:mm:ss')}
-          </div>
-        </footer>
       </div>
 
 
@@ -2666,11 +2655,11 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
         <div className="p-8 border-b border-gray-100 flex flex-col md:flex-row justify-between items-center gap-6">
           <div className="flex flex-col gap-4">
             <h2 className="text-2xl font-bold">Danh sách Lệnh Sản Xuất</h2>
-            <div className="flex bg-gray-100 p-1 rounded-xl w-fit">
+            <div className="flex bg-gray-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar whitespace-nowrap">
               <button
                 onClick={() => setActiveTab('STANDARD')}
                 className={cn(
-                  "px-6 py-2 rounded-lg font-bold text-sm uppercase transition-all",
+                  "px-3 sm:px-6 py-1.5 sm:py-2 rounded-lg font-bold text-xs sm:text-sm uppercase transition-all shrink-0 cursor-pointer",
                   activeTab === 'STANDARD' 
                     ? "bg-white text-blue-600 shadow-sm" 
                     : "text-gray-500 hover:text-gray-700"
@@ -2681,7 +2670,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
               <button
                 onClick={() => setActiveTab('ODD')}
                 className={cn(
-                  "px-6 py-2 rounded-lg font-bold text-sm uppercase transition-all",
+                  "px-3 sm:px-6 py-1.5 sm:py-2 rounded-lg font-bold text-xs sm:text-sm uppercase transition-all shrink-0 cursor-pointer",
                   activeTab === 'ODD' 
                     ? "bg-white text-amber-600 shadow-sm" 
                     : "text-gray-500 hover:text-gray-700"
@@ -2692,7 +2681,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
               <button
                 onClick={() => setActiveTab('REPAIR')}
                 className={cn(
-                  "px-6 py-2 rounded-lg font-bold text-sm uppercase transition-all",
+                  "px-3 sm:px-6 py-1.5 sm:py-2 rounded-lg font-bold text-xs sm:text-sm uppercase transition-all shrink-0 cursor-pointer",
                   activeTab === 'REPAIR' 
                     ? "bg-white text-red-600 shadow-sm" 
                     : "text-gray-500 hover:text-gray-700"
@@ -3712,11 +3701,11 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
             )}
           </div>
 
-          <div className="flex bg-gray-100 p-1 rounded-xl gap-1">
+          <div className="flex bg-gray-100 p-1 rounded-xl gap-1 overflow-x-auto no-scrollbar whitespace-nowrap">
             <button 
               onClick={() => setActiveTab('PENDING')}
               className={cn(
-                "flex-1 py-2 text-[10px] font-bold uppercase tracking-tight rounded-lg transition-all",
+                "px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold uppercase tracking-tight rounded-lg transition-all shrink-0 sm:flex-1 cursor-pointer",
                 activeTab === 'PENDING' ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
               )}
             >
@@ -3725,7 +3714,7 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
             <button 
               onClick={() => setActiveTab('FINISHED')}
               className={cn(
-                "flex-1 py-2 text-[10px] font-bold uppercase tracking-tight rounded-lg transition-all",
+                "px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold uppercase tracking-tight rounded-lg transition-all shrink-0 sm:flex-1 cursor-pointer",
                 activeTab === 'FINISHED' ? "bg-white text-green-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
               )}
             >
@@ -3734,7 +3723,7 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
             <button 
               onClick={() => setActiveTab('PAINTING')}
               className={cn(
-                "flex-1 py-2 text-[10px] font-bold uppercase tracking-tight rounded-lg transition-all",
+                "px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold uppercase tracking-tight rounded-lg transition-all shrink-0 sm:flex-1 cursor-pointer",
                 activeTab === 'PAINTING' ? "bg-white text-purple-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
               )}
             >
@@ -3743,7 +3732,7 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
             <button 
               onClick={() => setActiveTab('GLAZING')}
               className={cn(
-                "flex-1 py-2 text-[10px] font-bold uppercase tracking-tight rounded-lg transition-all",
+                "px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold uppercase tracking-tight rounded-lg transition-all shrink-0 sm:flex-1 cursor-pointer",
                 activeTab === 'GLAZING' ? "bg-white text-orange-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
               )}
             >
@@ -3752,7 +3741,7 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
             <button 
               onClick={() => setActiveTab('DISPOSAL')}
               className={cn(
-                "flex-1 py-2 text-[10px] font-bold uppercase tracking-tight rounded-lg transition-all",
+                "px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold uppercase tracking-tight rounded-lg transition-all shrink-0 sm:flex-1 cursor-pointer",
                 activeTab === 'DISPOSAL' ? "bg-white text-red-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
               )}
             >
@@ -7173,55 +7162,55 @@ function ProduceView({
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
-      className="grid grid-cols-1 lg:grid-cols-2 gap-8"
+      className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-8"
     >
-      <div className="bg-white p-10 rounded-2xl border border-gray-200 shadow-sm space-y-8">
+      <div className="bg-white p-3.5 sm:p-8 rounded-2xl border border-gray-200 shadow-sm space-y-4 sm:space-y-6">
         {activePo && (
           <div className={cn(
-            "p-5 rounded-2xl border transition-all space-y-3",
+            "p-3.5 sm:p-5 rounded-xl sm:rounded-2xl border transition-all space-y-2 sm:space-y-3",
             isOverPo ? "bg-amber-50 border-amber-300" : "bg-blue-50 border-blue-200"
           )}>
             <div className="flex justify-between items-center">
               <div>
-                <div className="text-xs font-bold uppercase text-blue-600 tracking-wider">Lệnh PO đã chọn</div>
-                <div className="font-mono font-bold text-blue-900 text-lg flex items-center gap-2">
+                <div className="text-[11px] sm:text-xs font-bold uppercase text-blue-600 tracking-wider">Lệnh PO đã chọn</div>
+                <div className="font-mono font-bold text-blue-900 text-sm sm:text-lg flex items-center gap-1.5 sm:gap-2">
                   <span>{activePo.id}</span>
                   {activePo.id.startsWith('REPAIR') && (
-                    <span className="text-xs bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-sans font-bold">LỆNH BÙ</span>
+                    <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded font-sans font-bold">LỆNH BÙ</span>
                   )}
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-xs font-bold uppercase text-blue-600 tracking-wider">
+                <div className="text-[11px] sm:text-xs font-bold uppercase text-blue-600 tracking-wider">
                   {sourceLocation === 'IN' ? 'Tiến độ SX (IN)' : 'Tiến độ Xuất (OUT)'}
                 </div>
-                <div className="font-mono font-bold text-blue-900 text-lg">
+                <div className="font-mono font-bold text-blue-900 text-sm sm:text-lg">
                   {poProcessed} / {poTarget}
                 </div>
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-blue-200/60 text-xs">
-              <div className="font-medium text-gray-700">
+            <div className="flex flex-wrap items-center justify-between gap-1.5 pt-2 border-t border-blue-200/60 text-xs">
+              <div className="font-medium text-gray-700 text-xs">
                 Còn lại theo PO: <span className="font-mono font-bold text-blue-900 text-sm">{poRemaining}</span>
               </div>
               {isOverPo ? (
-                <div className="flex items-center gap-1.5 text-red-800 font-bold bg-red-100 border border-red-300 px-2.5 py-1 rounded-lg">
-                  <AlertCircle size={14} className="text-red-600 flex-shrink-0" />
-                  <span>VƯỢT QUÁ PO (+{overAmount}) — KHÔNG ĐƯỢC PHÉP XUẤT!</span>
+                <div className="flex items-center gap-1.5 text-red-800 font-bold bg-red-100 border border-red-300 px-2 py-0.5 rounded-lg text-[11px]">
+                  <AlertCircle size={13} className="text-red-600 flex-shrink-0" />
+                  <span>VƯỢT QUÁ PO (+{overAmount}) — KHÔNG ĐƯỢC XUẤT!</span>
                 </div>
               ) : quantity > 0 ? (
-                <div className="flex items-center gap-1.5 text-emerald-800 font-bold bg-emerald-100/90 border border-emerald-300 px-2.5 py-1 rounded-lg">
-                  <Check size={14} className="text-emerald-600 flex-shrink-0" />
-                  <span>Trong hạn mức PO (Còn lại sau xuất: {poRemaining - quantity})</span>
+                <div className="flex items-center gap-1 text-emerald-800 font-bold bg-emerald-100/90 border border-emerald-300 px-2 py-0.5 rounded-lg text-[11px]">
+                  <Check size={13} className="text-emerald-600 flex-shrink-0" />
+                  <span>Trong hạn mức PO (Còn lại: {poRemaining - quantity})</span>
                 </div>
               ) : null}
             </div>
           </div>
         )}
         <div>
-          <h2 className="text-4xl font-bold tracking-tight mb-3">Xuất kho (Finish & Label)</h2>
-          <p className="text-lg text-gray-500">Ghi nhận hoàn thành công đoạn hoặc xuất linh kiện từ kho thành phẩm để in nhãn QR.</p>
+          <h2 className="text-xl sm:text-3xl font-bold tracking-tight mb-1 sm:mb-2 text-gray-900">Xuất kho (Finish & Label)</h2>
+          <p className="text-xs sm:text-sm text-gray-500 leading-relaxed">Ghi nhận hoàn thành công đoạn hoặc xuất linh kiện từ kho thành phẩm để in nhãn QR.</p>
         </div>
         
         <form onSubmit={async (e) => {
@@ -7247,30 +7236,30 @@ function ProduceView({
             }
           }
           handleProduce(e, sourceLocation, sourceLocation === 'OUT' ? targetStageId : undefined, selectedPoId);
-        }} className="space-y-8">
-          <div className="grid grid-cols-2 gap-8">
-            <div className="space-y-4">
-              <label className="text-base font-bold uppercase tracking-widest opacity-70">1. Công đoạn hiện tại</label>
+        }} className="space-y-4 sm:space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-6">
+            <div className="space-y-1.5 sm:space-y-3">
+              <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">1. Công đoạn hiện tại</label>
               <select 
                 value={selectedStage}
                 onChange={(e) => setSelectedStage(e.target.value)}
-                className="w-full p-5 rounded-xl border-2 border-gray-100 font-bold text-lg focus:border-blue-600 outline-none bg-white cursor-pointer"
+                className="w-full p-2.5 sm:p-4 rounded-xl border border-gray-200 font-bold text-xs sm:text-base focus:border-blue-600 outline-none bg-white cursor-pointer"
               >
                 {STAGES.map(stage => (
                   <option key={stage.id} value={stage.id}>{stage.name}</option>
                 ))}
               </select>
             </div>
-            <div className="space-y-4">
-              <label className="text-base font-bold uppercase tracking-widest opacity-80">2. Vị trí xuất:</label>
-              <div className="flex bg-gray-100 p-1 rounded-xl h-[68px]">
+            <div className="space-y-1.5 sm:space-y-3">
+              <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">2. Vị trí xuất:</label>
+              <div className="flex bg-gray-100 p-1 rounded-xl h-[42px] sm:h-[54px]">
                 {(selectedStage !== 'LASER' && selectedStage !== 'WELDING') && (
                   <button 
                     type="button"
                     onClick={() => setSourceLocation('IN')}
                     className={cn(
-                      "flex-1 rounded-lg font-bold text-sm uppercase transition-all",
-                      sourceLocation === 'IN' ? "bg-gray-900 text-white shadow-sm" : "text-gray-400"
+                      "flex-1 rounded-lg font-bold text-xs sm:text-sm uppercase transition-all cursor-pointer",
+                      sourceLocation === 'IN' ? "bg-gray-900 text-white shadow-sm" : "text-gray-500 hover:text-gray-900"
                     )}
                   >
                     Kho IN
@@ -7280,8 +7269,8 @@ function ProduceView({
                   type="button"
                   onClick={() => setSourceLocation('OUT')}
                   className={cn(
-                    "flex-1 rounded-lg font-bold text-sm uppercase transition-all",
-                    sourceLocation === 'OUT' ? (selectedStage === 'LASER' || selectedStage === 'WELDING' ? "bg-blue-600 text-white shadow-sm" : "bg-[#F27D26] text-white shadow-sm") : "text-gray-400"
+                    "flex-1 rounded-lg font-bold text-xs sm:text-sm uppercase transition-all cursor-pointer",
+                    sourceLocation === 'OUT' ? (selectedStage === 'LASER' || selectedStage === 'WELDING' ? "bg-blue-600 text-white shadow-sm" : "bg-[#F27D26] text-white shadow-sm") : "text-gray-500 hover:text-gray-900"
                   )}
                 >
                   Kho OUT
@@ -7291,11 +7280,11 @@ function ProduceView({
           </div>
 
           {allAvailablePos.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <label className="text-base font-bold uppercase tracking-widest opacity-80">3. Chọn Lệnh PO (Ràng buộc tiến độ)</label>
+            <div className="space-y-1.5 sm:space-y-3">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1">
+                <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">3. Chọn Lệnh PO (Ràng buộc tiến độ)</label>
                 {availablePos.length > 1 && (
-                  <span className="text-xs bg-purple-100 text-purple-700 font-bold px-2.5 py-1 rounded-md">
+                  <span className="text-[10px] sm:text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-md self-start sm:self-auto">
                     Linh kiện nằm trong {availablePos.length} PO khác nhau
                   </span>
                 )}
@@ -7309,8 +7298,8 @@ function ProduceView({
             </div>
           )}
 
-          <div className="space-y-4">
-            <label className="text-sm font-bold uppercase tracking-widest opacity-50">4. Chọn mã linh kiện</label>
+          <div className="space-y-1.5 sm:space-y-3">
+            <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">4. Chọn mã linh kiện</label>
             <SearchableSelect 
               options={filteredPartOptions}
               value={selectedPart}
@@ -7320,12 +7309,12 @@ function ProduceView({
           </div>
 
           {sourceLocation === 'OUT' && (
-            <div className="space-y-4">
-              <label className="text-sm font-bold uppercase tracking-widest opacity-50">4. Công đoạn đích (Nhập kho IN)</label>
+            <div className="space-y-1.5 sm:space-y-3">
+              <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">4. Công đoạn đích (Nhập kho IN)</label>
               <select 
                 value={targetStageId}
                 onChange={(e) => setTargetStageId(e.target.value as StageId)}
-                className="w-full p-5 rounded-xl border-2 border-gray-100 font-bold text-lg focus:border-blue-600 outline-none bg-white cursor-pointer"
+                className="w-full p-2.5 sm:p-4 rounded-xl border border-gray-200 font-bold text-xs sm:text-base focus:border-blue-600 outline-none bg-white cursor-pointer"
               >
                 {STAGES.map(s => (
                   <option key={s.id} value={s.id}>{s.name}</option>
@@ -7334,28 +7323,28 @@ function ProduceView({
             </div>
           )}
 
-          <div className="space-y-4">
-            <div className="flex justify-between items-end">
-              <label className="text-sm font-bold uppercase tracking-widest opacity-50">{sourceLocation === 'OUT' ? '5' : '4'}. Nhập số lượng xuất</label>
+          <div className="space-y-1.5 sm:space-y-3">
+            <div className="flex justify-between items-center">
+              <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">{sourceLocation === 'OUT' ? '5' : '4'}. Nhập số lượng xuất</label>
               <div className={cn(
-                "flex items-center gap-3 px-4 py-2 rounded-lg border",
+                "flex items-center gap-2 px-2.5 py-1 rounded-lg border",
                 sourceLocation === 'IN' ? "bg-blue-50 border-blue-100" : "bg-orange-50 border-orange-100"
               )}>
                 <span className={cn(
-                  "text-xs font-mono font-bold uppercase",
+                  "text-[10px] sm:text-xs font-mono font-bold uppercase",
                   sourceLocation === 'IN' ? "text-blue-600" : "text-orange-600"
-                )}>Tồn {sourceLocation} hiện tại:</span>
+                )}>Tồn {sourceLocation}:</span>
                 <span className={cn(
-                  "text-base font-mono font-bold",
+                  "text-xs sm:text-sm font-mono font-bold",
                   sourceLocation === 'IN' ? "text-blue-700" : "text-orange-700"
                 )}>{currentStock}</span>
               </div>
             </div>
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2.5 sm:gap-4">
               <button 
                 type="button"
                 onClick={() => setQuantity(Math.max(0, quantity - 1))}
-                className="w-20 h-20 rounded-xl border-2 border-gray-100 flex items-center justify-center font-bold text-3xl hover:bg-gray-50 active:scale-95 transition-all"
+                className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl border-2 border-gray-200 flex items-center justify-center font-bold text-xl sm:text-3xl hover:bg-gray-50 active:scale-95 transition-all cursor-pointer shrink-0"
               >
                 -
               </button>
@@ -7364,13 +7353,13 @@ function ProduceView({
                 step="any"
                 value={quantity || ''} 
                 onChange={(e) => setQuantity(parseFloat(e.target.value) || 0)}
-                className="flex-1 h-20 text-center border-2 border-gray-900 rounded-xl font-mono font-bold text-4xl outline-none focus:ring-4 ring-black/5"
+                className="flex-1 h-12 sm:h-16 text-center border-2 border-gray-900 rounded-xl font-mono font-bold text-xl sm:text-3xl outline-none focus:ring-4 ring-black/5"
                 placeholder="0"
               />
               <button 
                 type="button"
                 onClick={() => setQuantity(quantity + 1)}
-                className="w-20 h-20 rounded-xl border-2 border-gray-100 flex items-center justify-center font-bold text-3xl hover:bg-gray-50 active:scale-95 transition-all"
+                className="w-12 h-12 sm:w-16 sm:h-16 rounded-xl border-2 border-gray-200 flex items-center justify-center font-bold text-xl sm:text-3xl hover:bg-gray-50 active:scale-95 transition-all cursor-pointer shrink-0"
               >
                 +
               </button>
@@ -7378,35 +7367,35 @@ function ProduceView({
           </div>
 
           {availablePos.length === 0 && selectedStage !== 'GLAZING' && !(selectedStage === 'PAINTING' && sourceLocation === 'IN') ? (
-            <div className="w-full bg-red-50 border-2 border-red-200 p-6 rounded-xl flex flex-col items-center gap-3 text-center">
-              <AlertCircle size={32} className="text-red-600" />
+            <div className="w-full bg-red-50 border border-red-200 p-4 sm:p-6 rounded-xl flex flex-col items-center gap-2.5 text-center">
+              <AlertCircle size={26} className="text-red-600" />
               <div>
-                <p className="font-bold text-red-800 uppercase text-lg">Không có Lệnh sản xuất (PO)</p>
-                <p className="text-sm text-red-600">Linh kiện này chưa được tạo PO cho công đoạn {STAGES.find(s => s.id === selectedStage)?.name}. Vui lòng vào mục "Lệnh sản xuất" để tạo lệnh trước.</p>
+                <p className="font-bold text-red-800 uppercase text-sm sm:text-base">Không có Lệnh sản xuất (PO)</p>
+                <p className="text-xs sm:text-sm text-red-600">Linh kiện này chưa được tạo PO cho công đoạn {STAGES.find(s => s.id === selectedStage)?.name}. Vui lòng vào mục "Lệnh sản xuất" để tạo lệnh trước.</p>
               </div>
             </div>
           ) : (
-            <div className="flex gap-4">
+            <div className="flex gap-2.5 sm:gap-4 pt-1">
               <button 
                 type="submit"
                 disabled={(!selectedPoId && selectedStage !== 'GLAZING' && !(selectedStage === 'PAINTING' && sourceLocation === 'IN')) || isOverPo}
                 className={cn(
-                  "flex-1 py-5 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-3 active:scale-[0.98] transition-all shadow-lg",
+                  "flex-1 py-3.5 sm:py-5 rounded-xl font-bold uppercase text-xs sm:text-base tracking-wider flex items-center justify-center gap-2 active:scale-[0.98] transition-all shadow-md cursor-pointer",
                   ((!selectedPoId && selectedStage !== 'GLAZING' && !(selectedStage === 'PAINTING' && sourceLocation === 'IN')) || isOverPo)
                     ? "bg-gray-300 text-gray-500 cursor-not-allowed" 
                     : (selectedStage === 'LASER' || selectedStage === 'WELDING' || sourceLocation === 'IN' ? "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200" : "bg-[#F27D26] text-white hover:bg-[#F27D26]/90 shadow-[#F27D26]/20")
                 )}
               >
-                {sourceLocation === 'IN' ? <CheckCircle2 size={24} /> : <Printer size={24} />}
+                {sourceLocation === 'IN' ? <CheckCircle2 size={18} /> : <Printer size={18} />}
                 {sourceLocation === 'IN' ? 'Xác nhận hoàn thành' : 'In nhãn QR'}
               </button>
               {sourceLocation === 'IN' || selectedStage === 'LASER' ? (
                 <button 
                   type="button"
                   onClick={() => setDefectModal({ partId: selectedPart, stageId: selectedStage, poId: selectedPoId, location: sourceLocation })}
-                  className="w-32 py-5 rounded-xl border border-red-200 bg-red-50 text-red-600 font-bold uppercase text-[10px] flex flex-col items-center justify-center gap-1 hover:bg-red-100 transition-all active:scale-[0.98] shadow-lg shadow-red-50"
+                  className="w-24 sm:w-32 py-3.5 sm:py-5 rounded-xl border border-red-200 bg-red-50 text-red-600 font-bold uppercase text-[10px] sm:text-xs flex flex-col items-center justify-center gap-1 hover:bg-red-100 transition-all active:scale-[0.98] shadow-sm cursor-pointer shrink-0"
                 >
-                  <AlertCircle size={20} />
+                  <AlertCircle size={16} />
                   Báo lỗi (NG)
                 </button>
               ) : null}
@@ -8768,34 +8757,34 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
   const progress = Math.min(100, (produced / total) * 100);
 
   return (
-    <div key={`${norm.id}-${idx}`} className="bg-white p-6 rounded-3xl shadow-xl border border-gray-100 flex flex-col gap-6 group hover:shadow-2xl transition-all">
-      <div className="flex justify-between items-start">
-        <div className="space-y-1">
-          <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest">{norm.id}</span>
-          <h5 className="font-black text-gray-900 leading-tight text-lg">{norm.partName}</h5>
+    <div key={`${norm.id}-${idx}`} className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-3xl shadow-sm sm:shadow-xl border border-gray-100 flex flex-col gap-3.5 sm:gap-6 group hover:shadow-md transition-all">
+      <div className="flex justify-between items-start gap-2">
+        <div className="space-y-0.5 sm:space-y-1 min-w-0">
+          <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">{norm.id}</span>
+          <h5 className="font-bold text-gray-900 leading-tight text-sm sm:text-base md:text-lg truncate">{norm.partName}</h5>
         </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="bg-blue-50 px-3 py-1 rounded-full text-[10px] font-black text-blue-600 uppercase">
+        <div className="flex flex-col items-end gap-1.5 shrink-0">
+          <div className="bg-blue-50 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full text-[10px] font-bold text-blue-600 uppercase">
             Norm: {norm.norm}
           </div>
           <button
             type="button"
             onClick={() => onReportDefect && onReportDefect()}
-            className="text-[10px] font-black text-red-500 hover:text-red-700 bg-red-50 px-2 py-1 border border-red-100 flex items-center gap-1 transition-all rounded-lg shadow-sm"
+            className="text-[10px] font-bold text-red-500 hover:text-red-700 bg-red-50 px-2 py-0.5 sm:py-1 border border-red-100 flex items-center gap-1 transition-all rounded-lg shadow-2xs cursor-pointer"
           >
-            <AlertCircle size={12} /> BÁO LỖI
+            <AlertCircle size={11} /> BÁO LỖI
           </button>
         </div>
       </div>
 
-      <div className="space-y-2">
-        <div className="flex justify-between text-xs font-black uppercase">
+      <div className="space-y-1.5 sm:space-y-2">
+        <div className="flex justify-between text-xs font-bold uppercase">
           <span className="text-gray-400">Tiến độ Kế hoạch:</span>
           <span className={cn(progress >= 100 ? "text-green-600" : "text-blue-600")}>
             {produced.toLocaleString()} / {total.toLocaleString()}
           </span>
         </div>
-        <div className="h-3 bg-gray-100 rounded-full overflow-hidden p-0.5 border border-gray-50">
+        <div className="h-2 sm:h-3 bg-gray-100 rounded-full overflow-hidden p-0.5 border border-gray-50">
           <motion.div 
             initial={{ width: 0 }}
             animate={{ width: `${progress}%` }}
@@ -8807,22 +8796,22 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
         </div>
       </div>
 
-      <div className="space-y-4 bg-gray-50 p-4 rounded-2xl border border-gray-100">
-          <div className="flex flex-col gap-3">
-              <div className="grid grid-cols-2 gap-4">
+      <div className="space-y-3 sm:space-y-4 bg-gray-50/80 p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-gray-100">
+          <div className="flex flex-col gap-2.5 sm:gap-3">
+              <div className="grid grid-cols-2 gap-2 sm:gap-4">
                   <div>
-                    <span className="text-[10px] font-black text-gray-400 uppercase block mb-1">Khung giờ</span>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Khung giờ</span>
                     <select
                       value={timeSlot}
                       onChange={(e) => setTimeSlot(e.target.value)}
-                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 font-black text-gray-700 outline-none transition-all text-xs"
+                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-1.5 sm:py-2 font-bold text-gray-700 outline-none transition-all text-xs"
                     >
                       <option value="">-- Hiện tại --</option>
                       {timeSlots.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
                     </select>
                   </div>
                   <div>
-                    <span className="text-[10px] font-black text-gray-400 uppercase block mb-1">SL Đã Làm</span>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase block mb-1">SL Đã Làm</span>
                     <input 
                       type="number"
                       min="1"
@@ -8832,7 +8821,7 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                           const val = parseInt(e.target.value) || 0;
                           setProducedInputQty(val);
                       }}
-                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 font-black text-blue-700 outline-none transition-all text-xs"
+                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-1.5 sm:py-2 font-black text-blue-700 outline-none transition-all text-xs"
                     />
                   </div>
               </div>
@@ -8849,37 +8838,36 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                       }
                   }
                   onRecordProduction(producedInputQty, timestamp);
-                  // reset remaining appropriately
                   setProducedInputQty(1);
                 }}
                 className={cn(
-                  "h-10 px-4 rounded-xl flex items-center justify-center gap-2 transition-all font-black uppercase text-xs tracking-tight shadow-md",
+                  "h-9 sm:h-10 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all font-bold uppercase text-xs tracking-tight shadow-sm active:scale-95 cursor-pointer",
                   (produced >= total || producedInputQty <= 0 || producedInputQty > remainingProduce)
                     ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                    : "bg-blue-600 text-white hover:bg-blue-700 active:scale-95 shadow-blue-200"
+                    : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-500/20"
                 )}
               >
-               <PackagePlus size={16} /> LƯU SẢN LƯỢNG
+               <PackagePlus size={15} /> LƯU SẢN LƯỢNG
               </button>
           </div>
           
-          <div className="flex flex-col gap-3 pt-4 border-t border-gray-200 mt-2">
-              <div className="flex justify-between items-center text-xs font-black uppercase">
+          <div className="flex flex-col gap-2.5 sm:gap-3 pt-3 sm:pt-4 border-t border-gray-200 mt-1">
+              <div className="flex justify-between items-center text-xs font-bold uppercase">
                 <span className="text-gray-400">Đã in nhãn:</span>
                 <span className={cn(printed >= produced && produced > 0 ? "text-green-600" : "text-gray-700")}>
                   {printed.toLocaleString()} / {produced.toLocaleString()}
                 </span>
               </div>
-              <div className="flex items-center gap-4">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2 sm:gap-4">
                   <div className="flex-1">
-                    <span className="text-[10px] font-black text-gray-400 uppercase block mb-1">Số lượng IN</span>
+                    <span className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Số lượng IN</span>
                     <input 
                       type="number"
                       min="1"
                       max={remainingPrint}
                       value={printInputQty}
                       onChange={(e) => setPrintInputQty(parseInt(e.target.value) || 0)}
-                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-2 font-black text-green-700 outline-none transition-all text-xs"
+                      className="w-full bg-white border border-gray-200 rounded-xl px-2.5 py-1.5 sm:py-2 font-black text-green-700 outline-none transition-all text-xs sm:text-sm"
                     />
                   </div>
                   <button 
@@ -8899,7 +8887,7 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                         timestamp: Date.now(),
                         qrData: formatQR,
                         planId: plan.id,
-                        printed: false, // wait for print confirmation
+                        printed: false,
                         kpiRecorded: true
                       };
                       
@@ -8907,13 +8895,13 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                       setPrintInputQty(1);
                     }}
                     className={cn(
-                      "h-14 mt-[18px] px-6 rounded-xl flex items-center justify-center gap-2 transition-all font-black uppercase text-xs tracking-tight shadow-lg",
+                      "h-9 sm:h-11 px-4 sm:px-6 rounded-xl flex items-center justify-center gap-1.5 transition-all font-bold uppercase text-xs tracking-tight shadow-md active:scale-95 cursor-pointer",
                       (produced === 0 || printed >= produced || printInputQty <= 0 || printInputQty > remainingPrint)
                         ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                        : "bg-green-600 text-white hover:bg-green-700 hover:scale-105 active:scale-95 shadow-green-200"
+                        : "bg-green-600 text-white hover:bg-green-700 shadow-green-500/20"
                     )}
                   >
-                   <Printer size={16} /> IN NHÃN
+                   <Printer size={15} /> IN NHÃN
                   </button>
               </div>
           </div>
@@ -9456,50 +9444,62 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-      <div className="flex gap-4 border-b border-gray-200 overflow-x-auto scrollbar-hide">
-        {(['INVENTORY', 'PLANNING', 'INBOUND', 'QUICK_PRINT', 'OUTBOUND', 'CONFIG'] as const).map(tab => (
+      {/* Glazing Tabs (Touch-friendly & Scrollable for mobile portrait) */}
+      <div className="flex items-center gap-1.5 sm:gap-2 border-b border-gray-200 pb-2 overflow-x-auto no-scrollbar scroll-smooth whitespace-nowrap">
+        {([
+          { id: 'INVENTORY', label: 'Tồn kho IN', fullLabel: 'Tồn kho IN', icon: <Boxes size={15} /> },
+          { id: 'PLANNING', label: 'Kế hoạch SX', fullLabel: 'Kế hoạch sản xuất', icon: <ClipboardList size={15} /> },
+          { id: 'INBOUND', label: 'Nhập IN', fullLabel: 'Nhập IN (Từ OUT)', icon: <ArrowDownLeft size={15} /> },
+          { id: 'QUICK_PRINT', label: 'In nhanh', fullLabel: 'In Nhãn Nhanh', icon: <Printer size={15} /> },
+          { id: 'OUTBOUND', label: 'Đóng gói OUT', fullLabel: 'Đóng gói OUT', icon: <Package size={15} /> },
+          { id: 'CONFIG', label: 'Cấu hình', fullLabel: 'Cấu hình & Định mức', icon: <Settings size={15} /> },
+        ] as const).map(item => (
           <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
+            key={item.id}
+            onClick={() => setActiveTab(item.id as any)}
             className={cn(
-              "px-6 py-4 font-bold text-sm uppercase tracking-widest border-b-4 transition-all duration-200 whitespace-nowrap",
-              activeTab === tab ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-900 focus:outline-none"
+              "flex items-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all shrink-0 cursor-pointer active:scale-95",
+              activeTab === item.id 
+                ? "bg-blue-600 text-white shadow-sm shadow-blue-500/30" 
+                : "bg-gray-100 hover:bg-gray-200 text-gray-600 hover:text-gray-900"
             )}
           >
-            {tab === 'INVENTORY' ? 'Tồn kho IN' : tab === 'PLANNING' ? 'Kế hoạch sản xuất' : tab === 'INBOUND' ? 'Nhập IN' : tab === 'QUICK_PRINT' ? 'In Nhãn Nhanh' : tab === 'OUTBOUND' ? 'Đóng gói OUT' : 'Cấu hình'}
+            {item.icon}
+            <span className="sm:hidden">{item.label}</span>
+            <span className="hidden sm:inline">{item.fullLabel || item.label}</span>
           </button>
         ))}
       </div>
 
-      <div className="bg-white p-6 rounded-2xl shadow-xl border border-gray-100 min-h-[500px]">
+      <div className="bg-white p-2.5 sm:p-6 rounded-xl sm:rounded-2xl shadow-sm sm:shadow-xl border border-gray-100 min-h-[400px]">
         {activeTab === 'PLANNING' && (
           <div className="space-y-8">
-            <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="bg-blue-600 p-2 rounded-lg">
-                    <ClipboardList className="text-white" size={24} />
+            <div className="bg-blue-50/70 p-3 sm:p-6 rounded-xl sm:rounded-2xl border border-blue-100">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 sm:mb-6">
+                <div className="flex items-center gap-2.5">
+                  <div className="bg-blue-600 p-1.5 sm:p-2 rounded-lg text-white">
+                    <ClipboardList size={20} />
                   </div>
-                  <h3 className="text-xl font-black uppercase text-blue-900 tracking-tight">Lập Kế Hoạch Sản Xuất Dán Kính</h3>
+                  <h3 className="text-sm sm:text-lg md:text-xl font-bold uppercase text-blue-900 tracking-tight">Lập Kế Hoạch SX Dán Kính</h3>
                 </div>
 
-                <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
                     onClick={() => {
                       const systemModels = Array.from(new Set(glazingPlanNorms.map(n => n.appliedModel || n.modelName).filter(Boolean))) as string[];
                       downloadSamplePOExcelTemplate(systemModels);
                     }}
-                    className="flex items-center gap-2 bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 px-4 py-2.5 rounded-2xl font-bold text-sm cursor-pointer transition-all active:scale-95 shadow-sm"
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold text-xs sm:text-sm cursor-pointer transition-all active:scale-95 shadow-2xs"
                     title="Tải file Excel mẫu đúng chuẩn cấu trúc để nhập liệu"
                   >
-                    <Download size={18} />
-                    <span>Tải File Mẫu Excel</span>
+                    <Download size={15} />
+                    <span>File Mẫu Excel</span>
                   </button>
 
-                  <label className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-2xl font-bold text-sm cursor-pointer shadow-md shadow-emerald-200 transition-all active:scale-95">
-                    <FileSpreadsheet size={18} />
-                    <span>{isImportingGlazingExcel ? 'Đang đọc file Excel...' : 'Upload Excel Kế Hoạch Dán Kính'}</span>
+                  <label className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl font-bold text-xs sm:text-sm cursor-pointer shadow-sm shadow-emerald-500/20 transition-all active:scale-95">
+                    <FileSpreadsheet size={15} />
+                    <span>{isImportingGlazingExcel ? 'Đang đọc...' : 'Upload Excel Kế Hoạch'}</span>
                     <input 
                       type="file" 
                       accept=".xlsx, .xls" 
@@ -9511,10 +9511,10 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                 </div>
               </div>
 
-              <form onSubmit={handleCreatePlan} className="space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-end">
-                  <div className="space-y-2">
-                    <label className="text-xs font-black uppercase text-blue-900/40 tracking-widest pl-1">Chọn Model</label>
+              <form onSubmit={handleCreatePlan} className="space-y-4 sm:space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6 items-end">
+                  <div className="space-y-1 sm:space-y-2">
+                    <label className="text-[10px] sm:text-xs font-bold uppercase text-blue-900/60 tracking-wider pl-1">Chọn Model</label>
                     <SearchableSelect 
                       options={Array.from(new Set(storageService.getModelBOM().map(b => b.modelId))).map(id => ({ 
                         id, 
@@ -9525,53 +9525,50 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                       placeholder="Chọn model sản xuất..."
                     />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-black uppercase text-blue-900/40 tracking-widest pl-1">Số lượng (Máy)</label>
+                  <div className="space-y-1 sm:space-y-2">
+                    <label className="text-[10px] sm:text-xs font-bold uppercase text-blue-900/60 tracking-wider pl-1">Số lượng (Máy)</label>
                     <input 
                       type="number"
                       value={planQuantity || ''}
                       onChange={e => setPlanQuantity(parseFloat(e.target.value) || 0)}
-                      className="w-full p-4 rounded-xl border-2 border-blue-100 font-bold text-lg focus:border-blue-600 outline-none"
+                      className="w-full p-2.5 sm:p-3.5 rounded-xl border border-blue-200 font-bold text-xs sm:text-base focus:border-blue-600 outline-none bg-white"
                       placeholder="Nhập số lượng..."
                     />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-black uppercase text-blue-900/40 tracking-widest pl-1">Ngày mong muốn hoàn thành</label>
+                  <div className="space-y-1 sm:space-y-2">
+                    <label className="text-[10px] sm:text-xs font-bold uppercase text-blue-900/60 tracking-wider pl-1">Ngày mong muốn hoàn thành</label>
                     <input 
                       type="datetime-local"
                       value={targetCompletion}
                       onChange={e => setTargetCompletion(e.target.value)}
-                      className="w-full p-4 rounded-xl border-2 border-blue-100 font-bold text-lg focus:border-blue-600 outline-none"
+                      className="w-full p-2.5 sm:p-3.5 rounded-xl border border-blue-200 font-bold text-xs sm:text-base focus:border-blue-600 outline-none bg-white"
                     />
                   </div>
                 </div>
 
-                <div className="flex flex-col md:flex-row justify-between items-center bg-white/50 p-4 rounded-2xl border border-blue-100 gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="bg-white px-5 py-3 rounded-xl border border-blue-100 flex items-center gap-6 shadow-sm">
-                      <div className="flex flex-col">
-                        <span className="text-[9px] font-black text-blue-900/50 uppercase tracking-widest leading-none mb-1.5 flex items-center gap-1">
-                          <Clock size={10} className="text-blue-400" /> Bắt đầu dự kiến
-                        </span>
-                        <span className="text-sm font-black text-blue-800">
-                          {estimatedGlazingStart ? format(new Date(estimatedGlazingStart), 'HH:mm - dd/MM/yyyy') : '--:--'}
-                        </span>
-                      </div>
-                      <div className="w-px h-8 bg-blue-100" />
-                      <div className="flex flex-col">
-                        <span className="text-[9px] font-black text-orange-900/50 uppercase tracking-widest leading-none mb-1.5 flex items-center gap-1">
-                          <CheckCircle2 size={10} className="text-orange-400" /> Dự kiến hoàn thành
-                        </span>
-                        <span className="text-sm font-black text-orange-600">
-                          {estimatedGlazingEnd ? format(new Date(estimatedGlazingEnd), 'HH:mm - dd/MM/yyyy') : '--:--'}
-                        </span>
-                      </div>
+                <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center bg-white/70 p-3 sm:p-4 rounded-xl border border-blue-100 gap-3">
+                  <div className="grid grid-cols-2 gap-2 bg-white px-3 sm:px-5 py-2.5 rounded-xl border border-blue-100 shadow-2xs">
+                    <div className="flex flex-col">
+                      <span className="text-[9px] font-bold text-blue-900/50 uppercase tracking-wider leading-none mb-1 flex items-center gap-1">
+                        <Clock size={10} className="text-blue-400" /> Bắt đầu dự kiến
+                      </span>
+                      <span className="text-xs sm:text-sm font-black text-blue-800">
+                        {estimatedGlazingStart ? format(new Date(estimatedGlazingStart), 'HH:mm - dd/MM') : '--:--'}
+                      </span>
+                    </div>
+                    <div className="flex flex-col border-l border-blue-100 pl-2">
+                      <span className="text-[9px] font-bold text-orange-900/50 uppercase tracking-wider leading-none mb-1 flex items-center gap-1">
+                        <CheckCircle2 size={10} className="text-orange-400" /> Dự kiến hoàn thành
+                      </span>
+                      <span className="text-xs sm:text-sm font-black text-orange-600">
+                        {estimatedGlazingEnd ? format(new Date(estimatedGlazingEnd), 'HH:mm - dd/MM') : '--:--'}
+                      </span>
                     </div>
                   </div>
                   <button 
                     type="submit"
                     disabled={!selectedModel || planQuantity <= 0}
-                    className="bg-blue-600 text-white px-10 py-4 rounded-xl font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 disabled:opacity-50"
+                    className="w-full sm:w-auto bg-blue-600 text-white px-6 sm:px-10 py-2.5 sm:py-3.5 rounded-xl font-bold uppercase text-xs sm:text-sm tracking-wider hover:bg-blue-700 transition-all shadow-md shadow-blue-500/20 active:scale-95 disabled:opacity-50 cursor-pointer"
                   >
                     Tạo Kế Hoạch
                   </button>
@@ -9614,17 +9611,17 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
             )}
 
             <div className="space-y-4">
-              <div className="flex border-b border-gray-200 gap-6 px-4">
+              <div className="flex border-b border-gray-200 gap-3 sm:gap-6 px-1 sm:px-4 overflow-x-auto no-scrollbar">
                 <button
                   onClick={() => setPlanSubTab('IN_PROGRESS')}
                   className={cn(
-                    "pb-3 text-sm font-black uppercase tracking-widest transition-all relative",
+                    "pb-2.5 sm:pb-3 text-xs sm:text-sm font-bold uppercase tracking-wider transition-all relative shrink-0 cursor-pointer",
                     planSubTab === 'IN_PROGRESS' ? "text-blue-600" : "text-gray-400 hover:text-gray-600"
                   )}
                 >
-                  <div className="flex items-center gap-2">
-                    Kế hoạch đang thực hiện
-                    <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-[10px]">{currentGlazingPlans.length}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span>Đang thực hiện</span>
+                    <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-black">{currentGlazingPlans.length}</span>
                   </div>
                   {planSubTab === 'IN_PROGRESS' && (
                     <div className="absolute bottom-0 left-0 right-0 h-1 bg-blue-600 rounded-t-full" />
@@ -9633,13 +9630,13 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                 <button
                   onClick={() => setPlanSubTab('COMPLETED')}
                   className={cn(
-                    "pb-3 text-sm font-black uppercase tracking-widest transition-all relative",
+                    "pb-2.5 sm:pb-3 text-xs sm:text-sm font-bold uppercase tracking-wider transition-all relative shrink-0 cursor-pointer",
                     planSubTab === 'COMPLETED' ? "text-green-600" : "text-gray-400 hover:text-gray-600"
                   )}
                 >
-                  <div className="flex items-center gap-2">
-                    Đã hoàn thành
-                    <span className="bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full text-[10px]">{completedGlazingPlans.length}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span>Đã hoàn thành</span>
+                    <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-[10px] font-black">{completedGlazingPlans.length}</span>
                   </div>
                   {planSubTab === 'COMPLETED' && (
                     <div className="absolute bottom-0 left-0 right-0 h-1 bg-green-600 rounded-t-full" />
@@ -9650,25 +9647,25 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
               {planSubTab === 'IN_PROGRESS' && (
                 <>
                   {currentGlazingPlans.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                       {currentGlazingPlans.map((plan) => {
                         const modelName = parts.find((p: any) => p.id === plan.modelId)?.name || plan.modelId;
                         const components = glazingPlanNorms.filter(n => n.appliedModel === plan.modelId);
                         
                         return (
-                          <div key={plan.id} className="bg-white border-2 border-gray-100 rounded-2xl p-5 hover:border-blue-200 transition-all group">
-                            <div className="flex justify-between items-start mb-4">
-                              <div>
-                                <div className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">{plan.id}</div>
-                                <h5 className="font-bold text-gray-900 leading-tight">{modelName}</h5>
+                          <div key={plan.id} className="bg-white border border-gray-200 rounded-xl sm:rounded-2xl p-3.5 sm:p-5 hover:border-blue-200 transition-all shadow-2xs">
+                            <div className="flex justify-between items-start mb-3 gap-2">
+                              <div className="min-w-0">
+                                <div className="text-[10px] font-bold text-blue-600 uppercase tracking-wider mb-0.5">{plan.id}</div>
+                                <h5 className="font-bold text-gray-900 leading-tight text-xs sm:text-base truncate">{modelName}</h5>
                               </div>
-                              <div className="px-3 py-1 rounded-full text-[10px] bg-blue-100 text-blue-700 font-black uppercase tracking-widest">
+                              <div className="px-2.5 py-0.5 rounded-full text-[10px] bg-blue-100 text-blue-700 font-bold uppercase shrink-0">
                                 {plan.targetQuantity} MÁY
                               </div>
                             </div>
 
-                            <div className="space-y-2 mb-4">
-                              <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest pl-1">Thành phần & Tiến độ in</div>
+                            <div className="space-y-2 mb-3">
+                              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-0.5">Thành phần & Tiến độ in</div>
                               <div className="space-y-1">
                                 {components.map((c, i) => {
                                   const printed = (plan.producedQuantities || {})[c.id] || 0;
@@ -9676,10 +9673,10 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                                   const compProgress = Math.min(100, (printed / target) * 100);
                                   
                                   return (
-                                    <div key={i} className="flex flex-col bg-gray-50 px-3 py-2 rounded-lg gap-1.5">
-                                      <div className="flex justify-between items-center text-xs">
-                                        <span className="font-medium text-gray-600 truncate mr-2">{c.partName}</span>
-                                        <span className="font-black text-blue-700 whitespace-nowrap">{printed}/{target}</span>
+                                    <div key={i} className="flex flex-col bg-gray-50 px-2.5 py-1.5 rounded-lg gap-1">
+                                      <div className="flex justify-between items-center text-[11px] sm:text-xs">
+                                        <span className="font-medium text-gray-700 truncate mr-2">{c.partName}</span>
+                                        <span className="font-bold text-blue-700 whitespace-nowrap">{printed}/{target}</span>
                                       </div>
                                       <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
                                         <div 
@@ -9696,31 +9693,27 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                               </div>
                             </div>
 
-                            <div className="pt-3 border-t border-gray-100 flex flex-col gap-3">
-                              <div className="flex justify-between items-center">
+                            <div className="pt-2.5 border-t border-gray-100 flex flex-col gap-2.5">
+                              <div className="flex justify-between items-center text-xs">
                                 <div className="flex flex-col">
-                                  <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest pl-1">Bắt đầu dự kiến</span>
-                                  <div className="flex items-center gap-2 bg-blue-50/50 px-2.5 py-1.5 rounded-lg border border-blue-50">
-                                    <span className="text-xs font-black text-blue-700">
-                                      {plan.plannedStartTime ? format(new Date(plan.plannedStartTime), 'HH:mm - dd/MM') : '--:-- - --/--'}
-                                    </span>
-                                  </div>
+                                  <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Bắt đầu</span>
+                                  <span className="text-[11px] sm:text-xs font-bold text-blue-700">
+                                    {plan.plannedStartTime ? format(new Date(plan.plannedStartTime), 'HH:mm - dd/MM') : '--:--'}
+                                  </span>
                                 </div>
                                 <div className="flex flex-col items-end">
-                                  <span className="text-[9px] font-black text-orange-400 uppercase tracking-widest pr-1">Dự kiến xong</span>
-                                  <div className="flex items-center gap-2 bg-orange-50/50 px-2.5 py-1.5 rounded-lg border border-orange-50">
-                                    <span className="text-xs font-black text-orange-700">
-                                      {plan.expectedCompletionTime ? format(new Date(plan.expectedCompletionTime), 'HH:mm - dd/MM') : '--:-- - --/--'}
-                                    </span>
-                                  </div>
+                                  <span className="text-[9px] font-bold text-orange-400 uppercase tracking-wider">Dự kiến xong</span>
+                                  <span className="text-[11px] sm:text-xs font-bold text-orange-700">
+                                    {plan.expectedCompletionTime ? format(new Date(plan.expectedCompletionTime), 'HH:mm - dd/MM') : '--:--'}
+                                  </span>
                                 </div>
                               </div>
                               
-                              <div className="flex justify-between items-center border-t border-gray-50 pt-3">
+                              <div className="flex justify-between items-center border-t border-gray-50 pt-2">
                                 <div className="flex flex-col">
-                                  <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest pl-1">Hạn hoàn thành (Target)</span>
-                                  <span className="text-[10px] font-bold text-gray-500 italic">
-                                    {format(new Date(plan.targetCompletionTime), 'HH:mm - dd/MM/yyyy')}
+                                  <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Target:</span>
+                                  <span className="text-[10px] font-bold text-gray-600">
+                                    {format(new Date(plan.targetCompletionTime), 'HH:mm - dd/MM')}
                                   </span>
                                 </div>
                                 <div className="flex items-center gap-1">
@@ -9732,9 +9725,9 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                                         refreshData();
                                       }
                                     }}
-                                    className="p-2 text-blue-500 hover:text-white hover:bg-blue-500 rounded-lg transition-all font-bold text-[10px] uppercase tracking-widest flex items-center gap-1"
+                                    className="px-2.5 py-1 text-blue-600 hover:text-white hover:bg-blue-600 rounded-lg transition-all font-bold text-[10px] uppercase tracking-wider flex items-center gap-1 border border-blue-200 cursor-pointer"
                                   >
-                                    <CheckCircle2 size={16} /> 
+                                    <CheckCircle2 size={13} /> 
                                     Xong
                                   </button>
                                   <button 
@@ -9745,9 +9738,9 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                                         refreshData();
                                       }
                                     }}
-                                    className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all cursor-pointer"
                                   >
-                                    <Trash2 size={16} />
+                                    <Trash2 size={14} />
                                   </button>
                                 </div>
                               </div>
@@ -9757,10 +9750,10 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                       })}
                     </div>
                   ) : (
-                    <div className="py-20 flex flex-col items-center justify-center text-gray-300 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
-                      <ClipboardList size={64} strokeWidth={1} />
-                      <p className="text-lg font-bold mt-4 uppercase tracking-widest opacity-50">Chưa có kế hoạch dán kính</p>
-                      <p className="text-sm opacity-50">Sử dụng form bên trên để tạo kế hoạch mới</p>
+                    <div className="py-12 flex flex-col items-center justify-center text-gray-300 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+                      <ClipboardList size={48} strokeWidth={1} />
+                      <p className="text-sm sm:text-base font-bold mt-3 uppercase tracking-wider opacity-60">Chưa có kế hoạch dán kính</p>
+                      <p className="text-xs opacity-50 mt-1">Sử dụng form bên trên để tạo kế hoạch mới</p>
                     </div>
                   )}
                 </>
@@ -9839,44 +9832,44 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
           </div>
         )}
         {activeTab === 'QUICK_PRINT' && (
-          <div className="space-y-8">
+          <div className="space-y-6 sm:space-y-8">
             {/* Step 1: Select Plan */}
-            <div className="bg-white p-8 rounded-3xl border border-blue-100 shadow-xl space-y-6">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-200">
-                  <ClipboardList size={24} />
+            <div className="bg-white p-3.5 sm:p-8 rounded-xl sm:rounded-3xl border border-blue-100 shadow-sm sm:shadow-xl space-y-4 sm:space-y-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-600 rounded-xl sm:rounded-2xl flex items-center justify-center text-white shadow-sm shadow-blue-500/20 shrink-0">
+                  <ClipboardList size={20} />
                 </div>
                 <div>
-                  <h3 className="text-xl font-black text-gray-900 uppercase tracking-tight">Chọn Kế Hoạch Dán Kính</h3>
-                  <p className="text-sm text-gray-500 font-bold italic">* Bạn cần chọn một kế hoạch đang thực hiện để in nhãn</p>
+                  <h3 className="text-sm sm:text-lg md:text-xl font-bold text-gray-900 uppercase tracking-tight">Chọn Kế Hoạch Dán Kính</h3>
+                  <p className="text-xs text-gray-500 font-bold italic">* Bạn cần chọn một kế hoạch đang thực hiện để in nhãn</p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
                 {glazingPlans.filter(p => p.status !== 'COMPLETED').map(plan => (
                   <button
                     key={plan.id}
                     onClick={() => setSelectedPlanIdForPrint(plan.id)}
                     className={cn(
-                      "p-5 rounded-2xl border-2 transition-all text-left flex flex-col gap-2 relative group",
+                      "p-3.5 sm:p-5 rounded-xl sm:rounded-2xl border-2 transition-all text-left flex flex-col gap-1.5 sm:gap-2 relative group cursor-pointer active:scale-98",
                       selectedPlanIdForPrint === plan.id 
-                        ? "border-blue-600 bg-blue-50 shadow-lg shadow-blue-100" 
+                        ? "border-blue-600 bg-blue-50 shadow-sm shadow-blue-500/10" 
                         : "border-gray-100 hover:border-blue-300 hover:bg-gray-50"
                     )}
                   >
                     {selectedPlanIdForPrint === plan.id && (
-                      <div className="absolute -top-3 -right-3 w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-lg border-4 border-white">
-                        <Check size={16} strokeWidth={3} />
+                      <div className="absolute -top-2.5 -right-2.5 w-6 h-6 sm:w-8 sm:h-8 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-sm border-2 border-white">
+                        <Check size={14} strokeWidth={3} />
                       </div>
                     )}
-                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{plan.modelId}</span>
-                    <span className="font-bold text-gray-800 text-lg">Hạn: {format(new Date(plan.targetCompletionTime), 'dd/MM')}</span>
-                    <div className="flex justify-between items-center mt-2">
-                      <span className="text-xs font-black text-blue-600 bg-blue-100/50 px-2 py-0.5 rounded-full">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{plan.modelId}</span>
+                    <span className="font-bold text-gray-800 text-sm sm:text-lg">Hạn: {format(new Date(plan.targetCompletionTime), 'dd/MM')}</span>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className="text-xs font-bold text-blue-600 bg-blue-100/50 px-2 py-0.5 rounded-full">
                         SL: {plan.targetQuantity}
                       </span>
                       <span className={cn(
-                        "text-[9px] font-black uppercase px-2 py-0.5 rounded-full",
+                        "text-[9px] font-bold uppercase px-2 py-0.5 rounded-full",
                         plan.status === 'IN_PROGRESS' ? "text-orange-600 bg-orange-100" : "text-blue-600 bg-blue-100"
                       )}>
                         {plan.status === 'IN_PROGRESS' ? 'Đang chạy' : 'Chờ'}
@@ -9885,8 +9878,8 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                   </button>
                 ))}
                 {glazingPlans.filter(p => p.status !== 'COMPLETED').length === 0 && (
-                  <div className="col-span-full py-12 text-center bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
-                    <p className="text-gray-400 font-bold uppercase tracking-widest text-sm">Chưa có kế hoạch nào đang hoạt động</p>
+                  <div className="col-span-full py-8 text-center bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
+                    <p className="text-gray-400 font-bold uppercase tracking-wider text-xs sm:text-sm">Chưa có kế hoạch nào đang hoạt động</p>
                   </div>
                 )}
               </div>
@@ -9895,18 +9888,18 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
 
             {/* Step 2: Show Components if Plan selected */}
             {selectedPlanIdForPrint && (
-              <div className="space-y-6">
-                <div className="flex justify-between items-center px-4">
-                  <h4 className="font-black text-gray-900 uppercase tracking-tight flex items-center gap-3">
-                    <div className="w-1.5 h-5 bg-blue-600 rounded-full" />
+              <div className="space-y-4 sm:space-y-6">
+                <div className="flex justify-between items-center px-1 sm:px-4">
+                  <h4 className="font-bold text-gray-900 uppercase tracking-tight flex items-center gap-2 text-xs sm:text-base">
+                    <div className="w-1.5 h-4 bg-blue-600 rounded-full" />
                     Linh kiện trong kế hoạch
                   </h4>
-                  <div className="text-xs font-black text-gray-400 uppercase tracking-widest">
+                  <div className="text-[11px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider">
                     Model: <span className="text-blue-600">{glazingPlans.find(p => p.id === selectedPlanIdForPrint)?.modelId}</span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-6">
                   {glazingPlanNorms.filter(n => n.appliedModel === glazingPlans.find(p => p.id === selectedPlanIdForPrint)?.modelId).map((norm, idx) => {
                     const plan = glazingPlans.find(p => p.id === selectedPlanIdForPrint)!;
                     return (
@@ -9916,25 +9909,15 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                         plan={plan}
                         idx={idx}
                         onRecordProduction={(producedQty: number, timestamp: number) => {
-                          // 1. Record production (STAGE_OUT) for KPI
                           storageService.recordStageOut(norm.id, 'GLAZING', producedQty, 'IN', 'DCLR', undefined, true, timestamp);
-                          
-                          // 2. Update Progress
                           storageService.updateGlazingPlanProgress(plan.id, norm.id, producedQty);
                           setGlazingPlans(storageService.getGlazingPlans());
                           refreshData();
-                          // notification can be nice here
                         }}
                         onPrint={(labelTx: any, printQty: number) => {
-                          // 1. Save the label into WipLabels for printing 
-                          // Remove the mock `planId` if necessary or just save it
                           storageService.saveLabel(labelTx);
-                          
-                          // 2. Update Printed stats
                           storageService.updateGlazingPlanPrinted(plan.id, norm.id, printQty);
                           setGlazingPlans(storageService.getGlazingPlans());
-                          
-                          // 3. Trigger print modal
                           onPrint(labelTx);
                           refreshData();
                         }}
@@ -9944,56 +9927,58 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                   })}
                 </div>
 
-                <div className="mt-12 space-y-4">
-                  <h4 className="font-black text-gray-900 uppercase tracking-tight flex items-center gap-3 px-4">
-                    <History size={20} className="text-gray-400" />
+                <div className="mt-8 space-y-3">
+                  <h4 className="font-bold text-gray-900 uppercase tracking-tight flex items-center gap-2 px-1 sm:px-4 text-xs sm:text-base">
+                    <History size={16} className="text-gray-400" />
                     Lịch sử in gần đây
                   </h4>
-                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                    <table className="w-full text-left text-sm">
-                      <thead className="bg-gray-50 border-b border-gray-100 text-gray-500 font-black uppercase text-[10px] tracking-widest">
-                        <tr>
-                          <th className="px-6 py-4">Thời gian</th>
-                          <th className="px-6 py-4">Tên linh kiện / Gói</th>
-                          <th className="px-6 py-4 text-center">Số lượng</th>
-                          <th className="px-6 py-4">Thao tác</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {labels && labels.filter((l: any) => l.planId === selectedPlanIdForPrint).sort((a: any, b: any) => b.timestamp - a.timestamp).map((label: any) => (
-                          <tr key={label.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                            <td className="px-6 py-4 font-mono text-[11px] font-bold text-gray-500">
-                              {format(label.timestamp, 'HH:mm:ss dd/MM')}
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="font-bold text-gray-900">{label.partName || label.partId}</div>
-                              <div className="text-[10px] font-mono text-gray-400 uppercase mt-1">{label.partId}</div>
-                            </td>
-                            <td className="px-6 py-4 text-center">
-                              <span className="font-black text-blue-600 bg-blue-50 px-3 py-1 rounded-full">{label.quantity}</span>
-                            </td>
-                            <td className="px-6 py-4">
-                              <button 
-                                onClick={() => onPrint(label)}
-                                className="flex items-center gap-2 text-blue-600 hover:text-blue-800 font-bold text-xs uppercase bg-white border border-blue-200 px-3 py-1.5 rounded-lg hover:border-blue-400 transition-all shadow-sm"
-                              >
-                                <Printer size={14} />
-                                In lại
-                              </button>
-                            </td>
+                  <div className="bg-white rounded-xl sm:rounded-2xl border border-gray-100 shadow-2xs overflow-hidden">
+                    <div className="overflow-x-auto no-scrollbar">
+                      <table className="w-full text-left text-xs sm:text-sm">
+                        <thead className="bg-gray-50 border-b border-gray-100 text-gray-500 font-bold uppercase text-[10px] tracking-wider">
+                          <tr>
+                            <th className="px-3 sm:px-6 py-2.5 sm:py-3.5">Thời gian</th>
+                            <th className="px-3 sm:px-6 py-2.5 sm:py-3.5">Tên linh kiện / Gói</th>
+                            <th className="px-3 sm:px-6 py-2.5 sm:py-3.5 text-center">Số lượng</th>
+                            <th className="px-3 sm:px-6 py-2.5 sm:py-3.5">Thao tác</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {labels && labels.filter((l: any) => l.planId === selectedPlanIdForPrint).sort((a: any, b: any) => b.timestamp - a.timestamp).map((label: any) => (
+                            <tr key={label.id} className="hover:bg-gray-50/50">
+                              <td className="px-3 sm:px-6 py-2.5 sm:py-3.5 font-mono text-[10px] sm:text-[11px] font-bold text-gray-500 whitespace-nowrap">
+                                {format(label.timestamp, 'HH:mm dd/MM')}
+                              </td>
+                              <td className="px-3 sm:px-6 py-2.5 sm:py-3.5">
+                                <div className="font-bold text-gray-900 text-xs sm:text-sm leading-tight">{label.partName || label.partId}</div>
+                                <div className="text-[10px] font-mono text-gray-400 uppercase">{label.partId}</div>
+                              </td>
+                              <td className="px-3 sm:px-6 py-2.5 sm:py-3.5 text-center">
+                                <span className="font-bold text-blue-600 bg-blue-50 px-2.5 py-0.5 rounded-full text-xs">{label.quantity}</span>
+                              </td>
+                              <td className="px-3 sm:px-6 py-2.5 sm:py-3.5 whitespace-nowrap">
+                                <button 
+                                  onClick={() => onPrint(label)}
+                                  className="flex items-center gap-1.5 text-blue-600 hover:text-blue-800 font-bold text-xs uppercase bg-white border border-blue-200 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg hover:border-blue-400 transition-all shadow-2xs active:scale-95 cursor-pointer"
+                                >
+                                  <Printer size={13} />
+                                  <span>In lại</span>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
               </div>
             )}
             
             {!selectedPlanIdForPrint && (
-              <div className="py-20 flex flex-col items-center justify-center text-gray-300 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
-                <Printer size={64} strokeWidth={1} />
-                <p className="text-lg font-bold mt-4 uppercase tracking-widest opacity-50">Chọn kế hoạch để bắt đầu in</p>
+              <div className="py-12 flex flex-col items-center justify-center text-gray-300 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+                <Printer size={48} strokeWidth={1} />
+                <p className="text-sm sm:text-base font-bold mt-3 uppercase tracking-wider opacity-60">Chọn kế hoạch để bắt đầu in</p>
               </div>
             )}
           </div>
@@ -10065,9 +10050,9 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-8">
-              <div className="space-y-6">
-                <h3 className="text-xl font-bold uppercase text-blue-800">Cấu hình linh kiện (Kho IN)</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8">
+              <div className="space-y-4 sm:space-y-6">
+                <h3 className="text-base sm:text-xl font-bold uppercase text-blue-800">Cấu hình linh kiện (Kho IN)</h3>
                 <div className="p-6 border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 text-center">
                   <input type="file" accept=".xlsx,.xls" onChange={handleFileUpload} className="hidden" id="glazing-upload" />
                   <label htmlFor="glazing-upload" className="cursor-pointer flex flex-col items-center justify-center gap-4">
@@ -10094,8 +10079,8 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                 )}
               </div>
 
-              <div className="space-y-6">
-                <h3 className="text-xl font-bold uppercase text-orange-800">Cấu hình Gói Thành Phẩm (Kho OUT)</h3>
+              <div className="space-y-4 sm:space-y-6">
+                <h3 className="text-base sm:text-xl font-bold uppercase text-orange-800">Cấu hình Gói Thành Phẩm (Kho OUT)</h3>
                 <div className="p-6 border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 text-center">
                   <input type="file" accept=".xlsx,.xls" onChange={handleOutFileUpload} className="hidden" id="glazing-upload-out" />
                   <label htmlFor="glazing-upload-out" className="cursor-pointer flex flex-col items-center justify-center gap-4">
@@ -10133,28 +10118,31 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
 
         {activeTab === 'INVENTORY' && (
           <div>
-            <h3 className="text-xl font-bold uppercase mb-6 flex items-center gap-2">Tồn kho IN Dán Kính</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <h3 className="text-sm sm:text-base md:text-lg font-bold uppercase mb-3 sm:mb-4 flex items-center gap-2">
+              <Boxes size={18} className="text-blue-600" />
+              <span>Tồn kho IN Dán Kính</span>
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-4">
               {inventory.filter(i => i.location === 'IN' && i.stageId === 'GLAZING' && i.quantity > 0).map((i, idx) => (
-                <div key={`${i.partId}-${idx}`} className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex justify-between items-center hover:border-blue-300 transition-all group">
-                  <div>
-                    <div className="font-bold text-gray-900 leading-tight mb-1">{parts.find((p: any) => p.id === i.partId)?.name || i.partId}</div>
-                    <div className="font-mono text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded inline-block">{i.partId}</div>
+                <div key={`${i.partId}-${idx}`} className="bg-white p-3 sm:p-4 rounded-xl border border-gray-200 shadow-2xs flex justify-between items-center hover:border-blue-300 transition-all">
+                  <div className="min-w-0 mr-2">
+                    <div className="font-bold text-gray-900 leading-tight mb-0.5 text-xs sm:text-sm truncate">{parts.find((p: any) => p.id === i.partId)?.name || i.partId}</div>
+                    <div className="font-mono text-[10px] sm:text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded inline-block">{i.partId}</div>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <div className="font-black text-2xl text-blue-600">{i.quantity}</div>
+                  <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+                    <div className="font-black text-lg sm:text-2xl text-blue-600">{i.quantity}</div>
                     <button
                       onClick={() => setShowEditInventoryModal({ partId: i.partId, quantity: i.quantity, stageId: 'GLAZING', location: 'IN' })}
-                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                       title="Chỉnh sửa tồn kho"
                     >
-                      <Edit2 size={16} />
+                      <Edit2 size={15} />
                     </button>
                   </div>
                 </div>
               ))}
               {inventory.filter(i => i.location === 'IN' && i.stageId === 'GLAZING' && i.quantity > 0).length === 0 && (
-                <div className="col-span-full py-12 text-center text-gray-400 border-2 border-dashed border-gray-100 rounded-xl italic">
+                <div className="col-span-full py-8 text-center text-gray-400 border-2 border-dashed border-gray-100 rounded-xl text-xs sm:text-sm italic">
                   Không có linh kiện nào trong kho IN.
                 </div>
               )}
@@ -10163,59 +10151,127 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
         )}
 
         {activeTab === 'INBOUND' && (
-          <div>
-            <h3 className="text-xl font-bold uppercase mb-6 bg-blue-50 text-blue-800 p-4 rounded-xl border border-blue-100">Tiếp nhận từ công đoạn khác</h3>
-            <table className="w-full text-left text-sm mt-4">
-              <thead><tr className="bg-gray-100 text-gray-500 uppercase text-xs tracking-wider"><th className="p-4">Linh kiện</th><th className="p-4 w-40 text-center">Slg tại OUT nguồn</th><th className="p-4 w-64">Thao tác</th></tr></thead>
-              <tbody>
-                {configs.map(c => {
-                  const sourceQty = globalInventory.find((i: any) => i.partId.toUpperCase() === c.partId.toUpperCase() && i.stageId === c.sourceStageId && i.location === 'OUT')?.quantity || 0;
-                  return (
-                    <tr key={c.partId} className="border-b">
-                      <td className="p-4 border-r">
-                        <div className="font-bold text-base">{c.partName}</div>
-                        <div className="font-mono text-xs opacity-50">{c.partId}</div>
-                        <div className="inline-block mt-2 px-2 py-1 bg-gray-100 rounded text-xs font-bold text-gray-600 border border-gray-200">
+          <div className="space-y-4">
+            <h3 className="text-xs sm:text-base font-bold uppercase bg-blue-50 text-blue-800 p-3 sm:p-4 rounded-xl border border-blue-100 flex items-center gap-2">
+              <ArrowDownLeft size={18} />
+              <span>Tiếp nhận linh kiện từ công đoạn khác vào IN</span>
+            </h3>
+
+            {/* Mobile View: Clean Touch-Friendly Cards */}
+            <div className="sm:hidden space-y-2.5">
+              {configs.map(c => {
+                const sourceQty = globalInventory.find((i: any) => i.partId.toUpperCase() === c.partId.toUpperCase() && i.stageId === c.sourceStageId && i.location === 'OUT')?.quantity || 0;
+                return (
+                  <div key={c.partId} className="bg-white p-3 rounded-xl border border-gray-200 shadow-2xs space-y-2">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="min-w-0">
+                        <div className="font-bold text-xs text-gray-900 leading-tight">{c.partName}</div>
+                        <div className="font-mono text-[10px] text-gray-400">{c.partId}</div>
+                        <span className="inline-block mt-1 px-1.5 py-0.5 bg-gray-100 rounded text-[10px] font-bold text-gray-600">
                           Từ: {STAGES.find(s => s.id === c.sourceStageId)?.name || c.sourceStageId}
-                        </div>
-                      </td>
-                      <td className="p-4 border-r text-center">
-                        <div className="font-bold text-xl">{sourceQty}</div>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex bg-gray-50 rounded-xl overflow-hidden border border-gray-200 p-1">
-                          <input 
-                            type="number"
-                            value={inboundQty[c.partId] || ''}
-                            onChange={e => setInboundQty({...inboundQty, [c.partId]: e.target.value})}
-                            placeholder="SL"
-                            min="1"
-                            max={sourceQty}
-                            className="bg-transparent border-none p-3 w-20 outline-none text-center font-bold"
-                          />
-                          <button 
-                            onClick={() => handleReceive(c)}
-                            disabled={sourceQty === 0}
-                            className={cn("flex-1 p-3 font-bold uppercase text-white transition-all", sourceQty > 0 ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300")}
-                          >Nhập</button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                        </span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-[10px] text-gray-400 font-bold uppercase">OUT Nguồn</div>
+                        <div className="font-black text-sm text-blue-600">{sourceQty}</div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 items-center pt-2 border-t border-gray-100">
+                      <input 
+                        type="number"
+                        value={inboundQty[c.partId] || ''}
+                        onChange={e => setInboundQty({...inboundQty, [c.partId]: e.target.value})}
+                        placeholder="SL"
+                        min="1"
+                        max={sourceQty}
+                        className="w-20 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-xs outline-none focus:border-blue-500"
+                      />
+                      <button 
+                        onClick={() => handleReceive(c)}
+                        disabled={sourceQty === 0}
+                        className={cn(
+                          "flex-1 py-1.5 px-3 rounded-lg font-bold text-xs uppercase text-white transition-all active:scale-95 cursor-pointer",
+                          sourceQty > 0 ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300 cursor-not-allowed"
+                        )}
+                      >
+                        Nhập IN
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {configs.length === 0 && (
+                <div className="text-center text-gray-400 py-8 text-xs italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                  Chưa có cấu hình tiếp nhận linh kiện. Vui lòng tải file ở tab Cấu hình.
+                </div>
+              )}
+            </div>
+
+            {/* Desktop View: Standard Table */}
+            <div className="hidden sm:block overflow-x-auto no-scrollbar">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-gray-500 uppercase text-[10px] tracking-wider border-b border-gray-100">
+                    <th className="p-3">Linh kiện</th>
+                    <th className="p-3 w-36 text-center">Slg tại OUT nguồn</th>
+                    <th className="p-3 w-56">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {configs.map(c => {
+                    const sourceQty = globalInventory.find((i: any) => i.partId.toUpperCase() === c.partId.toUpperCase() && i.stageId === c.sourceStageId && i.location === 'OUT')?.quantity || 0;
+                    return (
+                      <tr key={c.partId} className="hover:bg-gray-50/50">
+                        <td className="p-3">
+                          <div className="font-bold text-sm text-gray-900">{c.partName}</div>
+                          <div className="font-mono text-[10px] text-gray-400">{c.partId}</div>
+                          <div className="inline-block mt-1 px-1.5 py-0.5 bg-gray-100 rounded text-[10px] font-bold text-gray-600">
+                            Từ: {STAGES.find(s => s.id === c.sourceStageId)?.name || c.sourceStageId}
+                          </div>
+                        </td>
+                        <td className="p-3 text-center">
+                          <div className="font-bold text-lg text-blue-600">{sourceQty}</div>
+                        </td>
+                        <td className="p-3">
+                          <div className="flex bg-gray-50 rounded-xl overflow-hidden border border-gray-200 p-0.5 max-w-[200px]">
+                            <input 
+                              type="number"
+                              value={inboundQty[c.partId] || ''}
+                              onChange={e => setInboundQty({...inboundQty, [c.partId]: e.target.value})}
+                              placeholder="SL"
+                              min="1"
+                              max={sourceQty}
+                              className="bg-transparent border-none p-2 w-16 outline-none text-center font-bold text-xs"
+                            />
+                            <button 
+                              onClick={() => handleReceive(c)}
+                              disabled={sourceQty === 0}
+                              className={cn(
+                                "flex-1 py-1.5 px-3 font-bold uppercase text-xs text-white transition-all rounded-lg active:scale-95 cursor-pointer", 
+                                sourceQty > 0 ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300 cursor-not-allowed"
+                              )}
+                            >
+                              Nhập
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
         {activeTab === 'OUTBOUND' && (
-          <div className="space-y-12">
+          <div className="space-y-8 sm:space-y-12">
             <div>
-              <h3 className="text-xl font-bold uppercase mb-6 bg-orange-50 text-orange-800 p-4 rounded-xl border border-orange-100 flex items-center gap-3">
-                <Package size={24} />
-                Đóng gói thành phẩm (Chuyển từ IN sang OUT)
+              <h3 className="text-xs sm:text-base font-bold uppercase mb-3 sm:mb-4 bg-orange-50 text-orange-800 p-3 sm:p-4 rounded-xl border border-orange-100 flex items-center gap-2">
+                <Package size={18} />
+                <span>Đóng gói thành phẩm (Chuyển từ IN sang OUT)</span>
               </h3>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-6 mt-3">
                 {outConfigs.map(c => {
                   const requiredQtys: Record<string, number> = {};
                   for (const sp of c.subParts) {
@@ -10223,7 +10279,6 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                     requiredQtys[sp.partId] += 1;
                   }
 
-                  // For each unique subpart, check max possible assemblies
                   let maxPossible = Infinity;
                   for (const partId of Object.keys(requiredQtys)) {
                     const reqPerItem = requiredQtys[partId];
@@ -10234,28 +10289,28 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                   if (maxPossible === Infinity) maxPossible = 0;
 
                   return (
-                    <div key={c.finalPartName} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm bg-white">
-                      <div className="bg-gray-50 border-b border-gray-200 p-4">
-                        <div className="font-bold text-lg text-gray-900">{c.finalPartName}</div>
-                        <div className="text-sm font-medium text-orange-600 mt-1">Có thể đóng gói: {maxPossible}</div>
+                    <div key={c.finalPartName} className="border border-gray-200 rounded-xl overflow-hidden shadow-2xs bg-white">
+                      <div className="bg-gray-50 border-b border-gray-200 p-3 sm:p-4">
+                        <div className="font-bold text-sm sm:text-base text-gray-900">{c.finalPartName}</div>
+                        <div className="text-xs font-bold text-orange-600 mt-0.5">Có thể đóng gói: {maxPossible}</div>
                       </div>
-                      <div className="p-4 space-y-3">
-                        <div className="text-xs font-bold uppercase text-gray-400 mb-2">Linh kiện yêu cầu (từ kho IN Dán Kính)</div>
+                      <div className="p-3 sm:p-4 space-y-2.5">
+                        <div className="text-[10px] font-bold uppercase text-gray-400">Linh kiện yêu cầu (từ kho IN Dán Kính)</div>
                         {c.subParts.map((sp, idx) => {
                           const invQt = inventory.find(i => i.partId === sp.partId && i.location === 'IN' && i.stageId === 'GLAZING')?.quantity || 0;
                           return (
-                            <div key={`${sp.partId}-${idx}`} className="flex justify-between items-center text-sm">
-                              <div>
-                                <div className="font-medium text-gray-700">{sp.partName}</div>
-                                <div className="font-mono text-xs text-gray-400">{sp.partId}</div>
+                            <div key={`${sp.partId}-${idx}`} className="flex justify-between items-center text-xs sm:text-sm">
+                              <div className="min-w-0 mr-2">
+                                <div className="font-medium text-gray-700 truncate">{sp.partName}</div>
+                                <div className="font-mono text-[10px] text-gray-400">{sp.partId}</div>
                               </div>
-                              <div className={cn("font-bold", invQt > 0 ? "text-green-600" : "text-red-500")}>
+                              <div className={cn("font-bold shrink-0", invQt > 0 ? "text-green-600" : "text-red-500")}>
                                 Kho IN: {invQt}
                               </div>
                             </div>
-                          )
+                          );
                         })}
-                        <div className="pt-4 border-t border-gray-100 flex gap-2">
+                        <div className="pt-3 border-t border-gray-100 flex gap-2">
                           <input 
                             type="number"
                             value={outboundQty[c.finalPartName] || ''}
@@ -10264,67 +10319,67 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                             min="1"
                             max={maxPossible || 1}
                             disabled={maxPossible === 0}
-                            className="w-20 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg font-bold outline-none focus:border-blue-500 disabled:opacity-50"
+                            className="w-16 sm:w-20 px-2.5 py-1.5 sm:py-2 bg-gray-50 border border-gray-200 rounded-lg font-bold text-xs sm:text-sm outline-none focus:border-blue-500 disabled:opacity-50 text-center"
                           />
                           <button 
                             onClick={() => handleTransferOut(c.finalPartName)}
                             disabled={maxPossible === 0}
-                            className="flex-1 bg-blue-600 text-white font-bold py-2 rounded-lg hover:bg-blue-700 transition-colors uppercase text-xs disabled:bg-gray-400 disabled:cursor-not-allowed"
+                            className="flex-1 bg-blue-600 text-white font-bold py-1.5 sm:py-2 px-3 rounded-lg hover:bg-blue-700 transition-colors uppercase text-xs disabled:bg-gray-400 disabled:cursor-not-allowed active:scale-95 cursor-pointer"
                           >
                             Đóng gói & Nhập OUT
                           </button>
                         </div>
                       </div>
                     </div>
-                  )
+                  );
                 })}
               </div>
               {outConfigs.length === 0 && (
-                <div className="text-center text-gray-500 py-12 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
+                <div className="text-center text-gray-400 py-8 text-xs italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
                   Chưa có cấu hình Gói Thành Phẩm OUT. Vui lòng tải lên ở tab Cấu hình.
                 </div>
               )}
             </div>
 
             {/* Warehouse OUT and Export to DCLR section */}
-            <div className="pt-12 border-t-4 border-dashed border-gray-100">
-              <h3 className="text-xl font-bold uppercase mb-6 bg-gray-900 text-white p-4 rounded-xl border border-gray-800 flex items-center gap-3">
-                <ArrowUpRight size={24} />
-                Linh kiện/Gói thành phẩm sẵn sàng xuất sang DCLR
+            <div className="pt-6 sm:pt-8 border-t-2 border-dashed border-gray-200">
+              <h3 className="text-xs sm:text-base font-bold uppercase mb-4 bg-gray-900 text-white p-3 sm:p-4 rounded-xl border border-gray-800 flex items-center gap-2">
+                <ArrowUpRight size={18} />
+                <span>Linh kiện/Gói thành phẩm sẵn sàng xuất sang DCLR</span>
               </h3>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-6">
                 {aggregatedGlazingOut.map(i => {
                   const isPseudo = i.partId.startsWith('GLZ-OUT-');
                   const displayName = isPseudo ? i.partId.replace('GLZ-OUT-', '') : (parts.find((p: any) => p.id === i.partId)?.name || i.partId);
                   
                   return (
-                    <div key={i.partId} className="bg-white p-6 rounded-2xl shadow-lg border border-orange-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 group hover:border-orange-300 transition-all">
-                      <div className="flex-1">
-                        <div className="font-bold text-gray-900 text-lg">{displayName}</div>
+                    <div key={i.partId} className="bg-white p-3.5 sm:p-5 rounded-xl sm:rounded-2xl shadow-2xs border border-orange-100 flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 group hover:border-orange-300 transition-all">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-gray-900 text-sm sm:text-base leading-tight truncate">{displayName}</div>
                         {isPseudo ? (
-                          <div className="font-mono text-[10px] uppercase font-black text-orange-600 mt-1 bg-orange-100 px-2 py-0.5 rounded inline-block">Gói thành phẩm</div>
+                          <div className="font-mono text-[9px] uppercase font-bold text-orange-600 mt-0.5 bg-orange-100 px-1.5 py-0.5 rounded inline-block">Gói thành phẩm</div>
                         ) : (
-                          <div className="font-mono text-xs opacity-50">{i.partId}</div>
+                          <div className="font-mono text-[10px] text-gray-400 mt-0.5">{i.partId}</div>
                         )}
-                        <div className="mt-2 text-3xl font-black text-[#F27D26]">{i.quantity}</div>
+                        <div className="mt-1 text-2xl sm:text-3xl font-black text-[#F27D26]">{i.quantity}</div>
                       </div>
                       
-                      <div className="flex flex-col items-end gap-2 w-full sm:w-auto">
-                        <div className="flex bg-white rounded-lg border-2 border-orange-200 overflow-hidden shadow-sm h-12 w-full sm:w-auto">
+                      <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                        <div className="flex bg-white rounded-lg border-2 border-orange-200 overflow-hidden shadow-2xs h-10 sm:h-11 w-full sm:w-auto">
                           <input 
                             type="number"
                             value={glazingOutQty[i.partId] || ''}
                             onChange={e => setGlazingOutQty({...glazingOutQty, [i.partId]: e.target.value})}
                             placeholder="SL"
-                            className="w-full sm:w-24 px-3 text-center font-black outline-none border-r border-orange-100 text-lg text-orange-600"
+                            className="w-16 sm:w-20 px-2 text-center font-black outline-none border-r border-orange-100 text-sm sm:text-base text-orange-600"
                           />
                           <button 
                             onClick={() => handleGlazingExport(i)}
-                            className="px-6 bg-[#F27D26] text-white font-black text-xs uppercase hover:bg-orange-700 transition-all active:scale-95 flex items-center gap-2 whitespace-nowrap"
+                            className="flex-1 sm:flex-none px-3 sm:px-5 bg-[#F27D26] text-white font-bold text-xs uppercase hover:bg-orange-700 transition-all active:scale-95 flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
                           >
-                            <ArrowUpRight size={16} />
-                            XUẤT DCLR
+                            <ArrowUpRight size={14} />
+                            <span>XUẤT DCLR</span>
                           </button>
                         </div>
                       </div>
@@ -10332,7 +10387,7 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                   );
                 })}
                 {aggregatedGlazingOut.length === 0 && (
-                  <div className="col-span-full text-center py-12 text-gray-400 italic bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200">
+                  <div className="col-span-full text-center py-8 text-gray-400 text-xs italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
                     Chưa có linh kiện nào trong kho OUT Dán Kính...
                   </div>
                 )}

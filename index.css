@@ -1,1 +1,28 @@
 @import "tailwindcss";
+
+@layer utilities {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Optimize mobile typography scaling and viewport rendering */
+@media (max-width: 640px) {
+  html {
+    font-size: 13.5px;
+    -webkit-text-size-adjust: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  html {
+    font-size: 12.5px;
+    -webkit-text-size-adjust: 100%;
+  }
+}
