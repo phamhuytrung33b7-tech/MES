@@ -5365,9 +5365,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       exit={{ opacity: 0, y: -20 }}
       className="space-y-8"
     >
-      <div className="flex justify-between items-center mb-6">
-        <h3 className="text-xl font-bold uppercase text-gray-800">Tổng quan Sản xuất</h3>
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 mb-4 sm:mb-6">
+        <div className="flex items-center gap-2">
+          <div className="w-2.5 h-6 bg-[#F27D26] rounded-full hidden sm:block" />
+          <h3 className="text-base sm:text-xl font-black uppercase text-gray-800 tracking-tight">Tổng quan Sản xuất</h3>
+        </div>
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
           <button
             onClick={() => {
               const savedPeople = storageService.getPeoplePerDay();
@@ -5383,23 +5386,25 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
               setPeoplePerDay(updatedPeople);
               setShowExportModal(true);
             }}
-            className="flex items-center gap-2 px-5 py-3 bg-green-600 text-white rounded-xl shadow-lg hover:bg-green-700 transition-colors font-bold uppercase tracking-wider"
+            className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 bg-green-600 text-white rounded-xl shadow-sm hover:bg-green-700 active:scale-95 transition-all font-bold uppercase tracking-wider text-xs sm:text-sm cursor-pointer"
           >
-            <FileSpreadsheet size={20} />
-            Xuất báo cáo SX
+            <FileSpreadsheet size={16} />
+            <span className="hidden sm:inline">Xuất báo cáo SX</span>
+            <span className="sm:hidden">Báo cáo SX</span>
           </button>
           <button
             onClick={() => setShowExportPreparationModal(true)}
-            className="flex items-center gap-2 px-5 py-3 bg-green-700 text-white rounded-xl shadow-lg hover:bg-green-800 transition-colors font-bold uppercase tracking-wider"
+            className="flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 bg-green-700 text-white rounded-xl shadow-sm hover:bg-green-800 active:scale-95 transition-all font-bold uppercase tracking-wider text-xs sm:text-sm cursor-pointer"
           >
-            <FileSpreadsheet size={20} />
-            Xuất Báo Cáo SX 2
+            <FileSpreadsheet size={16} />
+            <span className="hidden sm:inline">Xuất Báo Cáo SX 2</span>
+            <span className="sm:hidden">Báo cáo SX 2</span>
           </button>
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Summary Cards (2 cols on mobile for clean glance, 4 cols on desktop) */}
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4 lg:gap-6">
         {stageSummaries.filter(s => s.id !== 'GLAZING').map((summary, idx) => {
           const isActive = selectedStageDetail === summary.id;
 
@@ -5408,47 +5413,48 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
               key={summary.id} 
               onClick={() => setSelectedStageDetail(isActive ? null : summary.id)}
               className={cn(
-                "bg-white p-6 rounded-xl border transition-all text-left group",
+                "bg-white p-3 sm:p-5 rounded-xl sm:rounded-2xl border transition-all text-left group relative cursor-pointer active:scale-[0.98]",
                 isActive 
-                  ? "border-[#F27D26] ring-4 ring-[#F27D26]/10 shadow-lg" 
-                  : "border-gray-200 shadow-sm hover:shadow-md hover:border-gray-300"
+                  ? "border-[#F27D26] ring-2 sm:ring-4 ring-[#F27D26]/10 shadow-md" 
+                  : "border-gray-200 shadow-2xs hover:shadow-md hover:border-gray-300"
               )}
             >
-              <div className="flex justify-between items-start mb-4">
+              <div className="flex justify-between items-start mb-2 sm:mb-4">
                 <div className={cn(
-                  "p-2 rounded-lg transition-colors",
+                  "p-1.5 sm:p-2 rounded-lg transition-colors shrink-0",
                   isActive ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600"
                 )}>
-                  <Package size={20} />
+                  <Package size={16} className="sm:w-5 sm:h-5" />
                 </div>
                 <div className="flex flex-col items-end">
-                  <span className="text-sm font-mono font-bold text-gray-600 uppercase tracking-widest">Stage {idx + 1}</span>
-                  {isActive && <div className="w-2 h-2 rounded-full bg-[#F27D26] mt-1 animate-pulse" />}
+                  <span className="text-[10px] sm:text-xs font-mono font-bold text-gray-400 uppercase tracking-wider">S{idx + 1}</span>
+                  {isActive && <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-[#F27D26] mt-0.5 animate-pulse" />}
                 </div>
               </div>
-              <h3 className="font-bold text-2xl text-gray-900 mb-1">{summary.name}</h3>
-              <p className="text-4xl font-mono font-bold tracking-tighter">{summary.total}</p>
-              <div className="mt-4 flex gap-4 text-xs font-mono uppercase font-bold overflow-x-auto pb-2">
-                <div className="flex flex-col min-w-[60px]">
-                  <span className="opacity-50">Tồn IN</span>
-                  <span className="text-lg">{summary.in}</span>
+              <h3 className="font-bold text-xs sm:text-lg md:text-xl text-gray-900 mb-0.5 sm:mb-1 truncate">{summary.name}</h3>
+              <p className="text-xl sm:text-3xl md:text-4xl font-mono font-black tracking-tight text-gray-900">{summary.total}</p>
+              
+              <div className="mt-2 sm:mt-3 grid grid-cols-3 gap-0.5 sm:gap-1 p-1 sm:p-2 bg-gray-50/90 rounded-lg text-center border border-gray-100">
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[8px] sm:text-[10px] font-mono font-bold text-gray-400 uppercase leading-none mb-0.5 truncate">IN</span>
+                  <span className="text-[11px] sm:text-sm font-mono font-bold text-gray-800 truncate">{summary.in}</span>
                 </div>
-                <div className="flex flex-col min-w-[60px]">
-                  <span className="opacity-50">Tồn OUT</span>
-                  <span className={cn("text-lg", isActive ? "text-[#F27D26]" : "text-[#F27D26]/80")}>
+                <div className="flex flex-col min-w-0 border-x border-gray-200">
+                  <span className="text-[8px] sm:text-[10px] font-mono font-bold text-orange-600 uppercase leading-none mb-0.5 truncate">OUT</span>
+                  <span className={cn("text-[11px] sm:text-sm font-mono font-bold truncate", isActive ? "text-[#F27D26]" : "text-[#F27D26]/80")}>
                     {summary.out}
                   </span>
                 </div>
-                <div className="flex flex-col min-w-[60px]">
-                  <span className="text-red-500">Defect</span>
-                  <span className="text-lg text-red-600">
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[8px] sm:text-[10px] font-mono font-bold text-red-500 uppercase leading-none mb-0.5 truncate">LỖI</span>
+                  <span className="text-[11px] sm:text-sm font-mono font-bold text-red-600 truncate">
                     {summary.defect}
                   </span>
                 </div>
               </div>
-              <div className="mt-4 pt-4 border-t border-gray-50 flex items-center justify-between text-sm font-bold uppercase tracking-widest text-gray-600 group-hover:text-[#F27D26] transition-colors">
-                <span>{isActive ? 'Đang xem chi tiết' : 'Bấm để xem chi tiết'}</span>
-                <ChevronRight size={16} className={cn("transition-transform", isActive && "rotate-90")} />
+              <div className="mt-2 sm:mt-3 pt-1.5 sm:pt-2.5 border-t border-gray-100 flex items-center justify-between text-[10px] sm:text-xs font-bold uppercase tracking-wider text-gray-400 group-hover:text-[#F27D26] transition-colors">
+                <span className="truncate">{isActive ? 'Đang xem' : 'Chi tiết'}</span>
+                <ChevronRight size={13} className={cn("transition-transform shrink-0", isActive && "rotate-90 text-[#F27D26]")} />
               </div>
             </button>
           );
@@ -5464,28 +5470,28 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
             exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden"
           >
-            <div className="bg-white text-gray-900 rounded-2xl p-8 shadow-xl border border-gray-200">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
-                <div className="flex items-center gap-4">
-                  <div className="bg-[#F27D26] p-3 rounded-xl">
-                    <Package size={24} className="text-white" />
+            <div className="bg-white text-gray-900 rounded-xl sm:rounded-2xl p-3.5 sm:p-6 md:p-8 shadow-lg border border-gray-200">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 sm:gap-6 mb-4 sm:mb-8">
+                <div className="flex items-center gap-3">
+                  <div className="bg-[#F27D26] p-2 sm:p-3 rounded-xl shrink-0">
+                    <Package size={20} className="text-white sm:w-6 sm:h-6" />
                   </div>
-                  <div>
-                    <h2 className="text-4xl font-bold tracking-tight">Chi tiết tồn kho: {STAGES.find(s => s.id === selectedStageDetail)?.name}</h2>
-                    <p className="text-base font-mono opacity-80 uppercase tracking-widest text-gray-700">Phân rã theo từng mã linh kiện</p>
+                  <div className="min-w-0">
+                    <h2 className="text-base sm:text-2xl md:text-3xl font-bold tracking-tight truncate">Chi tiết tồn kho: {STAGES.find(s => s.id === selectedStageDetail)?.name}</h2>
+                    <p className="text-[11px] sm:text-sm font-mono opacity-80 uppercase tracking-wider text-gray-500">Phân rã theo từng mã linh kiện</p>
                   </div>
                 </div>
                 
-                <div className="flex items-center gap-4 w-full md:w-auto">
+                <div className="flex items-center gap-2 sm:gap-4 w-full md:w-auto">
                   <div className="relative flex-1 md:w-64">
                     <input 
                       type="text"
                       placeholder="Tìm linh kiện..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="w-full pl-12 pr-4 py-3 rounded-lg border border-gray-200 focus:border-[#F27D26] outline-none text-base"
+                      className="w-full pl-9 sm:pl-11 pr-3 py-2 sm:py-2.5 rounded-xl border border-gray-200 focus:border-[#F27D26] outline-none text-xs sm:text-sm"
                     />
-                    <Edit2 size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <Edit2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                   <button 
                     onClick={() => {
@@ -5493,29 +5499,30 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         setDefectModal({ partId: '', stageId: selectedStageDetail });
                       }
                     }}
-                    className="flex items-center gap-2 px-6 py-3 bg-red-50 text-red-600 rounded-xl border-2 border-red-100 font-bold uppercase tracking-widest hover:bg-red-100 transition-all shadow-sm active:scale-95"
+                    className="flex items-center justify-center gap-1.5 px-3 sm:px-5 py-2 sm:py-2.5 bg-red-50 text-red-600 rounded-xl border border-red-200 font-bold uppercase text-[11px] sm:text-xs tracking-wider hover:bg-red-100 transition-all shadow-2xs active:scale-95 shrink-0 cursor-pointer"
                   >
-                    <AlertCircle size={20} />
-                    <span>Báo lỗi nhanh (NG)</span>
+                    <AlertCircle size={15} />
+                    <span className="hidden sm:inline">Báo lỗi nhanh (NG)</span>
+                    <span className="sm:hidden">Báo lỗi</span>
                   </button>
                   <button 
                     onClick={() => { setSelectedStageDetail(null); setSearchTerm(''); }}
-                    className="p-2 hover:bg-gray-100 rounded-full transition-colors text-gray-400"
+                    className="p-1.5 sm:p-2 hover:bg-gray-100 rounded-full transition-colors text-gray-400 shrink-0 cursor-pointer"
                   >
-                    <X size={24} />
+                    <X size={20} />
                   </button>
                 </div>
               </div>
 
               {selectedStageDetail === 'DCLR' && (
-                <div className="mb-8 p-6 bg-red-50 border-2 border-red-200 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-6 shadow-sm animate-in fade-in slide-in-from-top-4 duration-500">
-                  <div className="flex items-center gap-4">
-                    <div className="bg-red-600 p-4 rounded-2xl text-white shadow-lg">
-                      <Trash2 size={32} />
+                <div className="mb-4 sm:mb-8 p-3.5 sm:p-6 bg-red-50 border border-red-200 rounded-xl sm:rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-3 sm:gap-6 shadow-2xs">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-red-600 p-2.5 sm:p-4 rounded-xl text-white shadow-sm shrink-0">
+                      <Trash2 size={22} className="sm:w-7 sm:h-7" />
                     </div>
                     <div>
-                      <h4 className="text-xl font-black text-red-700 uppercase italic">Xóa tất cả tồn kho DCLR OUT</h4>
-                      <p className="text-red-600 font-medium opacity-80">Hành động này sẽ xóa vĩnh viễn toàn bộ số lượng đang có tại kho OUT của DCLR.</p>
+                      <h4 className="text-sm sm:text-xl font-black text-red-700 uppercase italic">Xóa tất cả tồn kho DCLR OUT</h4>
+                      <p className="text-xs sm:text-sm text-red-600 font-medium opacity-80">Hành động này sẽ xóa vĩnh viễn toàn bộ số lượng đang có tại kho OUT của DCLR.</p>
                     </div>
                   </div>
                   <button 
@@ -5531,15 +5538,15 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         await customAlert('Mật khẩu không chính xác!');
                       }
                     }}
-                    className="px-8 py-4 bg-red-600 text-white rounded-xl font-black uppercase tracking-tighter hover:bg-black transition-all flex items-center gap-3 shadow-xl active:scale-95 group"
+                    className="w-full sm:w-auto px-4 sm:px-8 py-2.5 sm:py-3.5 bg-red-600 text-white rounded-xl font-black uppercase tracking-wider text-xs sm:text-sm hover:bg-black transition-all flex items-center justify-center gap-2 shadow-sm active:scale-95 group cursor-pointer"
                   >
-                    <Trash2 size={24} className="group-hover:rotate-12 transition-transform" />
-                    Xác nhận xóa hết
+                    <Trash2 size={16} className="group-hover:rotate-12 transition-transform" />
+                    <span>Xác nhận xóa hết</span>
                   </button>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-8">
                 {/* KHO_IN Detail */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between px-2">
@@ -5966,43 +5973,46 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         ) : null}
       </AnimatePresence>
 
-      <div className="bg-white p-8 rounded-2xl border border-gray-200 shadow-sm w-full">
+      <div className="bg-white p-3.5 sm:p-6 md:p-8 rounded-xl sm:rounded-2xl border border-gray-200 shadow-2xs w-full">
         {/* Chart Header & Tab Switcher */}
-        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4 pb-6 border-b border-gray-100">
-          <div className="flex items-center gap-2 p-1 bg-gray-100/90 rounded-xl border border-gray-200 max-w-full overflow-x-auto">
+        <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center mb-3 sm:mb-6 gap-3 sm:gap-4 pb-3 sm:pb-5 border-b border-gray-100">
+          <div className="flex items-center gap-1.5 p-1 bg-gray-100/90 rounded-xl border border-gray-200 max-w-full overflow-x-auto no-scrollbar shrink-0">
             <button
               onClick={() => setActiveChartTab('MECHANICAL')}
-              className={`px-4 py-2.5 rounded-lg text-xs md:text-sm font-bold uppercase tracking-wider transition-all whitespace-nowrap flex items-center gap-2 ${
+              className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs md:text-sm font-bold uppercase tracking-wider transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer active:scale-95 ${
                 activeChartTab === 'MECHANICAL'
                   ? 'bg-white text-indigo-700 shadow-sm border border-gray-200 font-black'
                   : 'text-gray-500 hover:text-indigo-600'
               }`}
             >
-              <span className={`w-2.5 h-2.5 rounded-full ${activeChartTab === 'MECHANICAL' ? 'bg-indigo-600' : 'bg-gray-300'}`} />
-              Biểu đồ năng suất lao động xưởng cơ khí
+              <span className={`w-2 sm:w-2.5 h-2 sm:h-2.5 rounded-full ${activeChartTab === 'MECHANICAL' ? 'bg-indigo-600' : 'bg-gray-300'}`} />
+              <span className="hidden sm:inline">Biểu đồ năng suất lao động xưởng cơ khí</span>
+              <span className="sm:hidden">NSLĐ Cơ Khí</span>
             </button>
             <button
               onClick={() => setActiveChartTab('STAGES')}
-              className={`px-4 py-2.5 rounded-lg text-xs md:text-sm font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+              className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs md:text-sm font-bold uppercase tracking-wider transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer active:scale-95 ${
                 activeChartTab === 'STAGES'
                   ? 'bg-white text-gray-900 shadow-sm border border-gray-200 font-black'
                   : 'text-gray-500 hover:text-gray-800'
               }`}
             >
-              Biểu đồ năng suất lao động của các công đoạn
+              <span className={`w-2 sm:w-2.5 h-2 sm:h-2.5 rounded-full ${activeChartTab === 'STAGES' ? 'bg-indigo-600' : 'bg-gray-300'}`} />
+              <span className="hidden sm:inline">Biểu đồ năng suất lao động của các công đoạn</span>
+              <span className="sm:hidden">NSLĐ Công Đoạn</span>
             </button>
           </div>
 
-          <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2 sm:gap-4 flex-wrap justify-between sm:justify-end">
             <button
               onClick={() => setShowExportHourlyModal(true)}
-              className="flex items-center gap-2 px-3.5 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl transition-colors text-xs font-bold uppercase border border-emerald-200"
+              className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl transition-all text-xs font-bold uppercase border border-emerald-200 shadow-2xs cursor-pointer active:scale-95"
             >
               <FileSpreadsheet size={15} />
-              XUẤT BÁO CÁO GIỜ
+              <span>XUẤT BÁO CÁO GIỜ</span>
             </button>
-            <div className="flex items-center gap-2.5 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-2 relative group">
-              <span className="text-xs font-bold uppercase opacity-60">Ngày:</span>
+            <div className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5 sm:py-2 relative group">
+              <span className="text-[11px] sm:text-xs font-bold uppercase text-gray-500">Ngày:</span>
               <input 
                 type="date"
                 min={getPastDateStr(35)}
@@ -6019,79 +6029,85 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         </div>
 
         {/* Legend area */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 flex-wrap">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4 mb-3 sm:mb-4 flex-wrap text-xs">
           {activeChartTab === 'STAGES' ? (
             <>
-              <div className="flex items-center gap-4 flex-wrap text-xs font-bold">
-                <span className="text-gray-400 uppercase text-[11px]">Sản lượng:</span>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3.5 h-3.5 rounded bg-[#3B82F6]" />
-                  <span className="text-gray-700 uppercase">Cắt Laser</span>
+              <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap text-xs font-bold">
+                <span className="text-gray-400 uppercase text-[10px] sm:text-[11px]">Sản lượng:</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 rounded bg-[#3B82F6]" />
+                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Laser</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3.5 h-3.5 rounded bg-[#9333EA]" />
-                  <span className="text-gray-700 uppercase">Chấn/Dập</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 rounded bg-[#9333EA]" />
+                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Chấn</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3.5 h-3.5 rounded bg-[#10B981]" />
-                  <span className="text-gray-700 uppercase">Hàn</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 rounded bg-[#10B981]" />
+                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Hàn</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3.5 h-3.5 rounded bg-[#EAB308]" />
-                  <span className="text-gray-700 uppercase">Sơn</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 rounded bg-[#EAB308]" />
+                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Sơn</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3.5 h-3.5 rounded bg-[#EF4444]" />
-                  <span className="text-gray-700 uppercase">Dán Kính</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 rounded bg-[#EF4444]" />
+                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Dán Kính</span>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3.5 flex-wrap text-xs font-mono font-black">
-                <span className="text-gray-400 uppercase text-[11px] font-sans font-bold">NSLĐ Công đoạn:</span>
-                <div className="flex items-center gap-1.5 text-[#9333EA]">
-                  <div className="w-3.5 h-1.5 rounded bg-[#9333EA]" />
-                  <span>Chấn/Dập</span>
+              <div className="flex items-center gap-2 sm:gap-3.5 flex-wrap text-[11px] sm:text-xs font-mono font-black">
+                <span className="text-gray-400 uppercase text-[10px] font-sans font-bold">NSLĐ:</span>
+                <div className="flex items-center gap-1 text-[#9333EA]">
+                  <div className="w-3 h-1 rounded bg-[#9333EA]" />
+                  <span>Chấn</span>
                 </div>
-                <div className="flex items-center gap-1.5 text-[#10B981]">
-                  <div className="w-3.5 h-1.5 rounded bg-[#10B981]" />
+                <div className="flex items-center gap-1 text-[#10B981]">
+                  <div className="w-3 h-1 rounded bg-[#10B981]" />
                   <span>Hàn</span>
                 </div>
-                <div className="flex items-center gap-1.5 text-[#CA8A04]">
-                  <div className="w-3.5 h-1.5 rounded bg-[#EAB308]" />
+                <div className="flex items-center gap-1 text-[#CA8A04]">
+                  <div className="w-3 h-1 rounded bg-[#EAB308]" />
                   <span>Sơn</span>
                 </div>
-                <div className="flex items-center gap-1.5 text-[#EF4444]">
-                  <div className="w-3.5 h-1.5 rounded bg-[#EF4444]" />
-                  <span>Dán Kính</span>
+                <div className="flex items-center gap-1 text-[#EF4444]">
+                  <div className="w-3 h-1 rounded bg-[#EF4444]" />
+                  <span>Dán</span>
                 </div>
               </div>
             </>
           ) : (
-            <div className="flex items-center gap-6 flex-wrap text-xs font-bold">
-              <div className="flex items-center gap-4 flex-wrap">
-                <span className="text-gray-400 uppercase text-[11px]">Sản lượng:</span>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3.5 h-3.5 rounded bg-[#E5A84B]" />
-                  <span className="text-gray-700 uppercase font-bold">Sơn</span>
+            <div className="flex items-center gap-3 sm:gap-6 flex-wrap text-xs font-bold">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-gray-400 uppercase text-[10px] sm:text-[11px]">Sản lượng:</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 rounded bg-[#E5A84B]" />
+                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Sơn</span>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3.5 h-3.5 rounded bg-[#E06A6A]" />
-                  <span className="text-gray-700 uppercase font-bold">Dán Kính</span>
+                <div className="flex items-center gap-1">
+                  <div className="w-3 h-3 rounded bg-[#E06A6A]" />
+                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Dán Kính</span>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2.5 bg-indigo-50/80 border border-indigo-200 px-3.5 py-1.5 rounded-xl">
-                <div className="w-4 h-2 rounded bg-[#4F46E5]" />
-                <span className="text-xs font-black uppercase text-indigo-700 tracking-wider">NSLĐ XƯỞNG CƠ KHÍ</span>
+              <div className="flex items-center gap-2 bg-indigo-50/80 border border-indigo-200 px-2.5 sm:px-3 py-1 rounded-xl">
+                <div className="w-3.5 h-1.5 rounded bg-[#4F46E5]" />
+                <span className="text-[11px] sm:text-xs font-black uppercase text-indigo-700 tracking-wider">NSLĐ XƯỞNG CƠ KHÍ</span>
               </div>
             </div>
           )}
         </div>
 
-        {/* Chart View */}
-        <div className="h-[520px] w-full mt-4 min-h-[520px] min-w-[300px] relative" style={{ minHeight: '520px', width: '100%' }}>
-          <ResponsiveContainer width="100%" height={520} minWidth={300} minHeight={520} debounce={50}>
-            <ComposedChart data={productionChartData} margin={{ top: 35, right: 35, left: -10, bottom: 20 }}>
+        {/* Chart View with horizontal scroll on mobile to view all 12 hours */}
+        <div className="w-full">
+          <div className="flex items-center justify-between sm:hidden text-[10px] text-gray-400 font-medium mb-1.5 px-0.5">
+            <span>📊 Biểu đồ chi tiết theo giờ</span>
+            <span>↔ Vuốt ngang xem đủ 12 khung giờ</span>
+          </div>
+          <div className="w-full overflow-x-auto no-scrollbar rounded-xl">
+            <div className="h-[380px] sm:h-[480px] md:h-[520px] min-w-[580px] sm:min-w-full relative" style={{ minHeight: '380px', width: '100%' }}>
+              <ResponsiveContainer width="100%" height="100%" minWidth={300} debounce={50}>
+                <ComposedChart data={productionChartData} margin={{ top: 25, right: 25, left: -15, bottom: 15 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
               <XAxis 
                 dataKey="name" 
@@ -6335,15 +6351,17 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           </ResponsiveContainer>
         </div>
       </div>
+    </div>
+  </div>
 
       <AnimatePresence>
         {showManualAddModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999]">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-[9999]">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative"
+              className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-8 max-w-md w-full shadow-2xl relative max-h-[90vh] overflow-y-auto no-scrollbar"
             >
               <button 
                 className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 cursor-pointer p-2 hover:bg-gray-100 rounded-full transition-colors" 
@@ -6441,12 +6459,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
       <AnimatePresence>
         {showExportModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999]">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-[9999]">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl p-8 max-w-xl w-full shadow-2xl relative"
+              className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-8 max-w-xl w-full shadow-2xl relative max-h-[90vh] overflow-y-auto no-scrollbar"
             >
               <button className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 cursor-pointer p-2 hover:bg-gray-100 rounded-full transition-colors" onClick={() => setShowExportModal(false)}>
                 <X size={20} />
@@ -6613,12 +6631,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
       <AnimatePresence>
         {showExportPreparationModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999]">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-[9999]">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl p-8 max-w-xl w-full shadow-2xl relative"
+              className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-8 max-w-xl w-full shadow-2xl relative max-h-[90vh] overflow-y-auto no-scrollbar"
             >
               <button className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 cursor-pointer p-2 hover:bg-gray-100 rounded-full transition-colors" onClick={() => setShowExportPreparationModal(false)}>
                 <X size={20} />
@@ -6739,47 +6757,47 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
       <AnimatePresence>
         {showExportHourlyModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999]">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 z-[9999]">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl relative"
+              className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-8 max-w-2xl w-full shadow-2xl relative max-h-[90vh] overflow-y-auto no-scrollbar"
             >
               <button className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 cursor-pointer p-2 hover:bg-gray-100 rounded-full transition-colors" onClick={() => setShowExportHourlyModal(false)}>
                 <X size={20} />
               </button>
-              <h2 className="text-2xl font-bold uppercase text-gray-900 mb-6 flex items-center gap-3">
+              <h2 className="text-xl sm:text-2xl font-bold uppercase text-gray-900 mb-4 sm:mb-6 flex items-center gap-2 sm:gap-3">
                 <FileSpreadsheet className="text-green-600" />
-                Dữ Liệu Giờ
+                <span>Dữ Liệu Giờ</span>
               </h2>
-              <div className="space-y-6">
+              <div className="space-y-4 sm:space-y-6">
                 <div>
-                  <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Ngày Xuất / Cập nhật số liệu</label>
+                  <label className="block text-xs sm:text-sm font-bold uppercase text-gray-600 mb-2">Ngày Xuất / Cập nhật số liệu</label>
                   <input 
                     type="date"
                     min={getPastDateStr(35)}
                     max={getPastDateStr(0)}
                     value={chartDate}
                     onChange={(e) => setChartDate(e.target.value)}
-                    className="w-full bg-gray-50 border border-gray-200 p-4 rounded-xl font-bold text-indigo-700 outline-none focus:border-indigo-500 font-mono cursor-pointer"
+                    className="w-full bg-gray-50 border border-gray-200 p-3 sm:p-4 rounded-xl font-bold text-indigo-700 outline-none focus:border-indigo-500 font-mono cursor-pointer text-sm sm:text-base"
                   />
                   <p className="text-[11px] text-emerald-600 mt-1.5 font-medium flex items-center gap-1.5">
                     <span>✨</span> Tự động kế thừa số người từ ngày gần nhất khi sang ngày mới. Chỉ cần chỉnh sửa các ô có thay đổi.
                   </p>
                 </div>
 
-                <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-bold uppercase text-amber-950 flex items-center gap-2">
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl sm:rounded-2xl p-3 sm:p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-2">
+                    <label className="text-xs sm:text-sm font-bold uppercase text-amber-950 flex items-center gap-1.5">
                       <Users size={16} className="text-amber-700" />
-                      Số Người Định Biên Của Từng Công Đoạn
+                      <span>Số Người Định Biên Của Từng Công Đoạn</span>
                     </label>
-                    <span className="text-[11px] font-medium text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-full">
+                    <span className="text-[10px] sm:text-[11px] font-medium text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-full self-start sm:self-auto">
                       Dùng tính năng lực sản xuất 8h
                     </span>
                   </div>
-                  <div className="grid grid-cols-5 gap-2.5 pt-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
                     <div className="bg-white border border-amber-200/80 rounded-xl p-2.5 text-center shadow-xs">
                       <label className="text-[10px] font-bold text-gray-500 uppercase leading-none block mb-1.5">Cắt Laser</label>
                       <input 
