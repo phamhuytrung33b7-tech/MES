@@ -4980,31 +4980,54 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   const [showExportPreparationModal, setShowExportPreparationModal] = useState(false);
   const [showExportHourlyModal, setShowExportHourlyModal] = useState(false);
   const [activeChartTab, setActiveChartTab] = useState<'MECHANICAL' | 'STAGES'>('MECHANICAL');
-  const [isChartReady, setIsChartReady] = useState(false);
+  const [chartDimensions, setChartDimensions] = useState<{ width: number; height: number } | null>(null);
   const chartWrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let active = true;
-    const checkDimensions = () => {
-      if (chartWrapperRef.current) {
-        const { clientWidth, clientHeight } = chartWrapperRef.current;
-        if (clientWidth > 0 && clientHeight > 0) {
-          if (active) setIsChartReady(true);
-          return;
-        }
-      }
-      if (active) {
-        requestAnimationFrame(() => {
-          if (active) setIsChartReady(true);
-        });
+    let cancelled = false;
+    let resizeObserver: ResizeObserver | null = null;
+
+    const measure = () => {
+      if (cancelled || !chartWrapperRef.current) return;
+      const el = chartWrapperRef.current;
+      const rect = el.getBoundingClientRect();
+      const w = Math.floor(rect.width || el.clientWidth || 0);
+      const h = Math.floor(rect.height || el.clientHeight || 0);
+
+      if (w > 0 && h > 0) {
+        setChartDimensions({ width: w, height: h });
       }
     };
 
-    // Ensure DOM paint and framer-motion transition have stabilized container dimensions
-    const timer = setTimeout(checkDimensions, 100);
+    // Delay initial measure slightly to allow CSS layout / animations to settle
+    const initialTimer = setTimeout(() => {
+      measure();
+    }, 50);
+
+    if (typeof ResizeObserver !== 'undefined' && chartWrapperRef.current) {
+      resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const w = Math.floor(entry.contentRect.width);
+          const h = Math.floor(entry.contentRect.height);
+          if (w > 0 && h > 0 && !cancelled) {
+            setChartDimensions({ width: w, height: h });
+          }
+        }
+      });
+      resizeObserver.observe(chartWrapperRef.current);
+    } else {
+      const interval = setInterval(measure, 150);
+      return () => {
+        cancelled = true;
+        clearTimeout(initialTimer);
+        clearInterval(interval);
+      };
+    }
+
     return () => {
-      active = false;
-      clearTimeout(timer);
+      cancelled = true;
+      clearTimeout(initialTimer);
+      if (resizeObserver) resizeObserver.disconnect();
     };
   }, [activeChartTab]);
 
@@ -6134,11 +6157,17 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           <div className="w-full overflow-x-auto no-scrollbar rounded-xl">
             <div 
               ref={chartWrapperRef}
-              className="w-full h-[450px] min-h-[300px] min-w-[580px] sm:min-w-full relative" 
-              style={{ minHeight: '300px', height: '450px', width: '100%' }}
+              className="w-full h-72 min-h-[300px] sm:h-[450px] min-w-[580px] sm:min-w-full relative" 
+              style={{ minHeight: '300px', width: '100%' }}
             >
-              {isChartReady ? (
-                <ResponsiveContainer width="100%" height={450} minHeight={300} minWidth={0} debounce={50}>
+              {chartDimensions && chartDimensions.width > 0 && chartDimensions.height > 0 ? (
+                <ResponsiveContainer 
+                  width="100%" 
+                  height={chartDimensions.height > 250 ? chartDimensions.height : 420} 
+                  minHeight={300} 
+                  minWidth={0} 
+                  debounce={50}
+                >
                   <ComposedChart data={productionChartData} margin={{ top: 25, right: 25, left: -15, bottom: 15 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
               <XAxis 
@@ -6382,10 +6411,10 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
             </ComposedChart>
           </ResponsiveContainer>
         ) : (
-          <div className="w-full h-[450px] min-h-[300px] flex items-center justify-center bg-gray-50/50 rounded-xl border border-dashed border-gray-200" style={{ minHeight: '300px', height: '450px' }}>
+          <div className="w-full h-72 min-h-[300px] sm:h-[450px] flex items-center justify-center bg-gray-50/50 rounded-xl border border-dashed border-gray-200" style={{ minHeight: '300px', width: '100%' }}>
             <div className="flex flex-col items-center gap-2 text-gray-400 font-bold text-xs">
               <span className="w-4 h-4 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
-              <span>Đang khởi tạo biểu đồ...</span>
+              <span>Đang tính toán kích thước biểu đồ...</span>
             </div>
           </div>
         )}
