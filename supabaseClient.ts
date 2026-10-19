@@ -49,12 +49,29 @@ export async function testSupabaseConnection(): Promise<{ ok: boolean; message: 
   }
 }
 
-export const SUPABASE_SQL_SCHEMA = `-- 1. Table: system_configs
+export const SUPABASE_SQL_SCHEMA = `-- 1. Table: system_configs (Lưu cấu hình hệ thống và cờ reset data_reset_version)
 CREATE TABLE IF NOT EXISTS public.system_configs (
     key VARCHAR(100) PRIMARY KEY,
     value JSONB NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Khởi tạo cờ data_reset_version ban đầu ('1.0.0')
+INSERT INTO public.system_configs (key, value)
+VALUES ('data_reset_version', '"1.0.0"'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- ==============================================================================
+-- QUY TRÌNH ADMIN LÀM SẠCH DỮ LIỆU (TRUNCATE) & KÍCH HOẠT XÓA CACHE CLIENT:
+-- 1) Xóa trắng dữ liệu giao dịch:
+--    TRUNCATE TABLE public.production_orders, public.wip_inventory, public.wip_transactions, public.glazing_plans, public.qr_labels;
+-- 2) Cập nhật phiên bản cờ reset sang version mới:
+--    INSERT INTO public.system_configs (key, value, updated_at)
+--    VALUES ('data_reset_version', to_jsonb(to_char(NOW(), 'YYYYMMDD_HH24MISS')), NOW())
+--    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
+-- -> Tất cả máy trạm mở app lên sẽ phát hiện cờ thay đổi, tự động xóa sạch LocalStorage
+--    và KHÔNG BAO GIỜ đẩy dữ liệu cũ lên Supabase!
+-- ==============================================================================
 
 -- 2. Table: production_orders
 CREATE TABLE IF NOT EXISTS public.production_orders (

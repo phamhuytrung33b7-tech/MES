@@ -4,12 +4,29 @@
 -- ==============================================================================
 
 -- 1. Table: system_configs
--- Stores system configurations, master parts, BOMs, productivity norms, shift configs, transformations
+-- Stores system configurations, master parts, BOMs, productivity norms, shift configs, transformations, and data_reset_version
 CREATE TABLE IF NOT EXISTS public.system_configs (
     key VARCHAR(100) PRIMARY KEY,
     value JSONB NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Khởi tạo cờ System Reset Flag: data_reset_version (mặc định '1.0.0')
+INSERT INTO public.system_configs (key, value)
+VALUES ('data_reset_version', '"1.0.0"'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- ==============================================================================
+-- QUY TRÌNH ADMIN LÀM SẠCH DỮ LIỆU (TRUNCATE) & KÍCH HOẠT XÓA CACHE CLIENT:
+-- 1) Xóa trắng dữ liệu giao dịch:
+--    TRUNCATE TABLE public.production_orders, public.wip_inventory, public.wip_transactions, public.glazing_plans, public.qr_labels;
+-- 2) Cập nhật phiên bản cờ reset sang version mới (ví dụ: dùng timestamp):
+--    INSERT INTO public.system_configs (key, value, updated_at)
+--    VALUES ('data_reset_version', to_jsonb(to_char(NOW(), 'YYYYMMDD_HH24MISS')), NOW())
+--    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
+-- -> Tất cả máy trạm mở app lên sẽ phát hiện cờ thay đổi, tự động xóa sạch LocalStorage
+--    và KHÔNG BAO GIỜ đẩy dữ liệu cũ lên Supabase!
+-- ==============================================================================
 
 -- 2. Table: production_orders
 -- Stores all Master POs and Sub-POs across all production stages

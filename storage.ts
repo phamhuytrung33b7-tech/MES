@@ -37,6 +37,7 @@ const STORAGE_KEYS = {
   LASER_HSQD: 'wip_laser_hsqd',
   STAGE_PLANNED_WORKERS: 'wip_stage_planned_workers',
   USERS: 'wip_users',
+  DATA_RESET_VERSION: 'data_reset_version',
 };
 
 // In-memory cache to eliminate redundant reads & preserve Free tier egress
@@ -4147,6 +4148,51 @@ export const storageService = {
     notifySyncChange();
 
     try {
+      // 0. KIỂM TRA CỜ RESET HỆ THỐNG (System Reset Flag: data_reset_version)
+      // Nếu Admin đã TRUNCATE/làm sạch DB trên Cloud, Admin cập nhật data_reset_version.
+      // Khi phát hiện version thay đổi, máy trạm PHẢI xóa sạch localStorage và KHÔNG ĐƯỢC push dữ liệu cũ lên Cloud.
+      const { data: resetRow, error: resetErr } = await supabase
+        .from('system_configs')
+        .select('value')
+        .eq('key', 'data_reset_version')
+        .maybeSingle();
+
+      if (!resetErr && resetRow && resetRow.value !== undefined && resetRow.value !== null) {
+        let remoteResetVersion = typeof resetRow.value === 'string'
+          ? resetRow.value
+          : (typeof resetRow.value === 'object' && resetRow.value.version
+              ? String(resetRow.value.version)
+              : JSON.stringify(resetRow.value));
+        remoteResetVersion = remoteResetVersion.replace(/^"|"$/g, '').trim();
+
+        const localResetVersion = localStorage.getItem(STORAGE_KEYS.DATA_RESET_VERSION);
+
+        if (!localResetVersion || localResetVersion !== remoteResetVersion) {
+          console.warn(`[Supabase Reset Flag] Phát hiện phiên bản reset mới từ Cloud: "${remoteResetVersion}" (Phiên bản máy trạm: "${localResetVersion}"). Tiến hành xóa sạch localStorage...`);
+
+          // Hủy bỏ mọi hàng đợi lưu pending để TUYỆT ĐỐI KHÔNG đẩy dữ liệu cũ lên Cloud
+          pendingConfigSaves.clear();
+          pendingPoSave = null;
+          pendingInvSave = null;
+          pendingTxs = [];
+          pendingGpSave = null;
+          pendingLabels = [];
+          if (configSaveTimer) { clearTimeout(configSaveTimer); configSaveTimer = null; }
+          if (poSaveTimer) { clearTimeout(poSaveTimer); poSaveTimer = null; }
+          if (invSaveTimer) { clearTimeout(invSaveTimer); invSaveTimer = null; }
+          if (txSaveTimer) { clearTimeout(txSaveTimer); txSaveTimer = null; }
+          if (gpSaveTimer) { clearTimeout(gpSaveTimer); gpSaveTimer = null; }
+          if (labelSaveTimer) { clearTimeout(labelSaveTimer); labelSaveTimer = null; }
+
+          // Xóa sạch LocalStorage trên máy trạm
+          localStorage.clear();
+          clearCache();
+
+          // Lưu lại cờ phiên bản reset mới
+          localStorage.setItem(STORAGE_KEYS.DATA_RESET_VERSION, remoteResetVersion);
+        }
+      }
+
       // 1. Fetch system_configs (only key, value columns)
       const { data: configRows, error: configErr } = await supabase
         .from('system_configs')
@@ -4173,7 +4219,7 @@ export const storageService = {
         });
       }
 
-      // 2. Fetch active production_orders (selective columns only)
+      // 2. Fetch active production_orders (selective columns only) - PULL ONLY, DO NOT AUTO-PUSH
       const { data: poRows, error: poErr } = await supabase
         .from('production_orders')
         .select('id, master_po_id, part_id, stage_id, target_quantity, produced_quantity, exported_quantity, status, created_at, completed_at, planned_start_time, lead_time, expected_completion_time, note, is_odd_po, excel_required_date');
@@ -4198,47 +4244,20 @@ export const storageService = {
           excelRequiredDate: r.excel_required_date ? Number(r.excel_required_date) : undefined
         }));
 
-        const localPos: ProductionOrder[] = cache[STORAGE_KEYS.PRODUCTION_ORDERS] || this.getProductionOrders();
-        const poMap = new Map<string, ProductionOrder>();
-
-        // 1. Put remote POs into map
-        remotePos.forEach(p => poMap.set(p.id, p));
-
-        // 2. Preserve any local POs that are missing on remote or have local updates
-        const unsyncedPos: ProductionOrder[] = [];
-        localPos.forEach(lp => {
-          const rp = poMap.get(lp.id);
-          if (!rp) {
-            poMap.set(lp.id, lp);
-            unsyncedPos.push(lp);
-          } else {
-            // Keep local version if local has higher progress
-            if ((lp.producedQuantity || 0) > (rp.producedQuantity || 0) || (lp.exportedQuantity || 0) > (rp.exportedQuantity || 0)) {
-              poMap.set(lp.id, lp);
-              unsyncedPos.push(lp);
-            }
-          }
-        });
-
-        const mergedPos = Array.from(poMap.values());
-        const validPos = this.filterExpiredCompletedPOs(mergedPos);
+        // Ghi đè vào cache và localStorage từ Cloud (Source of Truth)
+        const validPos = this.filterExpiredCompletedPOs(remotePos);
         cache[STORAGE_KEYS.PRODUCTION_ORDERS] = validPos;
         try {
           localStorage.setItem(STORAGE_KEYS.PRODUCTION_ORDERS, JSON.stringify(validPos));
         } catch {}
-
-        // Re-persist unsynced local POs to Supabase automatically
-        if (unsyncedPos.length > 0) {
-          persistProductionOrdersToSupabase(unsyncedPos);
-        }
       }
 
-      // 3. Fetch wip_inventory (selective columns)
+      // 3. Fetch wip_inventory (selective columns) - PULL ONLY
       const { data: invRows, error: invErr } = await supabase
         .from('wip_inventory')
         .select('part_id, original_part_id, stage_id, location, quantity');
 
-      if (!invErr && invRows && invRows.length > 0) {
+      if (!invErr && invRows) {
         const inv: InventoryItem[] = invRows.map((r: any) => ({
           partId: r.part_id,
           originalPartId: r.original_part_id || undefined,
@@ -4252,7 +4271,7 @@ export const storageService = {
         } catch {}
       }
 
-      // 4. Fetch wip_transactions (only within 35 days, selective columns)
+      // 4. Fetch wip_transactions (only within 35 days, selective columns) - PULL ONLY
       const cutoff35d = Date.now() - 35 * 24 * 60 * 60 * 1000;
       const { data: txRows, error: txErr } = await supabase
         .from('wip_transactions')
@@ -4260,7 +4279,7 @@ export const storageService = {
         .gte('timestamp', cutoff35d)
         .order('timestamp', { ascending: false });
 
-      if (!txErr && txRows && txRows.length > 0) {
+      if (!txErr && txRows) {
         const txs: Transaction[] = txRows.map((r: any) => ({
           id: r.id,
           type: r.type,
@@ -4287,13 +4306,13 @@ export const storageService = {
         } catch {}
       }
 
-      // 5. Fetch glazing_plans
+      // 5. Fetch glazing_plans - PULL ONLY
       const { data: gpRows, error: gpErr } = await supabase
         .from('glazing_plans')
         .select('id, model_id, target_quantity, target_completion_time, planned_start_time, expected_completion_time, created_at, status, produced_quantities, note, excel_required_date')
         .order('created_at', { ascending: false });
 
-      if (!gpErr && gpRows && gpRows.length > 0) {
+      if (!gpErr && gpRows) {
         const plans: import('./types').GlazingPlan[] = gpRows.map((r: any) => ({
           id: r.id,
           modelId: r.model_id,
@@ -4313,7 +4332,7 @@ export const storageService = {
         } catch {}
       }
 
-      // 6. Fetch qr_labels (last 24 hours)
+      // 6. Fetch qr_labels (last 24 hours) - PULL ONLY
       const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
       const { data: qrRows, error: qrErr } = await supabase
         .from('qr_labels')
@@ -4321,7 +4340,7 @@ export const storageService = {
         .gte('timestamp', cutoff24h)
         .order('timestamp', { ascending: false });
 
-      if (!qrErr && qrRows && qrRows.length > 0) {
+      if (!qrErr && qrRows) {
         const labels: Transaction[] = qrRows.map((r: any) => {
           if (r.metadata && typeof r.metadata === 'object' && r.metadata.id) {
             return r.metadata;
@@ -4342,13 +4361,7 @@ export const storageService = {
         } catch {}
       }
 
-      // If Supabase tables are freshly created and empty, but localStorage has data, auto-migrate to Supabase!
-      const isOnlineEmpty = (!configRows || configRows.length === 0) && (!poRows || poRows.length === 0);
-      const hasLocalData = (localStorage.getItem(STORAGE_KEYS.PARTS) || localStorage.getItem(STORAGE_KEYS.PRODUCTION_ORDERS));
-      if (isOnlineEmpty && hasLocalData) {
-        this.syncLocalToSupabase().catch(e => quietWarn('initialSeed', 'Initial seed error:', e));
-      }
-
+      // Cập nhật trạng thái hoàn thành PULL
       lastSyncTime = Date.now();
       isSyncing = false;
       syncError = null;
@@ -4483,21 +4496,20 @@ export const storageService = {
 
   async resetAllData() {
     clearCache();
+    const newVersion = `reset_${Date.now()}`;
     if (typeof window !== 'undefined' && window.localStorage) {
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && (k.startsWith('wip_') || Object.values(STORAGE_KEYS).includes(k) || k === 'wip_labels')) {
-          keysToRemove.push(k);
-        }
-      }
-      keysToRemove.forEach(k => localStorage.removeItem(k));
+      localStorage.clear();
+      localStorage.setItem(STORAGE_KEYS.DATA_RESET_VERSION, newVersion);
     }
 
     if (isSupabaseConfigured) {
       try {
         await Promise.allSettled([
-          supabase.from('system_configs').delete().neq('key', ''),
+          supabase.from('system_configs').upsert({
+            key: 'data_reset_version',
+            value: newVersion,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'key' }),
           supabase.from('production_orders').delete().neq('id', ''),
           supabase.from('wip_inventory').delete().neq('id', ''),
           supabase.from('wip_transactions').delete().neq('id', ''),
