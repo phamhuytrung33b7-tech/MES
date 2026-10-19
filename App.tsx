@@ -6134,11 +6134,11 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           <div className="w-full overflow-x-auto no-scrollbar rounded-xl">
             <div 
               ref={chartWrapperRef}
-              className="h-[380px] sm:h-[480px] md:h-[520px] min-h-[380px] min-w-[580px] sm:min-w-full relative" 
-              style={{ minHeight: '380px', height: '480px', width: '100%' }}
+              className="w-full h-[450px] min-h-[300px] min-w-[580px] sm:min-w-full relative" 
+              style={{ minHeight: '300px', height: '450px', width: '100%' }}
             >
               {isChartReady ? (
-                <ResponsiveContainer width="100%" height={450} minHeight={350} minWidth={300} debounce={50}>
+                <ResponsiveContainer width="100%" height={450} minHeight={300} minWidth={0} debounce={50}>
                   <ComposedChart data={productionChartData} margin={{ top: 25, right: 25, left: -15, bottom: 15 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
               <XAxis 
@@ -6382,7 +6382,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
             </ComposedChart>
           </ResponsiveContainer>
         ) : (
-          <div className="w-full h-[450px] min-h-[350px] flex items-center justify-center bg-gray-50/50 rounded-xl border border-dashed border-gray-200">
+          <div className="w-full h-[450px] min-h-[300px] flex items-center justify-center bg-gray-50/50 rounded-xl border border-dashed border-gray-200" style={{ minHeight: '300px', height: '450px' }}>
             <div className="flex flex-col items-center gap-2 text-gray-400 font-bold text-xs">
               <span className="w-4 h-4 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin" />
               <span>Đang khởi tạo biểu đồ...</span>
