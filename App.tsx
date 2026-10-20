@@ -79,7 +79,7 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { STAGES, INITIAL_PARTS, StageId, Part, InventoryItem, Transaction, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, DEFECT_REASONS, StagePlannedWorkers, UserAccount, View } from './types';
+import { STAGES, INITIAL_PARTS, StageId, Part, InventoryItem, Transaction, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, DEFECT_REASONS, StagePlannedWorkers, UserAccount, View, getUserDefaultStage } from './types';
 import { storageService } from './storage';
 import { SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection, isSupabaseConfigured } from './supabaseClient';
 import { exportPreparationReport } from './exportPreparationReport';
@@ -810,8 +810,8 @@ export default function App() {
   const [labels, setLabels] = useState<Transaction[]>([]);
   const [parts, setParts] = useState<Part[]>([]);
   const [productionOrders, setProductionOrders] = useState<ProductionOrder[]>([]);
-  const [selectedStage, setSelectedStage] = useState<StageId>(STAGES[0].id);
-  const [scanStage, setScanStage] = useState<StageId>(STAGES.find(s => s.id !== 'LASER')?.id || STAGES[0].id);
+  const [selectedStage, setSelectedStage] = useState<StageId>(() => getUserDefaultStage(storageService.getCurrentUser()));
+  const [scanStage, setScanStage] = useState<StageId>(() => getUserDefaultStage(storageService.getCurrentUser()));
   const [selectedPart, setSelectedPart] = useState<string>('');
   const [quantity, setQuantity] = useState<number>(0);
   const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
@@ -847,6 +847,28 @@ export default function App() {
     }
   }, [currentUser, currentView, canAccessView]);
 
+  // Tự động chọn sẵn công đoạn theo phân quyền tài khoản khi đăng nhập / chuyển đổi user
+  useEffect(() => {
+    if (currentUser) {
+      const defaultStage = getUserDefaultStage(currentUser);
+      setSelectedStage(defaultStage);
+      setScanStage(defaultStage);
+    }
+  }, [currentUser]);
+
+  // Khi người dùng chuyển sang tab Xuất kho (produce) hoặc Nhập kho (inbound):
+  // Tự động thiết lập sẵn công đoạn theo phân quyền user
+  useEffect(() => {
+    if (currentUser) {
+      const defaultStage = getUserDefaultStage(currentUser);
+      if (currentView === 'produce') {
+        setSelectedStage(defaultStage);
+      } else if (currentView === 'inbound') {
+        setScanStage(defaultStage);
+      }
+    }
+  }, [currentView, currentUser]);
+
   const handleLogout = () => {
     storageService.setCurrentUser(null);
     setCurrentUser(null);
@@ -858,6 +880,9 @@ export default function App() {
     setCurrentUser(user);
     setShowLoginModal(false);
     setShowUserDropdown(false);
+    const defaultStage = getUserDefaultStage(user);
+    setSelectedStage(defaultStage);
+    setScanStage(defaultStage);
     const firstAllowed = user.role === 'ADMIN' ? 'dashboard' : (user.allowedViews?.[0] || 'dashboard');
     setCurrentView(firstAllowed);
     setSuccess(`Xin chào, ${user.fullName || user.username}!`);
@@ -10892,7 +10917,7 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
                 onChange={(e) => setSelectedStage(e.target.value as StageId)}
                 className="w-full p-3.5 sm:p-5 rounded-xl border-2 border-gray-100 font-bold text-sm sm:text-lg focus:border-blue-600 outline-none bg-white cursor-pointer"
               >
-                {STAGES.filter(s => s.id !== 'LASER').map(stage => (
+                {STAGES.map(stage => (
                   <option key={stage.id} value={stage.id}>{stage.name}</option>
                 ))}
               </select>

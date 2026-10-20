@@ -225,11 +225,41 @@ export interface UserAccount {
   password?: string;
   fullName: string;
   role: UserRole;
+  defaultStage?: StageId; // Công đoạn phụ trách / mặc định (Cắt Laser, Chấn/Dập, Hàn, Sơn, DCLR, Dán kính)
   allowedViews: View[];
   canApproveOddPO?: boolean;
   isActive: boolean;
   createdAt: number;
   lastLoginAt?: number;
+}
+
+/**
+ * Lấy công đoạn mặc định của tài khoản theo phân quyền / cài đặt
+ * Tự động nhận diện nếu user đã chọn defaultStage, hoặc thông minh suy đoán từ username/họ tên
+ */
+export function getUserDefaultStage(user: UserAccount | null | undefined): StageId {
+  if (!user) return 'LASER';
+  if (user.defaultStage && STAGES.some(s => s.id === user.defaultStage)) {
+    return user.defaultStage;
+  }
+  
+  // Tự động phân tích tên người dùng / họ tên nếu chưa cài đặt thủ công
+  const text = `${user.username || ''} ${user.fullName || ''}`.toLowerCase();
+  if (text.includes('laser')) return 'LASER';
+  if (text.includes('chan') || text.includes('chấn') || text.includes('dap') || text.includes('dập') || text.includes('bending')) return 'BENDING';
+  if (text.includes('han') || text.includes('hàn') || text.includes('weld')) return 'WELDING';
+  if (text.includes('son') || text.includes('sơn') || text.includes('paint')) return 'PAINTING';
+  if (text.includes('dclr') || text.includes('rap') || text.includes('ráp') || text.includes('assembly')) return 'DCLR';
+  if (text.includes('kinh') || text.includes('kính') || text.includes('glazing')) return 'GLAZING';
+
+  // Kiểm tra quyền allowedViews nếu user chỉ có 1 vài tab đặc thù
+  if (user.allowedViews) {
+    if (user.allowedViews.includes('laser_inbound') && !user.allowedViews.includes('welding_inbound')) return 'LASER';
+    if (user.allowedViews.includes('welding_inbound') && !user.allowedViews.includes('laser_inbound')) return 'WELDING';
+    if (user.allowedViews.includes('glazing') && user.allowedViews.length <= 4) return 'GLAZING';
+  }
+
+  return 'LASER';
 }
 
 export interface TabPermissionConfig {

@@ -37,7 +37,7 @@ import {
   Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { UserAccount, UserRole, View, AVAILABLE_TABS, TabPermissionConfig } from './types';
+import { UserAccount, UserRole, View, AVAILABLE_TABS, TabPermissionConfig, StageId, STAGES, getUserDefaultStage } from './types';
 import { storageService } from './storage';
 
 interface UserManagementViewProps {
@@ -298,36 +298,49 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
                         </div>
                       </td>
 
-                      {/* Role Badge */}
+                      {/* Role & Stage Badge */}
                       <td className="py-4 px-4 whitespace-nowrap">
-                        {user.role === 'ADMIN' ? (
-                          <div className="flex flex-col gap-1">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-orange-50 text-orange-700 border border-orange-200 w-fit">
-                              <ShieldCheck size={14} className="text-orange-600" />
-                              Quản trị viên
-                            </span>
-                            <span className="text-[10px] text-emerald-700 font-bold">
-                              ✓ Toàn quyền duyệt PO lẻ
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="flex flex-col gap-1">
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 w-fit">
-                              <UserCheck size={14} className="text-blue-600" />
-                              Nhân viên
-                            </span>
-                            {user.canApproveOddPO ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 w-fit">
-                                <ShieldCheck size={11} className="text-amber-600" />
-                                Có quyền duyệt PO lẻ
+                        <div className="flex flex-col gap-1.5">
+                          {user.role === 'ADMIN' ? (
+                            <div className="flex flex-col gap-1">
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-orange-50 text-orange-700 border border-orange-200 w-fit">
+                                <ShieldCheck size={14} className="text-orange-600" />
+                                Quản trị viên
                               </span>
-                            ) : (
-                              <span className="text-[10px] text-gray-400">
-                                Chỉ được tạo (Chờ duyệt)
+                              <span className="text-[10px] text-emerald-700 font-bold">
+                                ✓ Toàn quyền duyệt PO lẻ
                               </span>
-                            )}
-                          </div>
-                        )}
+                            </div>
+                          ) : (
+                            <div className="flex flex-col gap-1">
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 w-fit">
+                                <UserCheck size={14} className="text-blue-600" />
+                                Nhân viên
+                              </span>
+                              {user.canApproveOddPO ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 w-fit">
+                                  <ShieldCheck size={11} className="text-amber-600" />
+                                  Có quyền duyệt PO lẻ
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-gray-400">
+                                  Chỉ được tạo (Chờ duyệt)
+                                </span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Stage assignment badge */}
+                          {user.defaultStage ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 w-fit">
+                              🎯 {STAGES.find(s => s.id === user.defaultStage)?.name || user.defaultStage}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-gray-500 bg-gray-100 border border-gray-200 w-fit">
+                              Tự do ({STAGES.find(s => s.id === getUserDefaultStage(user))?.name || 'Cắt Laser'})
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Allowed Views */}
@@ -521,6 +534,7 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
   const [password, setPassword] = useState(initialData?.password || '');
   const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState<UserRole>(initialData?.role || 'USER');
+  const [defaultStage, setDefaultStage] = useState<StageId | 'ALL'>(initialData?.defaultStage || 'ALL');
   const [isActive, setIsActive] = useState<boolean>(initialData?.isActive ?? true);
   const [canApproveOddPO, setCanApproveOddPO] = useState<boolean>(initialData?.canApproveOddPO ?? false);
   const [allowedViews, setAllowedViews] = useState<View[]>(() => {
@@ -569,6 +583,7 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
       fullName: fullName.trim() || username.trim(),
       password: password.trim(),
       role,
+      defaultStage: defaultStage === 'ALL' ? undefined : (defaultStage as StageId),
       allowedViews: role === 'ADMIN' ? AVAILABLE_TABS.map(t => t.key) : allowedViews,
       canApproveOddPO: role === 'ADMIN' ? true : canApproveOddPO,
       isActive,
@@ -681,6 +696,28 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
                 <option value="USER">Nhân viên (Chỉ xem các tab được cấp quyền)</option>
                 <option value="ADMIN">Quản trị viên (Toàn quyền hệ thống + Quản lý User)</option>
               </select>
+            </div>
+
+            {/* Công đoạn phụ trách (Mặc định tự chọn khi Xuất kho / Nhập kho) */}
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-bold text-blue-900 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                <span>🎯 Công đoạn phụ trách (Tự động chọn khi Xuất kho & Nhập kho)</span>
+              </label>
+              <select
+                value={defaultStage}
+                onChange={(e) => setDefaultStage(e.target.value as any)}
+                className="w-full px-3.5 py-2.5 bg-blue-50/50 border border-blue-200 rounded-xl text-sm font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              >
+                <option value="ALL">-- Tự do / Tất cả công đoạn (Mặc định: Cắt Laser) --</option>
+                {STAGES.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.id})
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-500 mt-1">
+                Khi tài khoản này đăng nhập và mở màn hình <b>Xuất kho</b> (ảnh 1) hoặc <b>Nhập kho</b> (ảnh 2), hệ thống sẽ tự động chọn sẵn đúng công đoạn được phân quyền này.
+              </p>
             </div>
           </div>
 
