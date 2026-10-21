@@ -8852,9 +8852,16 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
   const remainingProduce = total - produced;
   const remainingPrint = produced - printed;
 
-  const [producedInputQty, setProducedInputQty] = useState(remainingProduce > 0 ? remainingProduce : 1);
-  const [printInputQty, setPrintInputQty] = useState(remainingPrint > 0 ? remainingPrint : 1);
+  // Bắt buộc để trống, không được đề xuất số sẵn (người dùng phải bấm vào tự điền)
+  const [producedInputQty, setProducedInputQty] = useState<number | ''>('');
+  const [printInputQty, setPrintInputQty] = useState<number | ''>('');
   const [timeSlot, setTimeSlot] = useState<string>('');
+
+  // Luôn reset về trống khi thay đổi kế hoạch hoặc linh kiện
+  useEffect(() => {
+    setProducedInputQty('');
+    setPrintInputQty('');
+  }, [plan.id, norm.id]);
 
   const timeSlots = [
     { label: '6h-8h', start: 6, end: 8 },
@@ -8868,8 +8875,14 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
 
   const progress = Math.min(100, (produced / total) * 100);
 
+  const numProduced = typeof producedInputQty === 'number' ? producedInputQty : 0;
+  const isProduceDisabled = produced >= total || producedInputQty === '' || numProduced <= 0 || numProduced > remainingProduce;
+
+  const numPrint = typeof printInputQty === 'number' ? printInputQty : 0;
+  const isPrintDisabled = produced === 0 || printed >= produced || printInputQty === '' || numPrint <= 0 || numPrint > remainingPrint;
+
   return (
-    <div key={`${norm.id}-${idx}`} className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-3xl shadow-sm sm:shadow-xl border border-gray-100 flex flex-col gap-3.5 sm:gap-6 group hover:shadow-md transition-all">
+    <div key={`${plan.id}-${norm.id}-${idx}`} className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-3xl shadow-sm sm:shadow-xl border border-gray-100 flex flex-col gap-3.5 sm:gap-6 group hover:shadow-md transition-all">
       <div className="flex justify-between items-start gap-2">
         <div className="space-y-0.5 sm:space-y-1 min-w-0">
           <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">{norm.id}</span>
@@ -8916,30 +8929,40 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                     <select
                       value={timeSlot}
                       onChange={(e) => setTimeSlot(e.target.value)}
-                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-1.5 sm:py-2 font-bold text-gray-700 outline-none transition-all text-xs"
+                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-1.5 sm:py-2 font-bold text-gray-700 outline-none transition-all text-xs cursor-pointer"
                     >
                       <option value="">-- Hiện tại --</option>
                       {timeSlots.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
                     </select>
                   </div>
                   <div>
-                    <span className="text-[10px] font-bold text-gray-400 uppercase block mb-1">SL Đã Làm</span>
+                    <span className="text-[10px] font-bold text-gray-700 uppercase block mb-1">
+                      SL Đã Làm <span className="text-red-500">*</span>
+                    </span>
                     <input 
                       type="number"
                       min="1"
                       max={remainingProduce}
-                      value={producedInputQty}
+                      value={producedInputQty === '' ? '' : producedInputQty}
                       onChange={(e) => {
-                          const val = parseInt(e.target.value) || 0;
-                          setProducedInputQty(val);
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            setProducedInputQty('');
+                          } else {
+                            const val = parseInt(raw);
+                            setProducedInputQty(isNaN(val) ? '' : val);
+                          }
                       }}
-                      className="w-full bg-white border border-gray-200 rounded-xl px-2 py-1.5 sm:py-2 font-black text-blue-700 outline-none transition-all text-xs"
+                      placeholder="Bắt buộc điền..."
+                      autoComplete="off"
+                      className="w-full bg-white border border-gray-300 focus:border-blue-500 rounded-xl px-2.5 py-1.5 sm:py-2 font-black text-blue-700 outline-none transition-all text-xs placeholder:font-normal placeholder:text-gray-400 placeholder:italic"
                     />
                   </div>
               </div>
               <button 
-                disabled={produced >= total || producedInputQty <= 0 || producedInputQty > remainingProduce}
+                disabled={isProduceDisabled}
                 onClick={() => {
+                  if (isProduceDisabled) return;
                   let timestamp = Date.now();
                   if (timeSlot) {
                       const slot = timeSlots.find(s => s.label === timeSlot);
@@ -8949,12 +8972,13 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                           timestamp = d.getTime();
                       }
                   }
-                  onRecordProduction(producedInputQty, timestamp);
-                  setProducedInputQty(1);
+                  onRecordProduction(numProduced, timestamp);
+                  // Không để số sẵn sau khi lưu: reset về trống
+                  setProducedInputQty('');
                 }}
                 className={cn(
                   "h-9 sm:h-10 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all font-bold uppercase text-xs tracking-tight shadow-sm active:scale-95 cursor-pointer",
-                  (produced >= total || producedInputQty <= 0 || producedInputQty > remainingProduce)
+                  isProduceDisabled
                     ? "bg-gray-200 text-gray-400 cursor-not-allowed"
                     : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-500/20"
                 )}
@@ -8972,27 +8996,40 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
               </div>
               <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2 sm:gap-4">
                   <div className="flex-1">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Số lượng IN</span>
+                    <span className="text-[10px] font-bold text-gray-700 uppercase block mb-1">
+                      Số lượng IN <span className="text-red-500">*</span>
+                    </span>
                     <input 
                       type="number"
                       min="1"
                       max={remainingPrint}
-                      value={printInputQty}
-                      onChange={(e) => setPrintInputQty(parseInt(e.target.value) || 0)}
-                      className="w-full bg-white border border-gray-200 rounded-xl px-2.5 py-1.5 sm:py-2 font-black text-green-700 outline-none transition-all text-xs sm:text-sm"
+                      value={printInputQty === '' ? '' : printInputQty}
+                      onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') {
+                            setPrintInputQty('');
+                          } else {
+                            const val = parseInt(raw);
+                            setPrintInputQty(isNaN(val) ? '' : val);
+                          }
+                      }}
+                      placeholder="Bắt buộc điền..."
+                      autoComplete="off"
+                      className="w-full bg-white border border-gray-300 focus:border-green-500 rounded-xl px-2.5 py-1.5 sm:py-2 font-black text-green-700 outline-none transition-all text-xs sm:text-sm placeholder:font-normal placeholder:text-gray-400 placeholder:italic"
                     />
                   </div>
                   <button 
-                    disabled={produced === 0 || printed >= produced || printInputQty <= 0 || printInputQty > remainingPrint}
+                    disabled={isPrintDisabled}
                     onClick={() => {
+                      if (isPrintDisabled) return;
                       const txId = `GLZ-${Date.now()}-${norm.id}`;
-                      const formatQR = `${norm.id}|${printInputQty}|GLAZING|${Date.now()}|${txId}|DCLR|${norm.id}|||`;
+                      const formatQR = `${norm.id}|${numPrint}|GLAZING|${Date.now()}|${txId}|DCLR|${norm.id}|||`;
                       
                       const labelTx: import('./types').Transaction = {
                         id: txId,
                         partId: norm.id,
                         partName: norm.partName,
-                        quantity: printInputQty,
+                        quantity: numPrint,
                         type: 'STAGE_OUT',
                         stageId: 'GLAZING',
                         targetStageId: 'DCLR',
@@ -9003,12 +9040,13 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                         kpiRecorded: true
                       };
                       
-                      onPrint(labelTx, printInputQty);
-                      setPrintInputQty(1);
+                      onPrint(labelTx, numPrint);
+                      // Không để số sẵn sau khi in: reset về trống
+                      setPrintInputQty('');
                     }}
                     className={cn(
                       "h-9 sm:h-11 px-4 sm:px-6 rounded-xl flex items-center justify-center gap-1.5 transition-all font-bold uppercase text-xs tracking-tight shadow-md active:scale-95 cursor-pointer",
-                      (produced === 0 || printed >= produced || printInputQty <= 0 || printInputQty > remainingPrint)
+                      isPrintDisabled
                         ? "bg-gray-200 text-gray-400 cursor-not-allowed"
                         : "bg-green-600 text-white hover:bg-green-700 shadow-green-500/20"
                     )}
@@ -10016,7 +10054,7 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                     const plan = glazingPlans.find(p => p.id === selectedPlanIdForPrint)!;
                     return (
                       <GlazingComponentPrintCard
-                        key={`${norm.id}-${idx}`}
+                        key={`${plan.id}-${norm.id}-${idx}`}
                         norm={norm}
                         plan={plan}
                         idx={idx}
@@ -10976,9 +11014,8 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
           onClose={() => setIsCameraOpen(false)}
           onScan={(qr) => {
             processQrCodeInput(qr);
-            setIsCameraOpen(false);
           }}
-          title="Quét mã QR Nhập kho"
+          title={`Quét mã Nhập kho (${STAGES.find(s => s.id === selectedStage)?.name || selectedStage})`}
         />
       </div>
 
