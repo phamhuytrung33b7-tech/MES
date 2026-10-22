@@ -35,6 +35,7 @@ const STORAGE_KEYS = {
   HOURLY_PEOPLE_WELDING: 'wip_hourly_people_welding',
   BENDING_WELDING_HSQD: 'wip_bending_welding_hsqd',
   LASER_HSQD: 'wip_laser_hsqd',
+  GLAZING_STAGE_HSQD: 'wip_glazing_stage_hsqd',
   STAGE_PLANNED_WORKERS: 'wip_stage_planned_workers',
   USERS: 'wip_users',
   DATA_RESET_VERSION: 'data_reset_version',
@@ -1212,6 +1213,19 @@ export const storageService = {
     localStorage.setItem(STORAGE_KEYS.LASER_HSQD, JSON.stringify(data));
     cache[STORAGE_KEYS.LASER_HSQD] = data;
     queueConfigPersist(STORAGE_KEYS.LASER_HSQD, data);
+  },
+
+  getGlazingStageHSQD(): { partId: string; partName?: string; hsqd: number }[] {
+    return getCached(STORAGE_KEYS.GLAZING_STAGE_HSQD, () => {
+      const data = localStorage.getItem(STORAGE_KEYS.GLAZING_STAGE_HSQD);
+      return data ? JSON.parse(data) : [];
+    });
+  },
+
+  saveGlazingStageHSQD(data: { partId: string; partName?: string; hsqd: number }[]) {
+    localStorage.setItem(STORAGE_KEYS.GLAZING_STAGE_HSQD, JSON.stringify(data));
+    cache[STORAGE_KEYS.GLAZING_STAGE_HSQD] = data;
+    queueConfigPersist(STORAGE_KEYS.GLAZING_STAGE_HSQD, data);
   },
 
   createGlazingPlan(modelId: string, quantity: number, targetCompletion: number, note?: string, excelRequiredDate?: number, customId?: string) {
@@ -4411,6 +4425,7 @@ export const storageService = {
         STORAGE_KEYS.STAGE_PLANNED_WORKERS,
         STORAGE_KEYS.BENDING_WELDING_HSQD,
         STORAGE_KEYS.LASER_HSQD,
+        STORAGE_KEYS.GLAZING_STAGE_HSQD,
         STORAGE_KEYS.PEOPLE_PER_DAY,
         STORAGE_KEYS.MANDAYS_PER_DAY,
         STORAGE_KEYS.EXPORT_WEEK_NAME,

@@ -61,6 +61,21 @@ INSERT INTO public.system_configs (key, value)
 VALUES ('data_reset_version', '"1.0.0"'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
+-- Khởi tạo / Cập nhật Hệ số quy đổi (HSQĐ) Dán Kính 2 (Dùng cho Biểu đồ công đoạn Dán Kính riêng lẻ)
+INSERT INTO public.system_configs (key, value, updated_at)
+VALUES (
+    'wip_glazing_stage_hsqd',
+    '[
+        {"partId": "04-29-08-SHA76210KL-0040", "partName": "Gói cánh tủ SHA76210KL(BD)", "hsqd": 0.16},
+        {"partId": "04-29-08-SHA76210KL-0041", "partName": "Gói đỉnh tủ SHA76210KL(BD)", "hsqd": 0.13},
+        {"partId": "04-29-08-SHA76211KL-0002", "partName": "Linh kiện dán kính mẫu 1", "hsqd": 0.16},
+        {"partId": "04-29-08-SHA76212KL-0002", "partName": "Linh kiện dán kính mẫu 2", "hsqd": 0.16}
+    ]'::jsonb,
+    NOW()
+)
+ON CONFLICT (key) DO UPDATE 
+SET value = EXCLUDED.value, updated_at = NOW();
+
 -- ==============================================================================
 -- QUY TRÌNH ADMIN LÀM SẠCH DỮ LIỆU (TRUNCATE) & KÍCH HOẠT XÓA CACHE CLIENT:
 -- 1) Xóa trắng dữ liệu giao dịch:

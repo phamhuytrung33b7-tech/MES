@@ -4,8 +4,37 @@ import { StageId, STAGES } from './types';
 /**
  * Tải file Excel mẫu cho từng tab trong phần Định mức Năng suất Sản xuất
  */
-export function downloadNormTemplate(tabKey: StageId | 'NESTING' | 'BW_HSQD' | 'LASER_HSQD') {
+export function downloadNormTemplate(tabKey: StageId | 'NESTING' | 'BW_HSQD' | 'LASER_HSQD' | 'GLAZING_STAGE') {
   const wb = XLSX.utils.book_new();
+
+  if (tabKey === 'GLAZING_STAGE') {
+    // Mẫu HSQĐ Dán Kính 2 (Tính riêng lẻ cho biểu đồ công đoạn)
+    const headers = [
+      'STT',
+      'Mã linh kiện',
+      'Tên linh kiện',
+      'Hệ số quy đổi'
+    ];
+
+    const sampleRows = [
+      [1, '04-29-08-SHA76210KL-0040', 'Gói cánh tủ SHA76210KL(BD)', 0.16],
+      [2, '04-29-08-SHA76210KL-0041', 'Gói đỉnh tủ SHA76210KL(BD)', 0.13],
+      [3, '04-29-08-SHA76211KL-0002', 'Linh kiện dán kính mẫu', 0.16],
+      [4, '04-29-08-SHA76212KL-0002', 'Linh kiện dán kính mẫu 2', 0.16],
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
+    ws['!cols'] = [
+      { wch: 8 },  // STT
+      { wch: 32 }, // Mã linh kiện
+      { wch: 42 }, // Tên linh kiện
+      { wch: 20 }, // Hệ số quy đổi
+    ];
+    styleHeaderAndData(ws, headers.length, sampleRows.length);
+    XLSX.utils.book_append_sheet(wb, ws, "HSQD_Dan_Kinh_2");
+    XLSX.writeFile(wb, "Mau_HSQD_Dan_Kinh_2.xlsx");
+    return;
+  }
 
   if (tabKey === 'NESTING') {
     // 1. Mẫu Tổ hợp Laser (Nesting)

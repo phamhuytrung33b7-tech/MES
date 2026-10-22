@@ -4391,13 +4391,20 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
 
     const targetQDs = timeSlots.map(s => {
        const workerCount = getWorkerCount(stageInfo.id, s.label);
+       const factor = (s.label === '19h-20h') ? 0.125 : 0.25;
        if (stageInfo.id === 'BENDING') {
-           return (s.label === '19h-20h') ? workerCount * 16.5 : workerCount * 33;
+           return Math.round(workerCount * 132.7 * factor * 10) / 10;
        }
        if (stageInfo.id === 'WELDING') {
-           return (s.label === '19h-20h') ? workerCount * 8.75 : workerCount * 17.5;
+           return Math.round(workerCount * 77.2 * factor * 10) / 10;
        }
-       return (s.label === '19h-20h') ? workerCount * 8 : workerCount * 16;
+       if (stageInfo.id === 'PAINTING') {
+           return Math.round(workerCount * 127.5 * factor * 10) / 10;
+       }
+       if (stageInfo.id === 'GLAZING') {
+           return Math.round(workerCount * 242 * factor * 10) / 10;
+       }
+       return Math.round(workerCount * 64 * factor * 10) / 10;
     });
     const totalTarget = targetQDs.reduce((a,b) => a+b, 0);
 
@@ -5295,6 +5302,19 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     const bendingWeldingHSQDMap = new Map(bendingWeldingHSQDArray.map(n => [n.partId, n.hsqd]));
     const getBendingWeldingHSQD = (partId: string) => bendingWeldingHSQDMap.get(partId) || 0;
 
+    const glazingStageHSQDArray = storageService.getGlazingStageHSQD();
+    const glazingStageHSQDMap = new Map(glazingStageHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
+    const getGlazingStageHSQD = (partId: string) => {
+      const upper = (partId || '').trim().toUpperCase();
+      if (glazingStageHSQDMap.has(upper)) return glazingStageHSQDMap.get(upper)!;
+      const cleanId = upper.replace(/^GLZ-OUT-/i, '').replace(/\s*-\s*DÁN KÍNH$/i, '').trim();
+      if (cleanId && glazingStageHSQDMap.has(cleanId)) return glazingStageHSQDMap.get(cleanId)!;
+      const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
+      if (matchedPart && glazingStageHSQDMap.has(matchedPart.id.toUpperCase())) return glazingStageHSQDMap.get(matchedPart.id.toUpperCase())!;
+      // Fallback: nếu chưa cài đặt riêng trong tab HSQĐ Dán kính 2, dùng HSQĐ của tab Dán kính 1 (xưởng)
+      return glazingHSQD(partId);
+    };
+
     return timeSlots.map(slot => {
       const slotData: any = { name: slot.label, details: {} };
       targetStages.forEach(stageId => {
@@ -5314,7 +5334,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       });
 
       let sonConverted = 0;
-      let danKinhConverted = 0;
+      let danKinhConvertedMechanical = 0; // Tính theo HSQĐ Dán Kính 1 (Xưởng Cơ Khí)
+      let danKinhConvertedStage = 0;      // Tính theo HSQĐ Dán Kính 2 (Công đoạn riêng lẻ)
       let chanDapConverted = 0;
       let hanConverted = 0;
 
@@ -5337,8 +5358,10 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
            const hsqd = dclrNormsMap.get(t.partId) || 0;
            sonConverted += ((t.quantity || 0) * hsqd);
         } else if (t.stageId === 'GLAZING') {
-           const hsqd = glazingHSQD(t.partId);
-           danKinhConverted += ((t.quantity || 0) * hsqd);
+           const hsqdMech = glazingHSQD(t.partId);
+           const hsqdStage = getGlazingStageHSQD(t.partId);
+           danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
+           danKinhConvertedStage += ((t.quantity || 0) * hsqdStage);
         } else if (t.stageId === 'BENDING') {
            const hsqd = getBendingWeldingHSQD(t.partId);
            chanDapConverted += ((t.quantity || 0) * hsqd);
@@ -5364,35 +5387,41 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           slotData.details[stageName].push({ partName, quantity: (t.quantity || 0), unit });
         }
         
-        const hsqd = glazingHSQD(t.partId);
-        danKinhConverted += ((t.quantity || 0) * hsqd);
+        const hsqdMech = glazingHSQD(t.partId);
+        const hsqdStage = getGlazingStageHSQD(t.partId);
+        danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
+        danKinhConvertedStage += ((t.quantity || 0) * hsqdStage);
       });
       
-      // Calculate productivity percentage
+      // Calculate productivity percentage based on user's exact shift standards:
+      // Chấn / Dập: 132.7 SPQĐ / người / ca 8h
+      // Hàn: 77.2 SPQĐ / người / ca 8h
+      // Sơn: 127.5 SPQĐ / người / ca 8h
+      // Dán Kính: 242 SPQĐ / người / ca 8h
+      const hourFactor = (slot.label === '19h-20h') ? 0.125 : 0.25;
+
       const workerCountSon = hourlyPeoplePainting[slot.label] !== undefined ? hourlyPeoplePainting[slot.label] : 0;
-      const targetQDSon = (slot.label === '19h-20h') ? workerCountSon * 8 : workerCountSon * 16;
+      const targetQDSon = workerCountSon * 127.5 * hourFactor;
       
       const workerCountDanKinh = hourlyPeopleGlazing[slot.label] !== undefined ? hourlyPeopleGlazing[slot.label] : 0;
-      const targetQDDanKinh = (slot.label === '19h-20h') ? workerCountDanKinh * 8 : workerCountDanKinh * 16;
+      const targetQDDanKinh = workerCountDanKinh * 242 * hourFactor;
       
       const workerCountChanDap = hourlyPeopleBending[slot.label] !== undefined ? hourlyPeopleBending[slot.label] : 0;
-      const targetQDChanDap = (slot.label === '19h-20h') ? workerCountChanDap * 16.5 : workerCountChanDap * 33;
+      const targetQDChanDap = workerCountChanDap * 132.7 * hourFactor;
       
       const workerCountHan = hourlyPeopleWelding[slot.label] !== undefined ? hourlyPeopleWelding[slot.label] : 0;
-      const targetQDHan = (slot.label === '19h-20h') ? workerCountHan * 8.75 : workerCountHan * 17.5;
+      const targetQDHan = workerCountHan * 77.2 * hourFactor;
 
       slotData['NSLD_Son'] = targetQDSon > 0 ? (sonConverted / targetQDSon) : 0;
-      slotData['NSLD_DanKinh'] = targetQDDanKinh > 0 ? (danKinhConverted / targetQDDanKinh) : 0;
+      slotData['NSLD_DanKinh'] = targetQDDanKinh > 0 ? (danKinhConvertedStage / targetQDDanKinh) : 0;
       slotData['NSLD_ChanDap'] = targetQDChanDap > 0 ? (chanDapConverted / targetQDChanDap) : 0;
       slotData['NSLD_Han'] = targetQDHan > 0 ? (hanConverted / targetQDHan) : 0;
 
       // Năng suất lao động phân xưởng cơ khí từng khung giờ:
-      // NSLĐ = Tổng sản phẩm quy đổi của khung giờ / (Tổng số người của khung giờ đó * (số giờ / 8)) / 28.3
-      // (khung 2h tính * 0.25, khung 1h tính * 0.125)
+      // NSLĐ = Tổng sản phẩm quy đổi của khung giờ (Sơn + Dán kính tính theo HSQĐ Xưởng) / (Tổng số người của khung giờ đó * hourFactor) / 28.3
       const workerCountLaser = hourlyPeopleLaser[slot.label] !== undefined ? hourlyPeopleLaser[slot.label] : 0;
-      const totalConvertedMechanical = sonConverted + danKinhConverted;
+      const totalConvertedMechanical = sonConverted + danKinhConvertedMechanical;
       const totalWorkersMechanical = workerCountLaser + workerCountChanDap + workerCountHan + workerCountSon + workerCountDanKinh;
-      const hourFactor = (slot.label === '19h-20h') ? 0.125 : 0.25;
       const slotMandays = totalWorkersMechanical * hourFactor;
       
       const nsldMechanical = (slotMandays > 0 && totalConvertedMechanical > 0)
@@ -5410,7 +5439,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       slotData['hourFactor'] = hourFactor;
       slotData['slotMandays'] = slotMandays;
       slotData['sonConverted'] = sonConverted;
-      slotData['danKinhConverted'] = danKinhConverted;
+      slotData['danKinhConverted'] = danKinhConvertedStage;
+      slotData['danKinhConvertedMechanical'] = danKinhConvertedMechanical;
 
       return slotData;
     });
@@ -12872,9 +12902,10 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
 }
 
 function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () => void }) {
-  const [activeTab, setActiveTab] = useState<StageId | 'NESTING' | 'BW_HSQD' | 'LASER_HSQD'>('NESTING');
+  const [activeTab, setActiveTab] = useState<StageId | 'NESTING' | 'BW_HSQD' | 'LASER_HSQD' | 'GLAZING_STAGE'>('NESTING');
   const [bendingWeldingHSQD, setBendingWeldingHSQD] = useState<{partId: string, hsqd: number}[]>(() => storageService.getBendingWeldingHSQD());
   const [laserHSQD, setLaserHSQD] = useState<{partId: string, hsqd: number}[]>(() => storageService.getLaserHSQD());
+  const [glazingStageHSQD, setGlazingStageHSQD] = useState<{partId: string, hsqd: number}[]>(() => storageService.getGlazingStageHSQD());
   const [isImporting, setIsImporting] = useState(false);
   const norms = storageService.getNorms();
   const nesting = storageService.getLaserNesting();
@@ -12994,8 +13025,8 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
             alert(`Đã nhập thành công ${imported.length} linh kiện vào ${nestingTotals.size} tổ hợp Laser!`);
             onNormsChange();
           }
-        } else if (activeTab === 'LASER_HSQD' || activeTab === 'BW_HSQD') {
-          // Xử lý HSQĐ Laser hoặc HSQĐ Chấn/Hàn
+        } else if (activeTab === 'LASER_HSQD' || activeTab === 'BW_HSQD' || activeTab === 'GLAZING_STAGE') {
+          // Xử lý HSQĐ Laser, HSQĐ Chấn/Hàn hoặc HSQĐ Dán Kính 2
           interface SheetCandidate {
             sheetName: string;
             score: number;
@@ -13014,6 +13045,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
             if (sNameClean.includes('hsqd') || sNameClean.includes('quydoi') || sNameClean.includes('heso')) sheetBaseScore += 100;
             if (activeTab === 'LASER_HSQD' && sNameClean.includes('laser')) sheetBaseScore += 50;
             if (activeTab === 'BW_HSQD' && (sNameClean.includes('chan') || sNameClean.includes('han') || sNameClean.includes('dap'))) sheetBaseScore += 50;
+            if (activeTab === 'GLAZING_STAGE' && (sNameClean.includes('kinh') || sNameClean.includes('dan'))) sheetBaseScore += 60;
 
             let bestHeaderRowIdx = -1;
             let bestIdCol = -1, bestNameCol = -1, bestHsqdCol = -1;
@@ -13167,11 +13199,16 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
               storageService.saveLaserHSQD(imported);
               setLaserHSQD(imported);
               alert(`Đã nhập thành công ${imported.length} HSQĐ cho Cắt Laser (từ sheet "${bestCandidate.sheetName}")!`);
+            } else if (activeTab === 'GLAZING_STAGE') {
+              storageService.saveGlazingStageHSQD(imported);
+              setGlazingStageHSQD(imported);
+              alert(`Đã nhập thành công ${imported.length} HSQĐ cho Dán Kính 2 (từ sheet "${bestCandidate.sheetName}")!`);
             } else {
               storageService.saveBendingWeldingHSQD(imported);
               setBendingWeldingHSQD(imported);
               alert(`Đã nhập thành công ${imported.length} HSQĐ cho Chấn/Hàn (từ sheet "${bestCandidate.sheetName}")!`);
             }
+            onNormsChange();
           }
         } else {
           // Standard Stage Norm Import (BENDING, WELDING, PAINTING, DCLR, GLAZING)
@@ -13368,18 +13405,30 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
         >
           HSQĐ Laser
         </button>
-        {STAGES.filter(s => s.id !== 'LASER').map(stage => (
-          <button
-            key={stage.id}
-            onClick={() => setActiveTab(stage.id)}
-            className={cn(
-              "flex-1 py-4 px-6 rounded-xl font-bold uppercase tracking-widest transition-all whitespace-nowrap",
-              activeTab === stage.id ? "bg-blue-600 text-white shadow-lg" : "text-gray-400 hover:bg-gray-50"
-            )}
-          >
-            {stage.name}
-          </button>
-        ))}
+        {STAGES.filter(s => s.id !== 'LASER').map(stage => {
+          const tabLabel = stage.id === 'GLAZING' ? 'HSQĐ Dán Kính (Xưởng CK)' : (stage.id === 'DCLR' ? 'HSQĐ DCLR' : stage.name);
+          return (
+            <button
+              key={stage.id}
+              onClick={() => setActiveTab(stage.id)}
+              className={cn(
+                "flex-1 py-4 px-6 rounded-xl font-bold uppercase tracking-widest transition-all whitespace-nowrap",
+                activeTab === stage.id ? "bg-blue-600 text-white shadow-lg" : "text-gray-400 hover:bg-gray-50"
+              )}
+            >
+              {tabLabel}
+            </button>
+          );
+        })}
+        <button
+          onClick={() => setActiveTab('GLAZING_STAGE')}
+          className={cn(
+            "flex-1 py-4 px-6 rounded-xl font-bold uppercase tracking-widest transition-all whitespace-nowrap",
+            activeTab === 'GLAZING_STAGE' ? "bg-cyan-600 text-white shadow-lg" : "text-gray-400 hover:bg-gray-50"
+          )}
+        >
+          HSQĐ Dán Kính 2
+        </button>
         <button
           onClick={() => setActiveTab('BW_HSQD')}
           className={cn(
@@ -13398,7 +13447,9 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
               {activeTab === 'NESTING' ? 'Định mức Tổ hợp (Nesting) Laser' 
                 : activeTab === 'LASER_HSQD' ? 'Hệ số quy đổi (HSQĐ) Cắt Laser'
                 : activeTab === 'BW_HSQD' ? 'Hệ số quy đổi (HSQĐ) Chấn/Hàn'
-                : (activeTab === 'DCLR' || activeTab === 'GLAZING')
+                : activeTab === 'GLAZING_STAGE' ? 'Hệ số quy đổi (HSQĐ) Dán Kính 2 (Biểu đồ công đoạn riêng lẻ)'
+                : activeTab === 'GLAZING' ? 'Hệ số quy đổi (HSQĐ) Dán Kính (Biểu đồ Năng suất Xưởng Cơ Khí)'
+                : activeTab === 'DCLR'
                 ? `Hệ số quy đổi (HSQĐ): ${STAGES.find(s => s.id === activeTab)?.name}`
                 : `Định mức công đoạn: ${STAGES.find(s => s.id === activeTab)?.name}`}
             </h2>
@@ -13409,7 +13460,11 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                 ? 'Quản lý hệ số quy đổi sản phẩm/linh kiện cho công đoạn Cắt Laser'
                 : activeTab === 'BW_HSQD'
                 ? 'Quản lý hệ số quy đổi sản phẩm/linh kiện cho công đoạn Chấn/Dập và Hàn'
-                : (activeTab === 'DCLR' || activeTab === 'GLAZING')
+                : activeTab === 'GLAZING_STAGE'
+                ? 'Quản lý hệ số quy đổi tính riêng cho đường biểu đồ năng suất lao động của công đoạn Dán Kính'
+                : activeTab === 'GLAZING'
+                ? 'Quản lý hệ số quy đổi Dán Kính dùng để tính vào Năng suất Lao động toàn Xưởng Cơ Khí'
+                : activeTab === 'DCLR'
                 ? `Quản lý hệ số quy đổi (HSQĐ) cho công đoạn ${STAGES.find(s => s.id === activeTab)?.name}`
                 : 'Quản lý thời gian sản xuất dự kiến trên mỗi đơn vị linh kiện'}
             </p>
@@ -13429,13 +13484,16 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
             {((activeTab === 'NESTING' && nesting.length > 0) ||
               (activeTab === 'LASER_HSQD' && laserHSQD.length > 0) ||
               (activeTab === 'BW_HSQD' && bendingWeldingHSQD.length > 0) ||
-              (activeTab !== 'NESTING' && activeTab !== 'LASER_HSQD' && activeTab !== 'BW_HSQD' && norms.filter(n => n.stageId === activeTab).length > 0)) && (
+              (activeTab === 'GLAZING_STAGE' && glazingStageHSQD.length > 0) ||
+              (activeTab !== 'NESTING' && activeTab !== 'LASER_HSQD' && activeTab !== 'BW_HSQD' && activeTab !== 'GLAZING_STAGE' && norms.filter(n => n.stageId === activeTab).length > 0)) && (
               <button 
                 onClick={() => {
                   const tabName = activeTab === 'NESTING' ? 'định mức tổ hợp Laser'
                     : activeTab === 'LASER_HSQD' ? 'toàn bộ HSQĐ Laser'
                     : activeTab === 'BW_HSQD' ? 'toàn bộ HSQĐ Chấn/Hàn'
-                    : (activeTab === 'DCLR' || activeTab === 'GLAZING')
+                    : activeTab === 'GLAZING_STAGE' ? 'toàn bộ HSQĐ Dán Kính 2'
+                    : activeTab === 'GLAZING' ? 'toàn bộ HSQĐ Dán Kính (Xưởng Cơ Khí)'
+                    : activeTab === 'DCLR'
                     ? `toàn bộ HSQĐ của ${STAGES.find(s => s.id === activeTab)?.name}`
                     : `toàn bộ định mức của ${STAGES.find(s => s.id === activeTab)?.name}`;
                   if (confirm(`Bạn có chắc chắn muốn xóa ${tabName}?`)) {
@@ -13445,9 +13503,15 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                     } else if (activeTab === 'LASER_HSQD') {
                       storageService.saveLaserHSQD([]);
                       setLaserHSQD([]);
+                      onNormsChange();
+                    } else if (activeTab === 'GLAZING_STAGE') {
+                      storageService.saveGlazingStageHSQD([]);
+                      setGlazingStageHSQD([]);
+                      onNormsChange();
                     } else if (activeTab === 'BW_HSQD') {
                       storageService.saveBendingWeldingHSQD([]);
                       setBendingWeldingHSQD([]);
+                      onNormsChange();
                     } else {
                       const updated = norms.filter(n => n.stageId !== activeTab);
                       storageService.saveNorms(updated);
@@ -13466,7 +13530,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
               isImporting && "opacity-50 cursor-not-allowed"
             )}>
               <FileUp size={18} />
-              {isImporting ? 'Đang nhập...' : `Nhập ${activeTab === 'NESTING' ? 'file Tổ hợp' : activeTab === 'LASER_HSQD' ? 'HSQĐ Laser' : activeTab === 'BW_HSQD' ? 'HSQĐ Chấn/Hàn' : (activeTab === 'DCLR' || activeTab === 'GLAZING') ? `HSQĐ ${STAGES.find(s => s.id === activeTab)?.name}` : `định mức ${activeTab}`}`}
+              {isImporting ? 'Đang nhập...' : `Nhập ${activeTab === 'NESTING' ? 'file Tổ hợp' : activeTab === 'LASER_HSQD' ? 'HSQĐ Laser' : activeTab === 'BW_HSQD' ? 'HSQĐ Chấn/Hàn' : activeTab === 'GLAZING_STAGE' ? 'HSQĐ Dán Kính 2' : (activeTab === 'DCLR' || activeTab === 'GLAZING') ? `HSQĐ ${activeTab === 'GLAZING' ? 'Dán Kính (Xưởng CK)' : STAGES.find(s => s.id === activeTab)?.name}` : `định mức ${activeTab}`}`}
               <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImport} disabled={isImporting} />
             </label>
           </div>
@@ -13564,6 +13628,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                             const updated = laserHSQD.filter(n => n.partId !== item.partId);
                             storageService.saveLaserHSQD(updated);
                             setLaserHSQD(updated);
+                            onNormsChange();
                           }}
                           className="p-3 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
                         >
@@ -13609,6 +13674,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                             const updated = bendingWeldingHSQD.filter(n => n.partId !== item.partId);
                             storageService.saveBendingWeldingHSQD(updated);
                             setBendingWeldingHSQD(updated);
+                            onNormsChange();
                           }}
                           className="p-3 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
                         >
@@ -13623,6 +13689,52 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                     <td colSpan={4} className="p-24 text-center text-gray-400 italic">
                       <p className="text-xl">Chưa có hệ số quy đổi cho Chấn/Hàn.</p>
                       <p className="text-sm mt-2 font-mono uppercase">Vui lòng nhập file Excel chứa cột Mã thành phẩm, Tên thành phẩm, HSQĐ.</p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          ) : activeTab === 'GLAZING_STAGE' ? (
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-gray-50/50 border-b border-gray-100">
+                  <th className="p-8 pl-12 text-sm font-mono uppercase opacity-75">Mã linh kiện / Thành phẩm</th>
+                  <th className="p-8 text-sm font-mono uppercase opacity-75">Tên linh kiện / Thành phẩm</th>
+                  <th className="p-8 text-sm font-mono uppercase opacity-75 text-center">HSQĐ Dán Kính 2</th>
+                  <th className="p-8 pr-12 text-sm font-mono uppercase opacity-75 text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {glazingStageHSQD.map((item, idx) => {
+                  const part = parts.find(p => p.id === item.partId || p.id.toUpperCase() === item.partId.toUpperCase());
+                  return (
+                    <tr key={idx} className="hover:bg-gray-50/30 transition-colors">
+                      <td className="p-8 pl-12 font-mono text-lg font-bold">{item.partId}</td>
+                      <td className="p-8 text-lg font-medium text-gray-600">{item.partName || part?.name || 'N/A'}</td>
+                      <td className="p-8 text-center">
+                        <span className="font-mono text-2xl font-black text-cyan-600">{item.hsqd}</span>
+                      </td>
+                      <td className="p-8 pr-12 text-right">
+                        <button 
+                          onClick={() => {
+                            const updated = glazingStageHSQD.filter(n => n.partId !== item.partId);
+                            storageService.saveGlazingStageHSQD(updated);
+                            setGlazingStageHSQD(updated);
+                            onNormsChange();
+                          }}
+                          className="p-3 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
+                        >
+                          <Trash2 size={24} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {glazingStageHSQD.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="p-24 text-center text-gray-400 italic">
+                      <p className="text-xl">Chưa có hệ số quy đổi cho Dán Kính 2 (Biểu đồ công đoạn riêng lẻ).</p>
+                      <p className="text-sm mt-2 font-mono uppercase">Vui lòng nhập file Excel chứa cột Mã linh kiện / Mã thành phẩm, Tên linh kiện, Hệ số quy đổi (HSQĐ).</p>
                     </td>
                   </tr>
                 )}
