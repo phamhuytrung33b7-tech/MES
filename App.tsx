@@ -4203,8 +4203,16 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   const hourlyPeopleWelding = storageService.getHourlyPeopleWelding(dateStr);
   
   const bendingWeldingHSQDArray = storageService.getBendingWeldingHSQD();
-  const bendingWeldingHSQDMap = new Map(bendingWeldingHSQDArray.map(n => [n.partId, n.hsqd]));
-  const getBendingWeldingHSQD = (partId: string) => bendingWeldingHSQDMap.get(partId) || 0;
+  const bendingWeldingHSQDMap = new Map(bendingWeldingHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
+  const getBendingWeldingHSQD = (partId: string) => {
+    const upper = (partId || '').trim().toUpperCase();
+    if (bendingWeldingHSQDMap.has(upper)) return bendingWeldingHSQDMap.get(upper)!;
+    const cleanId = upper.replace(/^(BND|WLD)-OUT-/i, '').replace(/\s*-\s*(CHẤN\/DẬP|HÀN|CHẤN|DẬP)$/i, '').trim();
+    if (cleanId && bendingWeldingHSQDMap.has(cleanId)) return bendingWeldingHSQDMap.get(cleanId)!;
+    const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
+    if (matchedPart && bendingWeldingHSQDMap.has(matchedPart.id.toUpperCase())) return bendingWeldingHSQDMap.get(matchedPart.id.toUpperCase())!;
+    return 0;
+  };
 
   const laserHSQDArray = storageService.getLaserHSQD();
   const laserHSQDMap = new Map(laserHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
@@ -4215,7 +4223,7 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     if (cleanId && laserHSQDMap.has(cleanId)) return laserHSQDMap.get(cleanId)!;
     const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
     if (matchedPart && laserHSQDMap.has(matchedPart.id.toUpperCase())) return laserHSQDMap.get(matchedPart.id.toUpperCase())!;
-    return 1;
+    return 0;
   };
 
   const glazingStageHSQDArray = storageService.getGlazingStageHSQD();
@@ -5445,12 +5453,20 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       if (cleanId && laserHSQDMap.has(cleanId)) return laserHSQDMap.get(cleanId)!;
       const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
       if (matchedPart && laserHSQDMap.has(matchedPart.id.toUpperCase())) return laserHSQDMap.get(matchedPart.id.toUpperCase())!;
-      return 1;
+      return 0;
     };
 
     const bendingWeldingHSQDArray = storageService.getBendingWeldingHSQD();
-    const bendingWeldingHSQDMap = new Map(bendingWeldingHSQDArray.map(n => [n.partId, n.hsqd]));
-    const getBendingWeldingHSQD = (partId: string) => bendingWeldingHSQDMap.get(partId) || 0;
+    const bendingWeldingHSQDMap = new Map(bendingWeldingHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
+    const getBendingWeldingHSQD = (partId: string) => {
+      const upper = (partId || '').trim().toUpperCase();
+      if (bendingWeldingHSQDMap.has(upper)) return bendingWeldingHSQDMap.get(upper)!;
+      const cleanId = upper.replace(/^(BND|WLD)-OUT-/i, '').replace(/\s*-\s*(CHẤN\/DẬP|HÀN|CHẤN|DẬP)$/i, '').trim();
+      if (cleanId && bendingWeldingHSQDMap.has(cleanId)) return bendingWeldingHSQDMap.get(cleanId)!;
+      const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
+      if (matchedPart && bendingWeldingHSQDMap.has(matchedPart.id.toUpperCase())) return bendingWeldingHSQDMap.get(matchedPart.id.toUpperCase())!;
+      return 0;
+    };
 
     const glazingStageHSQDArray = storageService.getGlazingStageHSQD();
     const glazingStageHSQDMap = new Map(glazingStageHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
@@ -5498,33 +5514,42 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         const partName = part ? part.name : (t.partName || t.partId);
         const unit = part?.unit || 'cái';
         
+        let itemHsqd = 0;
+        if (t.stageId === 'LASER') {
+           if (!isLaserScrapItem(t.partId, t.partName)) {
+             itemHsqd = getLaserHSQD(t.partId);
+             laserConverted += ((t.quantity || 0) * itemHsqd);
+           }
+        } else if (t.stageId === 'PAINTING') {
+           itemHsqd = dclrNormsMap.get(t.partId) || 0;
+           sonConverted += ((t.quantity || 0) * itemHsqd);
+        } else if (t.stageId === 'GLAZING') {
+           const hsqdMech = glazingHSQD(t.partId);
+           itemHsqd = getGlazingStageHSQD(t.partId);
+           danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
+           danKinhConvertedStage += ((t.quantity || 0) * itemHsqd);
+        } else if (t.stageId === 'BENDING') {
+           itemHsqd = getBendingWeldingHSQD(t.partId);
+           chanDapConverted += ((t.quantity || 0) * itemHsqd);
+        } else if (t.stageId === 'WELDING') {
+           itemHsqd = getBendingWeldingHSQD(t.partId);
+           hanConverted += ((t.quantity || 0) * itemHsqd);
+        }
+
         const existingDetail = slotData.details[stageName].find((d: any) => d.partName === partName);
         if (existingDetail) {
           existingDetail.quantity += (t.quantity || 0);
+          if ((!existingDetail.hsqd || existingDetail.hsqd === 0) && itemHsqd > 0) {
+            existingDetail.hsqd = itemHsqd;
+          }
         } else {
-          slotData.details[stageName].push({ partName, quantity: (t.quantity || 0), unit });
-        }
-        
-        if (t.stageId === 'LASER') {
-           if (!isLaserScrapItem(t.partId, t.partName)) {
-             const hsqd = getLaserHSQD(t.partId);
-             const effectiveHsqd = hsqd > 0 ? hsqd : 1;
-             laserConverted += ((t.quantity || 0) * effectiveHsqd);
-           }
-        } else if (t.stageId === 'PAINTING') {
-           const hsqd = dclrNormsMap.get(t.partId) || 0;
-           sonConverted += ((t.quantity || 0) * hsqd);
-        } else if (t.stageId === 'GLAZING') {
-           const hsqdMech = glazingHSQD(t.partId);
-           const hsqdStage = getGlazingStageHSQD(t.partId);
-           danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
-           danKinhConvertedStage += ((t.quantity || 0) * hsqdStage);
-        } else if (t.stageId === 'BENDING') {
-           const hsqd = getBendingWeldingHSQD(t.partId);
-           chanDapConverted += ((t.quantity || 0) * hsqd);
-        } else if (t.stageId === 'WELDING') {
-           const hsqd = getBendingWeldingHSQD(t.partId);
-           hanConverted += ((t.quantity || 0) * hsqd);
+          slotData.details[stageName].push({ 
+            partName, 
+            quantity: (t.quantity || 0), 
+            unit,
+            hsqd: itemHsqd,
+            partId: t.partId 
+          });
         }
       });
       
@@ -5537,17 +5562,26 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         const partName = part ? part.name : (t.partName || t.partId);
         const unit = part?.unit || 'cái';
         
+        const hsqdMech = glazingHSQD(t.partId);
+        const itemHsqd = getGlazingStageHSQD(t.partId);
+        danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
+        danKinhConvertedStage += ((t.quantity || 0) * itemHsqd);
+
         const existingDetail = slotData.details[stageName].find((d: any) => d.partName === partName);
         if (existingDetail) {
           existingDetail.quantity += (t.quantity || 0);
+          if ((!existingDetail.hsqd || existingDetail.hsqd === 0) && itemHsqd > 0) {
+            existingDetail.hsqd = itemHsqd;
+          }
         } else {
-          slotData.details[stageName].push({ partName, quantity: (t.quantity || 0), unit });
+          slotData.details[stageName].push({ 
+            partName, 
+            quantity: (t.quantity || 0), 
+            unit,
+            hsqd: itemHsqd,
+            partId: t.partId
+          });
         }
-        
-        const hsqdMech = glazingHSQD(t.partId);
-        const hsqdStage = getGlazingStageHSQD(t.partId);
-        danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
-        danKinhConvertedStage += ((t.quantity || 0) * hsqdStage);
       });
       
       // Calculate productivity percentage based on user's exact shift standards:
@@ -6777,13 +6811,23 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     <span className="uppercase tracking-widest">{stName}</span>
                                     <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{data[stName]} Cái</span>
                                   </div>
-                                  <div className="pl-3 space-y-1">
-                                    {items.map((detail: any, idx: number) => (
-                                      <div key={idx} className="flex justify-between items-start text-xs text-gray-700 gap-4">
-                                        <span className="break-words flex-1 leading-tight font-medium text-[11px]">{detail.partName}</span>
-                                        <span className="font-mono font-bold text-gray-900 text-[11px]">{detail.quantity} {detail.unit}</span>
-                                      </div>
-                                    ))}
+                                  <div className="pl-2 space-y-1.5 max-h-48 overflow-y-auto no-scrollbar">
+                                    {items.map((detail: any, idx: number) => {
+                                      const hasHsqd = detail.hsqd !== undefined && detail.hsqd > 0;
+                                      const convertedVal = hasHsqd ? ((detail.quantity || 0) * detail.hsqd) : 0;
+                                      return (
+                                        <div key={idx} className="flex justify-between items-start text-xs text-gray-700 gap-3 border-b border-gray-50 pb-1 last:border-0 last:pb-0">
+                                          <div className="flex-1 min-w-0">
+                                            <span className="break-words leading-tight font-medium text-[11px] text-gray-800 block">{detail.partName}</span>
+                                            <span className="text-[10px] text-gray-400 font-mono block mt-0.5">
+                                              HSQĐ: {hasHsqd ? <span className="font-bold text-gray-700">{detail.hsqd}</span> : <span className="italic text-amber-600 font-medium">Trống (tính 0)</span>}
+                                              {hasHsqd && <span className="text-gray-500"> → <span className="font-bold text-indigo-600">{convertedVal.toFixed(1)} SPQĐ</span></span>}
+                                            </span>
+                                          </div>
+                                          <span className="font-mono font-bold text-gray-900 text-[11px] whitespace-nowrap">{detail.quantity} {detail.unit}</span>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </div>
                               );
@@ -6801,13 +6845,23 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                   <span className="uppercase tracking-widest">Chi tiết sản lượng thực tế</span>
                                   <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{data[activeStageConfig.barKey] || 0} Cái/Tấm</span>
                                 </div>
-                                <div className="pl-1 space-y-1 max-h-48 overflow-y-auto no-scrollbar">
-                                  {items.map((detail: any, idx: number) => (
-                                    <div key={idx} className="flex justify-between items-start text-xs text-gray-700 gap-4">
-                                      <span className="break-words flex-1 leading-tight font-medium text-[11px]">{detail.partName}</span>
-                                      <span className="font-mono font-bold text-gray-900 text-[11px] whitespace-nowrap">{detail.quantity} {detail.unit}</span>
-                                    </div>
-                                  ))}
+                                <div className="pl-1 space-y-1.5 max-h-52 overflow-y-auto no-scrollbar">
+                                  {items.map((detail: any, idx: number) => {
+                                    const hasHsqd = detail.hsqd !== undefined && detail.hsqd > 0;
+                                    const convertedVal = hasHsqd ? ((detail.quantity || 0) * detail.hsqd) : 0;
+                                    return (
+                                      <div key={idx} className="flex justify-between items-start text-xs text-gray-700 gap-3 border-b border-gray-50 pb-1 last:border-0 last:pb-0">
+                                        <div className="flex-1 min-w-0">
+                                          <span className="break-words leading-tight font-medium text-[11px] text-gray-800 block">{detail.partName}</span>
+                                          <span className="text-[10px] text-gray-400 font-mono block mt-0.5">
+                                            HSQĐ: {hasHsqd ? <span className="font-bold text-gray-700">{detail.hsqd}</span> : <span className="italic text-amber-600 font-medium">Trống (tính 0)</span>}
+                                            {hasHsqd && <span className="text-gray-500"> → <span className="font-bold text-indigo-600">{convertedVal.toFixed(1)} SPQĐ</span></span>}
+                                          </span>
+                                        </div>
+                                        <span className="font-mono font-bold text-gray-900 text-[11px] whitespace-nowrap">{detail.quantity} {detail.unit}</span>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </div>
                             );
