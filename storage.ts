@@ -381,7 +381,9 @@ async function persistLabelsToSupabase(labels: Transaction[]) {
 async function deleteLabelFromSupabase(id: string) {
   if (!isSupabaseConfigured) return;
   try {
-    await supabase.from('qr_labels').delete().eq('id', id);
+    const p1 = supabase.from('qr_labels').delete().eq('id', id);
+    const p2 = supabase.from('wip_transactions').delete().eq('id', id);
+    await Promise.allSettled([p1, p2]);
   } catch (err: any) {
     quietWarn('deleteLabel', 'deleteLabel error:', err);
   }

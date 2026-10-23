@@ -81,7 +81,7 @@ import { twMerge } from 'tailwind-merge';
 
 import { STAGES, INITIAL_PARTS, StageId, Part, InventoryItem, Transaction, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, DEFECT_REASONS, StagePlannedWorkers, UserAccount, View, getUserDefaultStage } from './types';
 import { storageService } from './storage';
-import { SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection, isSupabaseConfigured } from './supabaseClient';
+import { supabase, SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection, isSupabaseConfigured } from './supabaseClient';
 import { exportPreparationReport } from './exportPreparationReport';
 import { exportDetailedProductionPlan } from './exportDetailedPlan';
 import { importExcelToPO, downloadSamplePOExcelTemplate, MissingBomModelInfo } from './importExcelToPO';
@@ -1780,6 +1780,7 @@ export default function App() {
                   onRollback={refreshData}
                   onManualInboundQR={(qr, stage) => onScanSuccess(qr, 'IN', stage)}
                   labelSettings={labelSettings}
+                  currentUser={currentUser}
                 />
               )}
               {currentView === 'po' && (
@@ -3541,7 +3542,26 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
   );
 }
 
-function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRollback, onManualInboundQR, labelSettings }: { parts: Part[], labels: Transaction[], onPrint: (l: Transaction) => void, onCopy: (t: string) => void, onRollback: () => void, onManualInboundQR: (qrData: string, targetStageId: StageId) => void, labelSettings: any, key?: string }) {
+function LabelHistoryView({ 
+  parts, 
+  labels: initialLabels, 
+  onPrint, 
+  onCopy, 
+  onRollback, 
+  onManualInboundQR, 
+  labelSettings, 
+  currentUser 
+}: { 
+  parts: Part[], 
+  labels: Transaction[], 
+  onPrint: (l: Transaction) => void, 
+  onCopy: (t: string) => void, 
+  onRollback: () => void, 
+  onManualInboundQR: (qrData: string, targetStageId: StageId) => void, 
+  labelSettings: any, 
+  currentUser?: UserAccount | null, 
+  key?: string 
+}) {
   const [labels, setLabels] = useState<Transaction[]>(initialLabels);
   const [scannedIds, setScannedIds] = useState<Set<string>>(new Set());
   const [printedIds, setPrintedIds] = useState<Set<string>>(new Set());
@@ -3549,6 +3569,7 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
   const [showInboundModal, setShowInboundModal] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [selectedLabel, setSelectedLabel] = useState<Transaction | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const getPastDateStr = (days: number) => {
     const d = new Date();
     d.setDate(d.getDate() - days);
@@ -3590,20 +3611,43 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
     setPrintedIds(printed);
   }, [labels]);
 
-  const handleRollback = () => {
-    if (password === 'admin123') {
+  const handleRollback = async () => {
+    const isAdmin = currentUser?.role === 'ADMIN';
+    if (isAdmin || password === 'admin123') {
       if (showDeleteModal) {
-        storageService.rollbackTransaction(showDeleteModal);
-        const updatedLabels = storageService.getLabels();
-        setLabels(updatedLabels);
-        onRollback();
-        setShowDeleteModal(null);
-        setPassword("");
-        if (selectedLabel?.id === showDeleteModal) setSelectedLabel(null);
-        alert('Đã thu hồi lệnh xuất kho và hoàn trả số lượng vào kho thành công!');
+        setIsDeleting(true);
+        try {
+          const targetId = showDeleteModal;
+          // 1. Rollback locally
+          storageService.rollbackTransaction(targetId);
+
+          // 2. Direct Supabase deletion for instant synchronization
+          if (isSupabaseConfigured) {
+            try {
+              const p1 = supabase.from('qr_labels').delete().eq('id', targetId);
+              const p2 = supabase.from('wip_transactions').delete().eq('id', targetId);
+              await Promise.allSettled([p1, p2]);
+            } catch (supaErr) {
+              console.warn('[Supabase Sync] Lỗi xóa nhãn trên Cloud:', supaErr);
+            }
+          }
+
+          // 3. Update local state
+          const updatedLabels = storageService.getLabels();
+          setLabels(updatedLabels);
+          onRollback();
+          if (selectedLabel?.id === targetId) setSelectedLabel(null);
+          setShowDeleteModal(null);
+          setPassword("");
+          alert('Đã xóa nhãn QR và đồng bộ dữ liệu với Supabase thành công!');
+        } catch (err: any) {
+          alert('Lỗi khi xóa nhãn: ' + (err?.message || err));
+        } finally {
+          setIsDeleting(false);
+        }
       }
     } else {
-      alert('Mật khẩu không chính xác!');
+      alert('Mật khẩu Admin không chính xác!');
     }
   };
 
@@ -3873,10 +3917,10 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
                           e.stopPropagation();
                           setShowDeleteModal(label.id);
                         }}
-                        className="p-2 text-orange-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                        title="Thu hồi lệnh xuất"
+                        className="p-1.5 sm:p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-all cursor-pointer opacity-80 sm:opacity-0 group-hover:opacity-100"
+                        title="Xóa nhãn QR & hoàn trả kho (Admin)"
                       >
-                        <RotateCcw size={16} />
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </div>
@@ -3917,13 +3961,13 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
               
               <A7QRLabelCard label={selectedLabel} parts={parts} labelSettings={labelSettings} isPrintArea={false} />
 
-              <div className="w-full flex gap-4 no-print">
+              <div className="w-full flex flex-col sm:flex-row gap-3 no-print">
                 <button 
                   onClick={() => onPrint(selectedLabel)}
-                  className="flex-1 bg-blue-600 text-white py-5 rounded-xl flex items-center justify-center gap-3 font-bold text-lg uppercase hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
+                  className="flex-1 bg-blue-600 text-white py-4 sm:py-5 rounded-xl flex items-center justify-center gap-2 font-bold text-base uppercase hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 cursor-pointer active:scale-95"
                 >
-                  <Printer size={24} />
-                  In nhãn (PDF)
+                  <Printer size={22} />
+                  <span>In nhãn (PDF)</span>
                 </button>
                 <button 
                   onClick={() => {
@@ -3935,21 +3979,29 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
                     setShowInboundModal(selectedLabel.id);
                   }}
                   className={cn(
-                    "flex-1 py-5 rounded-xl flex items-center justify-center gap-3 font-bold text-lg uppercase transition-all shadow-lg",
+                    "flex-1 py-4 sm:py-5 rounded-xl flex items-center justify-center gap-2 font-bold text-base uppercase transition-all shadow-lg cursor-pointer active:scale-95",
                     scannedIds.has(selectedLabel.id) 
                       ? "bg-gray-100 text-gray-400 cursor-not-allowed shadow-none" 
                       : "bg-green-600 text-white hover:bg-green-700 shadow-green-200"
                   )}
                 >
-                  <PackagePlus size={24} />
-                  Nhập kho ngay
+                  <PackagePlus size={22} />
+                  <span>Nhập kho ngay</span>
+                </button>
+                <button 
+                  onClick={() => setShowDeleteModal(selectedLabel.id)}
+                  className="px-5 py-4 sm:py-5 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 rounded-xl flex items-center justify-center gap-2 font-bold text-sm uppercase transition-all cursor-pointer active:scale-95"
+                  title="Xóa nhãn QR và hoàn trả kho (Admin)"
+                >
+                  <Trash2 size={20} />
+                  <span className="hidden sm:inline">Xóa nhãn (Admin)</span>
                 </button>
                 <button 
                   onClick={() => onCopy(selectedLabel.qrData || '')}
-                  className="px-6 bg-gray-100 text-gray-600 py-5 rounded-xl flex items-center justify-center gap-3 font-bold text-lg uppercase hover:bg-gray-200 transition-all"
+                  className="px-4 bg-gray-100 text-gray-600 py-4 sm:py-5 rounded-xl flex items-center justify-center gap-2 font-bold text-base uppercase hover:bg-gray-200 transition-all cursor-pointer"
                   title="Sao chép mã QR"
                 >
-                  <QrCode size={24} />
+                  <QrCode size={22} />
                 </button>
               </div>
             </motion.div>
@@ -3963,48 +4015,103 @@ function LabelHistoryView({ parts, labels: initialLabels, onPrint, onCopy, onRol
       </div>
 
       <AnimatePresence>
-        {showDeleteModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6"
-            >
-              <div className="flex items-center gap-4 text-orange-600">
-                <RotateCcw size={32} />
-                <h3 className="text-xl font-bold">Xác nhận thu hồi</h3>
-              </div>
-              <p className="text-sm text-gray-500">Hành động này sẽ xóa nhãn QR và <b>hoàn trả số lượng</b> vào kho xuất ban đầu. Vui lòng nhập mật khẩu để xác nhận.</p>
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase opacity-50">Nhập mật khẩu xác nhận</label>
-                <input 
-                  type="password"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  className="w-full p-4 rounded-lg border border-gray-200 focus:border-orange-500 outline-none text-lg"
-                  placeholder="Mật khẩu..."
-                  onKeyDown={(e) => e.key === 'Enter' && handleRollback()}
-                  autoFocus
-                />
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={() => { setShowDeleteModal(null); setPassword(''); }}
-                  className="flex-1 py-4 bg-gray-100 rounded-lg font-bold text-sm uppercase hover:bg-gray-200 transition-all"
-                >
-                  Hủy bỏ
-                </button>
-                <button 
-                  onClick={handleRollback}
-                  className="flex-1 py-4 bg-orange-600 text-white rounded-lg font-bold text-sm uppercase hover:bg-orange-700 transition-all"
-                >
-                  Xác nhận thu hồi
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+        {showDeleteModal && (() => {
+          const targetLabel = labels.find(l => l.id === showDeleteModal);
+          const targetPart = parts.find(p => p.id === targetLabel?.partId);
+          const isAdmin = currentUser?.role === 'ADMIN';
+
+          return (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-5 border-t-4 border-red-600"
+              >
+                <div className="flex items-center gap-3.5 text-red-600">
+                  <div className="p-3 bg-red-100 text-red-600 rounded-xl">
+                    <Trash2 size={28} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-900">Xác nhận xóa nhãn QR</h3>
+                    <p className="text-xs text-red-600 font-semibold mt-0.5">Đồng bộ xóa dữ liệu trên Supabase</p>
+                  </div>
+                </div>
+
+                {targetLabel && (
+                  <div className="p-3.5 bg-gray-50 border border-gray-200 rounded-xl text-xs space-y-1.5 font-medium text-gray-700">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Linh kiện:</span>
+                      <span className="font-bold text-gray-900">{targetPart?.name || targetLabel.partId}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Mã linh kiện:</span>
+                      <span className="font-mono font-bold text-blue-600">{targetLabel.partId}</span>
+                    </div>
+                    {targetLabel.poId && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Mã PO:</span>
+                        <span className="font-mono font-bold text-gray-800">{targetLabel.poId}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Số lượng hoàn kho:</span>
+                      <span className="font-mono font-bold text-emerald-600">{targetLabel.quantity} {targetPart?.unit || 'cái'}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="text-xs text-gray-600 space-y-1 leading-relaxed bg-amber-50 border border-amber-200 p-3 rounded-xl">
+                  <p className="font-bold text-amber-900">Thao tác này sẽ thực hiện:</p>
+                  <ul className="list-disc pl-4 space-y-0.5 text-amber-800">
+                    <li>Xóa nhãn QR khỏi danh sách.</li>
+                    <li><b>Đồng bộ xóa vĩnh viễn trên Supabase</b> (<code className="font-mono text-[11px] bg-white px-1 rounded">qr_labels</code> và <code className="font-mono text-[11px] bg-white px-1 rounded">wip_transactions</code>).</li>
+                    <li>Hoàn trả số lượng vào tồn kho ban đầu và cập nhật lại tiến độ PO.</li>
+                  </ul>
+                </div>
+
+                {isAdmin ? (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-2.5">
+                    <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
+                    <span>Tài khoản <b>Admin</b> ({currentUser.fullName || currentUser.username}) đã được xác thực quyền xóa.</span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase text-gray-600">Nhập mật khẩu Admin</label>
+                    <input 
+                      type="password"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      className="w-full p-3.5 rounded-xl border border-gray-200 focus:border-red-500 focus:ring-4 focus:ring-red-100 outline-none text-base"
+                      placeholder="Mật khẩu Admin..."
+                      onKeyDown={(e) => e.key === 'Enter' && handleRollback()}
+                      autoFocus
+                    />
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    type="button"
+                    disabled={isDeleting}
+                    onClick={() => { setShowDeleteModal(null); setPassword(''); }}
+                    className="flex-1 py-3.5 bg-gray-100 rounded-xl font-bold text-sm uppercase hover:bg-gray-200 transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    Hủy bỏ
+                  </button>
+                  <button 
+                    type="button"
+                    disabled={isDeleting}
+                    onClick={handleRollback}
+                    className="flex-1 py-3.5 bg-red-600 text-white rounded-xl font-bold text-sm uppercase hover:bg-red-700 transition-all shadow-md shadow-red-200 flex items-center justify-center gap-2 cursor-pointer active:scale-95 disabled:opacity-50"
+                  >
+                    {isDeleting ? 'Đang xóa...' : 'Xác nhận xóa & Đồng bộ'}
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
 
         {showInboundModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -6610,7 +6717,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 text-xs">
                 <div className="bg-white rounded-lg p-2.5 border border-gray-200 shadow-2xs">
                   <div className="text-gray-400 text-[10px] font-bold uppercase">Sản lượng thực tế</div>
-                  <div className="font-mono font-black text-sm sm:text-base text-gray-800">{stageDaySummary?.totalActual} cái/tấm</div>
+                  <div className="font-mono font-black text-sm sm:text-base text-gray-800">{stageDaySummary?.totalActual} cái</div>
                 </div>
                 <div className="bg-white rounded-lg p-2.5 border border-gray-200 shadow-2xs">
                   <div className="text-gray-400 text-[10px] font-bold uppercase">Sản phẩm quy đổi</div>
@@ -6843,7 +6950,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                               <div className="mb-2">
                                 <div className="font-bold flex items-center justify-between mb-1.5 text-xs text-gray-800 border-b border-gray-100 pb-1">
                                   <span className="uppercase tracking-widest">Chi tiết sản lượng thực tế</span>
-                                  <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{data[activeStageConfig.barKey] || 0} Cái/Tấm</span>
+                                  <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{data[activeStageConfig.barKey] || 0} Cái</span>
                                 </div>
                                 <div className="pl-1 space-y-1.5 max-h-52 overflow-y-auto no-scrollbar">
                                   {items.map((detail: any, idx: number) => {
@@ -11661,6 +11768,24 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
   const [isImportingTransformations, setIsImportingTransformations] = useState(false);
 
   const [activeSettingsTab, setActiveSettingsTab] = useState<'parts' | 'bom' | 'label' | 'bom_v2' | 'model_bom' | 'transformations' | 'backup'>('parts');
+  const [partSearchQuery, setPartSearchQuery] = useState('');
+  const [partLevelFilter, setPartLevelFilter] = useState<'ALL' | 1 | 2 | 3>('ALL');
+
+  const filteredParts = useMemo(() => {
+    let result = parts;
+    if (partLevelFilter !== 'ALL') {
+      result = result.filter(p => (p.level || 1) === partLevelFilter);
+    }
+    if (partSearchQuery.trim()) {
+      const q = partSearchQuery.trim().toLowerCase();
+      result = result.filter(p => 
+        (p.id && p.id.toLowerCase().includes(q)) || 
+        (p.name && p.name.toLowerCase().includes(q)) || 
+        (p.unit && p.unit.toLowerCase().includes(q))
+      );
+    }
+    return [...result].sort((a, b) => (a.level || 0) - (b.level || 0));
+  }, [parts, partSearchQuery, partLevelFilter]);
 
   // Backup & Restore LocalStorage State
   const [backupStats, setBackupStats] = useState(() => storageService.getStorageStats());
@@ -13241,22 +13366,76 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
           </div>
         ) : activeSettingsTab === 'parts' ? (
           <>
-            <div className="p-8 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-              <h2 className="font-bold text-2xl tracking-tight">Linh kiện ({parts.length})</h2>
-              <label className={cn(
-                "flex items-center gap-3 px-6 py-3 bg-green-600 text-white rounded-lg text-sm font-bold uppercase tracking-widest cursor-pointer hover:bg-green-700 transition-all",
-                isImporting && "opacity-50 cursor-not-allowed"
-              )}>
-                <FileUp size={20} />
-                {isImporting ? 'Đang nhập...' : 'Nhập Excel'}
-                <input 
-                  type="file" 
-                  accept=".xlsx, .xls" 
-                  className="hidden" 
-                  onChange={handleExcelImport}
-                  disabled={isImporting}
-                />
-              </label>
+            <div className="p-6 sm:p-8 border-b border-gray-100 bg-gray-50/50 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="flex items-center gap-3">
+                  <h2 className="font-bold text-2xl tracking-tight text-gray-900">
+                    Linh kiện ({filteredParts.length}{filteredParts.length !== parts.length ? `/${parts.length}` : ''})
+                  </h2>
+                  {partSearchQuery && (
+                    <span className="text-xs bg-blue-50 text-blue-700 font-bold px-2.5 py-1 rounded-full border border-blue-200">
+                      Đang lọc: &ldquo;{partSearchQuery}&rdquo;
+                    </span>
+                  )}
+                </div>
+                <label className={cn(
+                  "flex items-center gap-2.5 px-5 py-2.5 bg-green-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest cursor-pointer hover:bg-green-700 transition-all shadow-sm active:scale-95 shrink-0",
+                  isImporting && "opacity-50 cursor-not-allowed"
+                )}>
+                  <FileUp size={18} />
+                  {isImporting ? 'Đang nhập...' : 'Nhập Excel'}
+                  <input 
+                    type="file" 
+                    accept=".xlsx, .xls" 
+                    className="hidden" 
+                    onChange={handleExcelImport}
+                    disabled={isImporting}
+                  />
+                </label>
+              </div>
+
+              {/* Fast Search & Level Filter Controls */}
+              <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                  <input 
+                    type="text" 
+                    value={partSearchQuery}
+                    onChange={(e) => setPartSearchQuery(e.target.value)}
+                    placeholder="Tìm nhanh theo Mã LK, Tên linh kiện, Đơn vị..."
+                    className="w-full pl-10 pr-9 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all placeholder:text-gray-400 font-medium"
+                  />
+                  {partSearchQuery && (
+                    <button 
+                      onClick={() => setPartSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-full hover:bg-gray-100 cursor-pointer"
+                      title="Xóa tìm kiếm"
+                    >
+                      <X size={15} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1 bg-gray-200/60 p-1 rounded-xl shrink-0 overflow-x-auto no-scrollbar">
+                  {(['ALL', 1, 2, 3] as const).map(lvl => {
+                    const count = lvl === 'ALL' ? parts.length : parts.filter(p => (p.level || 1) === lvl).length;
+                    return (
+                      <button
+                        key={lvl}
+                        onClick={() => setPartLevelFilter(lvl)}
+                        className={cn(
+                          "px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer",
+                          partLevelFilter === lvl 
+                            ? "bg-white text-gray-900 shadow-xs" 
+                            : "text-gray-500 hover:text-gray-800"
+                        )}
+                      >
+                        {lvl === 'ALL' ? `Tất cả (${count})` : `Cấp ${lvl} (${count})`}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
@@ -13271,7 +13450,7 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
-                  {parts.sort((a, b) => (a.level || 0) - (b.level || 0)).map(part => (
+                  {filteredParts.map(part => (
                     <tr key={part.id} className="hover:bg-gray-50/30 transition-colors">
                       <td className="p-6 pl-10">
                         <span className={cn(
@@ -13321,9 +13500,23 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                       </td>
                     </tr>
                   ))}
-                  {parts.length === 0 && (
+                  {filteredParts.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="p-20 text-center text-gray-400 italic">Chưa có linh kiện nào trong danh mục.</td>
+                      <td colSpan={6} className="p-16 text-center text-gray-400">
+                        <Package size={40} className="mx-auto mb-2 opacity-30" />
+                        <p className="text-sm font-medium">
+                          {parts.length === 0 ? 'Chưa có linh kiện nào trong danh mục.' : `Không tìm thấy linh kiện nào phù hợp với tìm kiếm "${partSearchQuery}".`}
+                        </p>
+                        {parts.length > 0 && (partSearchQuery || partLevelFilter !== 'ALL') && (
+                          <button 
+                            type="button"
+                            onClick={() => { setPartSearchQuery(''); setPartLevelFilter('ALL'); }}
+                            className="mt-3 px-3.5 py-1.5 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition cursor-pointer"
+                          >
+                            Xóa bộ lọc tìm kiếm
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   )}
                 </tbody>
