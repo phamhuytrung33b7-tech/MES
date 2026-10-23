@@ -96,6 +96,15 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+export function isLaserScrapItem(partId?: string, partName?: string): boolean {
+  if (!partId) return false;
+  const pId = partId.trim().toUpperCase();
+  if (pId === 'PL-TON-SX' || pId === 'PL-TON' || pId.startsWith('PL-TON')) return true;
+  const pName = (partName || '').toLowerCase();
+  if (pName.includes('phế liệu tôn') || pName.includes('phế liệu') || pName.includes('ton-sx')) return true;
+  return false;
+}
+
 function formatInventoryAge(timestamp: number): { text: string; colorClass: string } {
   const diffMs = Date.now() - timestamp;
   const hours = diffMs / (1000 * 60 * 60);
@@ -4197,6 +4206,30 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   const bendingWeldingHSQDMap = new Map(bendingWeldingHSQDArray.map(n => [n.partId, n.hsqd]));
   const getBendingWeldingHSQD = (partId: string) => bendingWeldingHSQDMap.get(partId) || 0;
 
+  const laserHSQDArray = storageService.getLaserHSQD();
+  const laserHSQDMap = new Map(laserHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
+  const getLaserHSQD = (partId: string) => {
+    const upper = (partId || '').trim().toUpperCase();
+    if (laserHSQDMap.has(upper)) return laserHSQDMap.get(upper)!;
+    const cleanId = upper.replace(/^LSR-OUT-/i, '').replace(/\s*-\s*CẮT LASER$/i, '').trim();
+    if (cleanId && laserHSQDMap.has(cleanId)) return laserHSQDMap.get(cleanId)!;
+    const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
+    if (matchedPart && laserHSQDMap.has(matchedPart.id.toUpperCase())) return laserHSQDMap.get(matchedPart.id.toUpperCase())!;
+    return 1;
+  };
+
+  const glazingStageHSQDArray = storageService.getGlazingStageHSQD();
+  const glazingStageHSQDMap = new Map(glazingStageHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
+  const getGlazingStageHSQD = (partId: string) => {
+    const upper = (partId || '').trim().toUpperCase();
+    if (glazingStageHSQDMap.has(upper)) return glazingStageHSQDMap.get(upper)!;
+    const cleanId = upper.replace(/^GLZ-OUT-/i, '').replace(/\s*-\s*DÁN KÍNH$/i, '').trim();
+    if (cleanId && glazingStageHSQDMap.has(cleanId)) return glazingStageHSQDMap.get(cleanId)!;
+    const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
+    if (matchedPart && glazingStageHSQDMap.has(matchedPart.id.toUpperCase())) return glazingStageHSQDMap.get(matchedPart.id.toUpperCase())!;
+    return glazingHSQD(partId);
+  };
+
   const [sY, sM, sD] = dateStr.split('-').map(Number);
   const start = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
   start.setHours(0, 0, 0, 0);
@@ -4216,6 +4249,7 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   const wb = XLSX.utils.book_new();
 
   const stagesToExport = [
+    { id: 'LASER', name: 'Cắt Laser' },
     { id: 'BENDING', name: 'Chấn Dập' },
     { id: 'WELDING', name: 'Hàn' },
     { id: 'PAINTING', name: 'Sơn' },
@@ -4264,7 +4298,11 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   ];
 
   stagesToExport.forEach(stageInfo => {
-    const stageTx = rangeTx.filter(t => t.stageId === stageInfo.id);
+    const stageTx = rangeTx.filter(t => {
+      if (t.stageId !== stageInfo.id) return false;
+      if (stageInfo.id === 'LASER' && isLaserScrapItem(t.partId, t.partName)) return false;
+      return true;
+    });
     
     const partTotals = new Map<string, number>();
     const partSlots = new Map<string, number[]>();
@@ -4316,13 +4354,17 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     activeParts.sort().forEach(partId => {
        const part = parts.find(p => p.id === partId);
        const partName = part?.name || partId;
+       const isLaser = stageInfo.id === 'LASER';
        const isBW = stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING';
-       const hsqd = isBW ? getBendingWeldingHSQD(partId) : glazingHSQD(partId);
+       const isGlz = stageInfo.id === 'GLAZING';
+       const hsqd = isLaser
+         ? getLaserHSQD(partId)
+         : (isBW ? getBendingWeldingHSQD(partId) : (isGlz ? getGlazingStageHSQD(partId) : glazingHSQD(partId)));
        const thucHien = partTotals.get(partId) || 0;
        
        // get KHSX based on Stage
        let khsx = 0;
-       const isStandardPOStage = stageInfo.id === 'PAINTING' || stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING';
+       const isStandardPOStage = stageInfo.id === 'PAINTING' || stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING' || stageInfo.id === 'LASER';
        if (isStandardPOStage) {
            const orders = storageService.getProductionOrders().filter(o => o.stageId === stageInfo.id && o.partId === partId);
            khsx = orders.filter(o => {
@@ -4382,6 +4424,7 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     
     // Năng suất lao động
     const getWorkerCount = (stageId: string, sLabel: string) => {
+       if (stageId === 'LASER') return hourlyPeopleLaser[sLabel] !== undefined ? hourlyPeopleLaser[sLabel] : 0;
        if (stageId === 'PAINTING') return hourlyPeoplePainting[sLabel] || 8;
        if (stageId === 'GLAZING') return hourlyPeopleGlazing[sLabel] || 8;
        if (stageId === 'BENDING') return hourlyPeopleBending[sLabel] || 8;
@@ -4392,6 +4435,9 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     const targetQDs = timeSlots.map(s => {
        const workerCount = getWorkerCount(stageInfo.id, s.label);
        const factor = (s.label === '19h-20h') ? 0.125 : 0.25;
+       if (stageInfo.id === 'LASER') {
+           return Math.round(workerCount * 250 * factor * 10) / 10;
+       }
        if (stageInfo.id === 'BENDING') {
            return Math.round(workerCount * 132.7 * factor * 10) / 10;
        }
@@ -5004,6 +5050,98 @@ const exportProductionReportRange = (transactions: Transaction[], parts: Part[],
   XLSX.writeFile(wb, `BaoCao_SanLuong_${format(start, 'ddMMyy')}-${format(end, 'ddMMyy')}.xlsx`);
 };
 
+const STAGE_CHART_CONFIGS: Record<string, {
+  name: string;
+  stageName: string;
+  normText: string;
+  normPerShift: number;
+  hourlyNorm: number;
+  color: string;
+  lineColor: string;
+  barKey: string;
+  lineKey: string;
+  convertedKey: string;
+  targetKey: string;
+  workerKey: string;
+  hsqdSource: string;
+}> = {
+  LASER: {
+    name: 'Cắt Laser',
+    stageName: 'Cắt Laser',
+    normText: '250 SPQĐ / người / ca 8h (31.25 SPQĐ / giờ)',
+    normPerShift: 250,
+    hourlyNorm: 31.25,
+    color: '#3B82F6',
+    lineColor: '#2563EB',
+    barKey: 'Cắt Laser',
+    lineKey: 'NSLD_Laser',
+    convertedKey: 'laserConverted',
+    targetKey: 'targetQDLaser',
+    workerKey: 'workerCountLaser',
+    hsqdSource: 'Tab HSQĐ Laser',
+  },
+  BENDING: {
+    name: 'Chấn / Dập',
+    stageName: 'Chấn/Dập',
+    normText: '132.7 SPQĐ / người / ca 8h (16.59 SPQĐ / giờ)',
+    normPerShift: 132.7,
+    hourlyNorm: 16.59,
+    color: '#9333EA',
+    lineColor: '#7E22CE',
+    barKey: 'Chấn/Dập',
+    lineKey: 'NSLD_ChanDap',
+    convertedKey: 'chanDapConverted',
+    targetKey: 'targetQDChanDap',
+    workerKey: 'workerCountChanDap',
+    hsqdSource: 'Tab HSQĐ Chấn / Hàn',
+  },
+  WELDING: {
+    name: 'Hàn',
+    stageName: 'Hàn',
+    normText: '77.2 SPQĐ / người / ca 8h (9.65 SPQĐ / giờ)',
+    normPerShift: 77.2,
+    hourlyNorm: 9.65,
+    color: '#10B981',
+    lineColor: '#059669',
+    barKey: 'Hàn',
+    lineKey: 'NSLD_Han',
+    convertedKey: 'hanConverted',
+    targetKey: 'targetQDHan',
+    workerKey: 'workerCountHan',
+    hsqdSource: 'Tab HSQĐ Chấn / Hàn',
+  },
+  PAINTING: {
+    name: 'Sơn',
+    stageName: 'Sơn',
+    normText: '127.5 SPQĐ / người / ca 8h (15.94 SPQĐ / giờ)',
+    normPerShift: 127.5,
+    hourlyNorm: 15.94,
+    color: '#EAB308',
+    lineColor: '#CA8A04',
+    barKey: 'Sơn',
+    lineKey: 'NSLD_Son',
+    convertedKey: 'sonConverted',
+    targetKey: 'targetQDSon',
+    workerKey: 'workerCountSon',
+    hsqdSource: 'Tab Định Mức DCLR',
+  },
+  GLAZING: {
+    name: 'Dán Kính',
+    stageName: 'Dán Kính',
+    normText: '242 SPQĐ / người / ca 8h (30.25 SPQĐ / giờ)',
+    normPerShift: 242,
+    hourlyNorm: 30.25,
+    color: '#EF4444',
+    lineColor: '#DC2626',
+    barKey: 'Dán Kính',
+    lineKey: 'NSLD_DanKinh',
+    convertedKey: 'danKinhConverted',
+    targetKey: 'targetQDDanKinh',
+    workerKey: 'workerCountDanKinh',
+    hsqdSource: 'Tab HSQĐ Dán Kính 2 (Công đoạn riêng lẻ)',
+  },
+};
+
 function DashboardView({ inventory, parts, transactions, labels, refreshData, setDefectModal, dclrNorms, dclrNormsMap, glazingHSQD }: any) {
   const [selectedStageDetail, setSelectedStageDetail] = useState<StageId | null>(null);
   const [expandedInventoryKeys, setExpandedInventoryKeys] = useState<Set<string>>(new Set());
@@ -5011,7 +5149,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   const [showExportModal, setShowExportModal] = useState(false);
   const [showExportPreparationModal, setShowExportPreparationModal] = useState(false);
   const [showExportHourlyModal, setShowExportHourlyModal] = useState(false);
-  const [activeChartTab, setActiveChartTab] = useState<'MECHANICAL' | 'STAGES'>('MECHANICAL');
+  const [activeChartTab, setActiveChartTab] = useState<'MECHANICAL' | 'LASER' | 'BENDING' | 'WELDING' | 'PAINTING' | 'GLAZING'>('MECHANICAL');
   const [chartDimensions, setChartDimensions] = useState<{ width: number; height: number } | null>(null);
   const chartWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -5298,6 +5436,18 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
        return localDate.toISOString().split('T')[0] === chartDate;
     });
 
+    const laserHSQDArray = storageService.getLaserHSQD();
+    const laserHSQDMap = new Map(laserHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
+    const getLaserHSQD = (partId: string) => {
+      const upper = (partId || '').trim().toUpperCase();
+      if (laserHSQDMap.has(upper)) return laserHSQDMap.get(upper)!;
+      const cleanId = upper.replace(/^LSR-OUT-/i, '').replace(/\s*-\s*CẮT LASER$/i, '').trim();
+      if (cleanId && laserHSQDMap.has(cleanId)) return laserHSQDMap.get(cleanId)!;
+      const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
+      if (matchedPart && laserHSQDMap.has(matchedPart.id.toUpperCase())) return laserHSQDMap.get(matchedPart.id.toUpperCase())!;
+      return 1;
+    };
+
     const bendingWeldingHSQDArray = storageService.getBendingWeldingHSQD();
     const bendingWeldingHSQDMap = new Map(bendingWeldingHSQDArray.map(n => [n.partId, n.hsqd]));
     const getBendingWeldingHSQD = (partId: string) => bendingWeldingHSQDMap.get(partId) || 0;
@@ -5333,6 +5483,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         return hour >= slot.start && hour < slot.end;
       });
 
+      let laserConverted = 0;
       let sonConverted = 0;
       let danKinhConvertedMechanical = 0; // Tính theo HSQĐ Dán Kính 1 (Xưởng Cơ Khí)
       let danKinhConvertedStage = 0;      // Tính theo HSQĐ Dán Kính 2 (Công đoạn riêng lẻ)
@@ -5354,7 +5505,13 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           slotData.details[stageName].push({ partName, quantity: (t.quantity || 0), unit });
         }
         
-        if (t.stageId === 'PAINTING') {
+        if (t.stageId === 'LASER') {
+           if (!isLaserScrapItem(t.partId, t.partName)) {
+             const hsqd = getLaserHSQD(t.partId);
+             const effectiveHsqd = hsqd > 0 ? hsqd : 1;
+             laserConverted += ((t.quantity || 0) * effectiveHsqd);
+           }
+        } else if (t.stageId === 'PAINTING') {
            const hsqd = dclrNormsMap.get(t.partId) || 0;
            sonConverted += ((t.quantity || 0) * hsqd);
         } else if (t.stageId === 'GLAZING') {
@@ -5394,11 +5551,15 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       });
       
       // Calculate productivity percentage based on user's exact shift standards:
+      // Cắt Laser: 250 SPQĐ / người / ca 8h
       // Chấn / Dập: 132.7 SPQĐ / người / ca 8h
       // Hàn: 77.2 SPQĐ / người / ca 8h
       // Sơn: 127.5 SPQĐ / người / ca 8h
       // Dán Kính: 242 SPQĐ / người / ca 8h
       const hourFactor = (slot.label === '19h-20h') ? 0.125 : 0.25;
+
+      const workerCountLaser = hourlyPeopleLaser[slot.label] !== undefined ? hourlyPeopleLaser[slot.label] : 0;
+      const targetQDLaser = workerCountLaser * 250 * hourFactor;
 
       const workerCountSon = hourlyPeoplePainting[slot.label] !== undefined ? hourlyPeoplePainting[slot.label] : 0;
       const targetQDSon = workerCountSon * 127.5 * hourFactor;
@@ -5412,6 +5573,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       const workerCountHan = hourlyPeopleWelding[slot.label] !== undefined ? hourlyPeopleWelding[slot.label] : 0;
       const targetQDHan = workerCountHan * 77.2 * hourFactor;
 
+      slotData['NSLD_Laser'] = targetQDLaser > 0 ? (laserConverted / targetQDLaser) : 0;
       slotData['NSLD_Son'] = targetQDSon > 0 ? (sonConverted / targetQDSon) : 0;
       slotData['NSLD_DanKinh'] = targetQDDanKinh > 0 ? (danKinhConvertedStage / targetQDDanKinh) : 0;
       slotData['NSLD_ChanDap'] = targetQDChanDap > 0 ? (chanDapConverted / targetQDChanDap) : 0;
@@ -5419,7 +5581,6 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
       // Năng suất lao động phân xưởng cơ khí từng khung giờ:
       // NSLĐ = Tổng sản phẩm quy đổi của khung giờ (Sơn + Dán kính tính theo HSQĐ Xưởng) / (Tổng số người của khung giờ đó * hourFactor) / 28.3
-      const workerCountLaser = hourlyPeopleLaser[slot.label] !== undefined ? hourlyPeopleLaser[slot.label] : 0;
       const totalConvertedMechanical = sonConverted + danKinhConvertedMechanical;
       const totalWorkersMechanical = workerCountLaser + workerCountChanDap + workerCountHan + workerCountSon + workerCountDanKinh;
       const slotMandays = totalWorkersMechanical * hourFactor;
@@ -5438,13 +5599,30 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       slotData['totalWorkersMechanical'] = totalWorkersMechanical;
       slotData['hourFactor'] = hourFactor;
       slotData['slotMandays'] = slotMandays;
+
+      slotData['laserConverted'] = laserConverted;
+      slotData['targetQDLaser'] = targetQDLaser;
       slotData['sonConverted'] = sonConverted;
+      slotData['targetQDSon'] = targetQDSon;
       slotData['danKinhConverted'] = danKinhConvertedStage;
+      slotData['targetQDDanKinh'] = targetQDDanKinh;
       slotData['danKinhConvertedMechanical'] = danKinhConvertedMechanical;
+      slotData['chanDapConverted'] = chanDapConverted;
+      slotData['targetQDChanDap'] = targetQDChanDap;
+      slotData['hanConverted'] = hanConverted;
+      slotData['targetQDHan'] = targetQDHan;
 
       return slotData;
     });
   }, [transactions, labels, chartDate, hourlyPeopleLaser, hourlyPeoplePainting, hourlyPeopleGlazing, hourlyPeopleBending, hourlyPeopleWelding]);
+
+  const laserScrapItems = useMemo(() => {
+    return inventory.filter(item => 
+      item.stageId === 'LASER' && 
+      item.quantity > 0 && 
+      isLaserScrapItem(item.partId, parts.find(p => p.id === item.partId || p.name === item.partId)?.name)
+    );
+  }, [inventory, parts]);
 
   const stageSummaries = useMemo(() => {
     return STAGES.map(stage => {
@@ -5452,16 +5630,57 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       
       const formatQty = (val: number) => parseFloat(val.toFixed(4));
       
+      const isScrap = (partId: string) => {
+        if (stage.id !== 'LASER') return false;
+        const partObj = parts.find(p => p.id === partId || p.name === partId);
+        return isLaserScrapItem(partId, partObj?.name);
+      };
+
+      const inQty = stageItems.filter(i => i.location === 'IN').reduce((sum, i) => sum + i.quantity, 0);
+      const outQty = stageItems.filter(i => i.location === 'OUT' && !isScrap(i.partId)).reduce((sum, i) => sum + i.quantity, 0);
+      const defectQty = stageItems.filter(i => i.location === 'DEFECT').reduce((sum, i) => sum + i.quantity, 0);
+      const scrapQty = stageItems.filter(i => isScrap(i.partId)).reduce((sum, i) => sum + i.quantity, 0);
+
       return {
         id: stage.id,
         name: stage.name,
-        total: formatQty(stageItems.reduce((sum, item) => sum + item.quantity, 0)),
-        in: formatQty(stageItems.filter(i => i.location === 'IN').reduce((sum, i) => sum + i.quantity, 0)),
-        out: formatQty(stageItems.filter(i => i.location === 'OUT').reduce((sum, i) => sum + i.quantity, 0)),
-        defect: formatQty(stageItems.filter(i => i.location === 'DEFECT').reduce((sum, i) => sum + i.quantity, 0)),
+        total: formatQty(inQty + outQty + defectQty),
+        in: formatQty(inQty),
+        out: formatQty(outQty),
+        defect: formatQty(defectQty),
+        scrap: formatQty(scrapQty),
       };
     });
-  }, [inventory]);
+  }, [inventory, parts]);
+
+  const activeStageConfig = activeChartTab !== 'MECHANICAL' ? STAGE_CHART_CONFIGS[activeChartTab] : null;
+
+  const stageDaySummary = useMemo(() => {
+    if (activeChartTab === 'MECHANICAL') {
+      const totalConv = productionChartData.reduce((acc, d) => acc + (d.totalConvertedMechanical || 0), 0);
+      const totalMandays = productionChartData.reduce((acc, d) => acc + (d.slotMandays || 0), 0);
+      const totalTarget = totalMandays * 28.3;
+      const avgNsld = totalTarget > 0 ? (totalConv / totalTarget) : 0;
+      return {
+        totalConv: totalConv.toFixed(1),
+        totalTarget: totalTarget.toFixed(1),
+        avgNsld: Math.round(avgNsld * 100),
+        mandays: totalMandays.toFixed(2),
+      };
+    }
+    if (!activeStageConfig) return null;
+    const cfg = activeStageConfig;
+    const totalActual = productionChartData.reduce((acc, d) => acc + (d[cfg.barKey] || 0), 0);
+    const totalConv = productionChartData.reduce((acc, d) => acc + (d[cfg.convertedKey] || 0), 0);
+    const totalTarget = productionChartData.reduce((acc, d) => acc + (d[cfg.targetKey] || 0), 0);
+    const avgNsld = totalTarget > 0 ? (totalConv / totalTarget) : 0;
+    return {
+      totalActual: Math.round(totalActual),
+      totalConv: Math.round(totalConv * 10) / 10,
+      totalTarget: Math.round(totalTarget * 10) / 10,
+      avgNsld: Math.round(avgNsld * 100),
+    };
+  }, [activeChartTab, activeStageConfig, productionChartData]);
 
   return (
     <motion.div 
@@ -5557,6 +5776,14 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   </span>
                 </div>
               </div>
+              {summary.id === 'LASER' && (summary.scrap || 0) > 0 && (
+                <div className="mt-1.5 px-2 py-1 bg-amber-50 border border-amber-200/80 rounded-lg flex items-center justify-between text-[9px] sm:text-[10px] font-mono">
+                  <span className="font-bold text-amber-700 flex items-center gap-1 truncate">
+                    <Layers size={11} className="text-amber-600 shrink-0" /> Phế liệu:
+                  </span>
+                  <span className="font-black text-amber-800 shrink-0">{summary.scrap?.toFixed(1)} kg</span>
+                </div>
+              )}
               <div className="mt-2 sm:mt-3 pt-1.5 sm:pt-2.5 border-t border-gray-100 flex items-center justify-between text-[10px] sm:text-xs font-bold uppercase tracking-wider text-gray-400 group-hover:text-[#F27D26] transition-colors">
                 <span className="truncate">{isActive ? 'Đang xem' : 'Chi tiết'}</span>
                 <ChevronRight size={13} className={cn("transition-transform shrink-0", isActive && "rotate-90 text-[#F27D26]")} />
@@ -5648,6 +5875,123 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                     <Trash2 size={16} className="group-hover:rotate-12 transition-transform" />
                     <span>Xác nhận xóa hết</span>
                   </button>
+                </div>
+              )}
+
+              {selectedStageDetail === 'LASER' && (
+                <div className="mb-4 sm:mb-8 p-4 sm:p-6 bg-gradient-to-r from-amber-50/90 via-amber-50/40 to-orange-50/60 border-2 border-amber-300 rounded-xl sm:rounded-2xl shadow-sm">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="flex items-center gap-3.5">
+                      <div className="p-3 bg-amber-500 text-white rounded-xl shadow-sm shrink-0">
+                        <Layers size={22} className="sm:w-6 sm:h-6" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm sm:text-lg font-black uppercase text-amber-950 tracking-wide">
+                            Khu vực thu hồi Phế liệu tôn (SX)
+                          </h3>
+                          <span className="px-2 py-0.5 bg-amber-200/80 text-amber-900 text-[10px] font-bold rounded-md uppercase tracking-wider">
+                            Tách riêng khỏi kho OUT
+                          </span>
+                        </div>
+                        <p className="text-xs text-amber-800/80 font-medium mt-0.5">
+                          Tự động sinh ra từ định mức hao hụt khi cắt tôn tấm (kg phế liệu phôi cắt laser)
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+                      <div className="text-right">
+                        <div className="text-[10px] font-bold font-mono uppercase text-amber-700 tracking-wider">Tổng khối lượng phế liệu</div>
+                        <div className="flex items-baseline gap-1.5 justify-end">
+                          <span className="text-2xl sm:text-3xl font-black font-mono text-amber-600">
+                            {laserScrapItems.reduce((sum, item) => sum + item.quantity, 0).toFixed(4)}
+                          </span>
+                          <span className="text-xs font-bold font-mono uppercase text-amber-800">KG</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Danh sách các mã phế liệu */}
+                  <div className="mt-4 pt-4 border-t border-amber-200/70 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {laserScrapItems.length > 0 ? (
+                      laserScrapItems.map((item, idx) => {
+                        const part = parts.find(p => p.id === item.partId || p.name === item.partId);
+                        const ageBatches = getInventoryBatches(item, transactions);
+                        const ageInfo = ageBatches.length > 0 ? ageBatches[0].ageInfo : null;
+
+                        return (
+                          <div key={idx} className="bg-white p-3.5 rounded-xl border border-amber-200 shadow-2xs flex justify-between items-center gap-3 hover:border-amber-300 transition-colors">
+                            <div className="min-w-0 flex-1">
+                              <div className="font-bold text-sm text-gray-900 truncate">
+                                {part?.name || item.partId}
+                              </div>
+                              <div className="text-xs font-mono text-amber-700/80 flex items-center gap-2">
+                                <span>{item.partId}</span>
+                                <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-sans font-bold">Thu hồi</span>
+                              </div>
+                              {ageInfo && (
+                                <div className={`text-[11px] font-bold mt-1 ${ageInfo.colorClass}`}>
+                                  {ageInfo.text}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <div className="text-right mr-1">
+                                <div className="text-lg font-black font-mono text-amber-600">
+                                  {item.quantity.toFixed(4)}
+                                </div>
+                                <div className="text-[10px] font-mono text-gray-400 uppercase font-bold">KG</div>
+                              </div>
+
+                              <button
+                                onClick={async () => {
+                                  const pwd = await customPrompt('Nhập mật khẩu để sửa số lượng phế liệu:', '', true);
+                                  if (pwd === 'admin123') {
+                                    const newQty = await customPrompt(`Nhập khối lượng phế liệu mới (KG) cho ${item.partId}:`, String(item.quantity));
+                                    if (newQty !== null) {
+                                      storageService.setInventoryQuantity(item.partId, 'LASER', item.location, parseFloat(newQty) || 0, item.originalPartId);
+                                      refreshData();
+                                    }
+                                  } else if (pwd !== null) {
+                                    await customAlert('Mật khẩu không chính xác!');
+                                  }
+                                }}
+                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                                title="Sửa số lượng phế liệu"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+
+                              <button
+                                onClick={async () => {
+                                  const pwd = await customPrompt('Nhập mật khẩu để xóa tồn phế liệu:', '', true);
+                                  if (pwd === 'admin123') {
+                                    if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn phế liệu của ${item.partId}?`)) {
+                                      storageService.deleteInventoryItem(item.partId, 'LASER', item.location, item.originalPartId);
+                                      refreshData();
+                                    }
+                                  } else if (pwd !== null) {
+                                    await customAlert('Mật khẩu không chính xác!');
+                                  }
+                                }}
+                                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                                title="Xóa tồn phế liệu"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="col-span-full py-2 text-center text-xs font-mono italic text-amber-700/70">
+                        Chưa có tồn phế liệu tôn phát sinh tại công đoạn Cắt Laser.
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -5807,7 +6151,14 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   <div className="flex items-center justify-between px-2">
                     <div className="flex items-center gap-2">
                       <div className="w-3 h-3 rounded-full bg-[#F27D26]" />
-                      <h3 className="font-mono text-base font-bold uppercase tracking-widest opacity-80">KHO_OUT (Đã hoàn thành)</h3>
+                      <h3 className="font-mono text-base font-bold uppercase tracking-widest opacity-80">
+                        KHO_OUT (Đã hoàn thành)
+                        {selectedStageDetail === 'LASER' && (
+                          <span className="ml-2 text-xs font-normal normal-case text-gray-500 font-sans hidden sm:inline">
+                            (Linh kiện thành phẩm)
+                          </span>
+                        )}
+                      </h3>
                     </div>
                     {['LASER', 'BENDING', 'WELDING', 'PAINTING'].includes(selectedStageDetail!) && (
                       <button 
@@ -5830,6 +6181,13 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         {inventory
                           .filter(item => item.stageId === selectedStageDetail && item.location === 'OUT' && item.quantity > 0)
                           .filter(item => {
+                            // Tách riêng phế liệu tôn khỏi kho OUT của Cắt Laser
+                            if (selectedStageDetail === 'LASER') {
+                              const partObj = parts.find(p => p.id === item.partId || p.name === item.partId);
+                              if (isLaserScrapItem(item.partId, partObj?.name)) {
+                                return false;
+                              }
+                            }
                             const partStr = item.partId;
                             const part = parts.find(p => p.id === partStr || p.name === partStr);
                             const originalPart = item.originalPartId ? parts.find(p => p.id === item.originalPartId || p.name === item.originalPartId) : null;
@@ -5947,6 +6305,28 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                             </React.Fragment>
                           );
                           })}
+                        {inventory
+                          .filter(item => item.stageId === selectedStageDetail && item.location === 'OUT' && item.quantity > 0)
+                          .filter(item => {
+                            if (selectedStageDetail === 'LASER') {
+                              const partObj = parts.find(p => p.id === item.partId || p.name === item.partId);
+                              if (isLaserScrapItem(item.partId, partObj?.name)) return false;
+                            }
+                            const partStr = item.partId;
+                            const part = parts.find(p => p.id === partStr || p.name === partStr);
+                            const originalPart = item.originalPartId ? parts.find(p => p.id === item.originalPartId || p.name === item.originalPartId) : null;
+                            const searchLower = searchTerm.toLowerCase();
+                            return item.partId.toLowerCase().includes(searchLower) || 
+                                   (part && part.name.toLowerCase().includes(searchLower)) ||
+                                   (item.originalPartId && item.originalPartId.toLowerCase().includes(searchLower)) ||
+                                   (originalPart && originalPart.name.toLowerCase().includes(searchLower));
+                          }).length === 0 && (
+                            <tr>
+                              <td colSpan={2} className="p-8 text-center text-xs font-mono text-gray-400 italic">
+                                Không có linh kiện tồn trong kho OUT
+                              </td>
+                            </tr>
+                          )}
                       </tbody>
                     </table>
                   </div>
@@ -6084,28 +6464,37 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           <div className="flex items-center gap-1.5 p-1 bg-gray-100/90 rounded-xl border border-gray-200 max-w-full overflow-x-auto no-scrollbar shrink-0">
             <button
               onClick={() => setActiveChartTab('MECHANICAL')}
-              className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs md:text-sm font-bold uppercase tracking-wider transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+              className={`px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-lg text-xs md:text-sm font-bold uppercase tracking-wider transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer active:scale-95 ${
                 activeChartTab === 'MECHANICAL'
                   ? 'bg-white text-indigo-700 shadow-sm border border-gray-200 font-black'
                   : 'text-gray-500 hover:text-indigo-600'
               }`}
             >
-              <span className={`w-2 sm:w-2.5 h-2 sm:h-2.5 rounded-full ${activeChartTab === 'MECHANICAL' ? 'bg-indigo-600' : 'bg-gray-300'}`} />
-              <span className="hidden sm:inline">Biểu đồ năng suất lao động xưởng cơ khí</span>
+              <span className={`w-2.5 h-2.5 rounded-full ${activeChartTab === 'MECHANICAL' ? 'bg-indigo-600' : 'bg-gray-300'}`} />
+              <span className="hidden sm:inline">Năng suất Xưởng Cơ Khí</span>
               <span className="sm:hidden">NSLĐ Cơ Khí</span>
             </button>
-            <button
-              onClick={() => setActiveChartTab('STAGES')}
-              className={`px-2.5 sm:px-4 py-2 sm:py-2.5 rounded-lg text-xs md:text-sm font-bold uppercase tracking-wider transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer active:scale-95 ${
-                activeChartTab === 'STAGES'
-                  ? 'bg-white text-gray-900 shadow-sm border border-gray-200 font-black'
-                  : 'text-gray-500 hover:text-gray-800'
-              }`}
-            >
-              <span className={`w-2 sm:w-2.5 h-2 sm:h-2.5 rounded-full ${activeChartTab === 'STAGES' ? 'bg-indigo-600' : 'bg-gray-300'}`} />
-              <span className="hidden sm:inline">Biểu đồ năng suất lao động của các công đoạn</span>
-              <span className="sm:hidden">NSLĐ Công Đoạn</span>
-            </button>
+            
+            {([
+              { id: 'LASER', name: 'Cắt Laser', color: '#3B82F6', activeText: 'text-blue-700' },
+              { id: 'BENDING', name: 'Chấn / Dập', color: '#9333EA', activeText: 'text-purple-700' },
+              { id: 'WELDING', name: 'Hàn', color: '#10B981', activeText: 'text-emerald-700' },
+              { id: 'PAINTING', name: 'Sơn', color: '#EAB308', activeText: 'text-amber-700' },
+              { id: 'GLAZING', name: 'Dán Kính', color: '#EF4444', activeText: 'text-red-700' },
+            ] as const).map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveChartTab(tab.id)}
+                className={`px-2.5 sm:px-3.5 py-2 sm:py-2.5 rounded-lg text-xs md:text-sm font-bold uppercase tracking-wider transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                  activeChartTab === tab.id
+                    ? `bg-white ${tab.activeText} shadow-sm border border-gray-200 font-black`
+                    : 'text-gray-500 hover:text-gray-900'
+                }`}
+              >
+                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: activeChartTab === tab.id ? tab.color : '#D1D5DB' }} />
+                <span>{tab.name}</span>
+              </button>
+            ))}
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4 flex-wrap justify-between sm:justify-end">
@@ -6133,58 +6522,87 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           </div>
         </div>
 
+        {/* Stage KPI Summary Banner */}
+        {activeChartTab === 'MECHANICAL' ? (
+          <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/80 pb-2 mb-2.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="w-3 h-3 rounded-full bg-[#4F46E5]" />
+                <span className="font-extrabold uppercase text-xs sm:text-sm text-indigo-950">Biểu đồ Năng suất Lao động Toàn Xưởng Cơ Khí</span>
+                <span className="text-[11px] font-bold text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200">Định mức chuẩn: 28.3 SPQĐ / công 8h</span>
+              </div>
+              <div className="text-[11px] text-gray-500">
+                Hệ số quy đổi: <span className="font-bold text-gray-700">Sơn (DCLR) + Dán Kính 1 (Xưởng)</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 text-xs">
+              <div className="bg-white rounded-lg p-2.5 border border-indigo-100 shadow-2xs">
+                <div className="text-gray-400 text-[10px] font-bold uppercase">Tổng SPQĐ thực tế</div>
+                <div className="font-mono font-black text-sm sm:text-base text-indigo-900">{stageDaySummary?.totalConv} SPQĐ</div>
+              </div>
+              <div className="bg-white rounded-lg p-2.5 border border-indigo-100 shadow-2xs">
+                <div className="text-gray-400 text-[10px] font-bold uppercase">Tổng số công làm việc</div>
+                <div className="font-mono font-black text-sm sm:text-base text-gray-800">{stageDaySummary?.mandays} công</div>
+              </div>
+              <div className="bg-white rounded-lg p-2.5 border border-indigo-100 shadow-2xs">
+                <div className="text-gray-400 text-[10px] font-bold uppercase">Mục tiêu quy đổi theo công</div>
+                <div className="font-mono font-black text-sm sm:text-base text-gray-800">{stageDaySummary?.totalTarget} SPQĐ</div>
+              </div>
+              <div className="bg-white rounded-lg p-2.5 border border-indigo-100 shadow-2xs">
+                <div className="text-gray-400 text-[10px] font-bold uppercase">NSLĐ trung bình ngày</div>
+                <div className={`font-mono font-black text-sm sm:text-base ${Number(stageDaySummary?.avgNsld || 0) >= 100 ? 'text-emerald-600' : Number(stageDaySummary?.avgNsld || 0) >= 80 ? 'text-amber-600' : 'text-red-600'}`}>
+                  {stageDaySummary?.avgNsld}%
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          activeStageConfig && (
+            <div className="rounded-xl p-3 sm:p-4 mb-3 sm:mb-4 border bg-gray-50/70 border-gray-200">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-gray-200 pb-2 mb-2.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: activeStageConfig.color }} />
+                  <span className="font-extrabold uppercase text-xs sm:text-sm text-gray-900">
+                    Năng suất Công đoạn {activeStageConfig.name}
+                  </span>
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-800">
+                    Định mức chuẩn: <span className="font-black" style={{ color: activeStageConfig.lineColor }}>{activeStageConfig.normText}</span>
+                  </span>
+                </div>
+                <div className="text-[11px] text-gray-500 font-medium">
+                  Hệ số quy đổi: <span className="font-bold text-gray-700">{activeStageConfig.hsqdSource}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 text-xs">
+                <div className="bg-white rounded-lg p-2.5 border border-gray-200 shadow-2xs">
+                  <div className="text-gray-400 text-[10px] font-bold uppercase">Sản lượng thực tế</div>
+                  <div className="font-mono font-black text-sm sm:text-base text-gray-800">{stageDaySummary?.totalActual} cái/tấm</div>
+                </div>
+                <div className="bg-white rounded-lg p-2.5 border border-gray-200 shadow-2xs">
+                  <div className="text-gray-400 text-[10px] font-bold uppercase">Sản phẩm quy đổi</div>
+                  <div className="font-mono font-black text-sm sm:text-base" style={{ color: activeStageConfig.lineColor }}>{stageDaySummary?.totalConv} SPQĐ</div>
+                </div>
+                <div className="bg-white rounded-lg p-2.5 border border-gray-200 shadow-2xs">
+                  <div className="text-gray-400 text-[10px] font-bold uppercase">Mục tiêu theo nhân sự</div>
+                  <div className="font-mono font-black text-sm sm:text-base text-gray-800">{stageDaySummary?.totalTarget} SPQĐ</div>
+                </div>
+                <div className="bg-white rounded-lg p-2.5 border border-gray-200 shadow-2xs">
+                  <div className="text-gray-400 text-[10px] font-bold uppercase">NSLĐ trung bình ngày</div>
+                  <div className={`font-mono font-black text-sm sm:text-base ${Number(stageDaySummary?.avgNsld || 0) >= 100 ? 'text-emerald-600' : Number(stageDaySummary?.avgNsld || 0) >= 80 ? 'text-amber-600' : 'text-red-600'}`}>
+                    {stageDaySummary?.avgNsld}%
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        )}
+
         {/* Legend area */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4 mb-3 sm:mb-4 flex-wrap text-xs">
-          {activeChartTab === 'STAGES' ? (
-            <>
-              <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap text-xs font-bold">
-                <span className="text-gray-400 uppercase text-[10px] sm:text-[11px]">Sản lượng:</span>
-                <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 rounded bg-[#3B82F6]" />
-                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Laser</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 rounded bg-[#9333EA]" />
-                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Chấn</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 rounded bg-[#10B981]" />
-                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Hàn</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 rounded bg-[#EAB308]" />
-                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Sơn</span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 rounded bg-[#EF4444]" />
-                  <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Dán Kính</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 sm:gap-3.5 flex-wrap text-[11px] sm:text-xs font-mono font-black">
-                <span className="text-gray-400 uppercase text-[10px] font-sans font-bold">NSLĐ:</span>
-                <div className="flex items-center gap-1 text-[#9333EA]">
-                  <div className="w-3 h-1 rounded bg-[#9333EA]" />
-                  <span>Chấn</span>
-                </div>
-                <div className="flex items-center gap-1 text-[#10B981]">
-                  <div className="w-3 h-1 rounded bg-[#10B981]" />
-                  <span>Hàn</span>
-                </div>
-                <div className="flex items-center gap-1 text-[#CA8A04]">
-                  <div className="w-3 h-1 rounded bg-[#EAB308]" />
-                  <span>Sơn</span>
-                </div>
-                <div className="flex items-center gap-1 text-[#EF4444]">
-                  <div className="w-3 h-1 rounded bg-[#EF4444]" />
-                  <span>Dán</span>
-                </div>
-              </div>
-            </>
-          ) : (
+          {activeChartTab === 'MECHANICAL' ? (
             <div className="flex items-center gap-3 sm:gap-6 flex-wrap text-xs font-bold">
               <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-gray-400 uppercase text-[10px] sm:text-[11px]">Sản lượng:</span>
+                <span className="text-gray-400 uppercase text-[10px] sm:text-[11px]">Sản lượng thực tế:</span>
                 <div className="flex items-center gap-1">
                   <div className="w-3 h-3 rounded bg-[#E5A84B]" />
                   <span className="text-gray-700 uppercase text-[11px] sm:text-xs">Sơn</span>
@@ -6200,6 +6618,25 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                 <span className="text-[11px] sm:text-xs font-black uppercase text-indigo-700 tracking-wider">NSLĐ XƯỞNG CƠ KHÍ</span>
               </div>
             </div>
+          ) : (
+            activeStageConfig && (
+              <div className="flex items-center gap-4 sm:gap-8 flex-wrap text-xs font-bold">
+                <div className="flex items-center gap-2">
+                  <div className="w-3.5 h-3 rounded" style={{ backgroundColor: activeStageConfig.color }} />
+                  <span className="text-gray-800 uppercase text-[11px] sm:text-xs">Sản lượng thực tế: {activeStageConfig.name}</span>
+                </div>
+                <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg border bg-white" style={{ borderColor: activeStageConfig.color }}>
+                  <div className="w-4 h-1.5 rounded" style={{ backgroundColor: activeStageConfig.lineColor }} />
+                  <span className="text-[11px] sm:text-xs font-black uppercase tracking-wider" style={{ color: activeStageConfig.lineColor }}>
+                    % NSLĐ
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-gray-500 font-medium text-[11px]">
+                  <div className="w-4 h-0.5 border-t-2 border-dashed border-gray-600" />
+                  <span>Đường chuẩn 100% Mục tiêu</span>
+                </div>
+              </div>
+            )
           )}
         </div>
 
@@ -6255,7 +6692,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   if (active && payload && payload.length) {
                     const data = payload[0].payload;
                     return (
-                      <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xl text-sm text-gray-800 min-w-[260px] max-w-sm">
+                      <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xl text-sm text-gray-800 min-w-[280px] max-w-sm">
                         <h4 className="font-bold border-b border-gray-100 pb-2 mb-3 text-lg text-gray-900 flex justify-between items-center">
                           <span>{label}</span>
                           <span className="text-xs font-normal text-gray-400">{chartDate}</span>
@@ -6293,72 +6730,96 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                           </div>
                         )}
 
-                        {payload.map((entry: any, index: number) => {
-                          if (entry.value === 0) return null;
-                          
-                          if (entry.dataKey.startsWith('NSLD_')) {
-                             const labelMap: Record<string, string> = {
-                               'NSLD_ChanDap': 'NSLĐ Chấn/Dập',
-                               'NSLD_Han': 'NSLĐ Hàn',
-                               'NSLD_Son': 'NSLĐ Sơn',
-                               'NSLD_DanKinh': 'NSLĐ Dán Kính',
-                               'NSLD_CoKhi': 'NSLĐ Xưởng Cơ Khí'
-                             };
-                             if (activeChartTab === 'MECHANICAL' && entry.dataKey !== 'NSLD_CoKhi') return null;
-                             if (activeChartTab === 'STAGES' && entry.dataKey === 'NSLD_CoKhi') return null;
-
-                             return (
-                               <div key={index} className="mb-2 last:mb-0 flex items-center justify-between font-bold">
-                                  <div className="flex items-center gap-2" style={{ color: entry.color }}>
-                                    <div className="w-4 h-1.5 rounded" style={{ backgroundColor: entry.color }} />
-                                    <span className="uppercase tracking-widest text-xs">{labelMap[entry.dataKey] || entry.dataKey}</span>
-                                  </div>
-                                  <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-900">{(entry.value * 100).toFixed(0)}%</span>
-                               </div>
-                             );
-                          }
-
-                          const stageDetails = data.details[entry.dataKey] || [];
-                          return (
-                            <div key={index} className="mb-3 last:mb-0">
-                              <div className="font-bold flex items-center justify-between mb-1.5">
-                                <div className="flex items-center gap-2" style={{ color: entry.color }}>
-                                  <div className="w-3 h-3 rounded" style={{ backgroundColor: entry.color }} />
-                                  <span className="uppercase tracking-widest text-xs">{entry.dataKey}</span>
-                                </div>
-                                <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-900">{entry.value} TOTAL</span>
+                        {/* Stage Specific Highlight Box */}
+                        {activeStageConfig && (
+                          <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 mb-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <div className="w-3.5 h-3.5 rounded" style={{ backgroundColor: activeStageConfig.color }} />
+                                <span className="font-extrabold uppercase text-xs text-gray-900">NSLĐ {activeStageConfig.name}</span>
                               </div>
-                              <div className="pl-5 space-y-1">
-                                {stageDetails.map((detail: any, idx: number) => (
-                                  <div key={idx} className="flex justify-between items-start text-xs text-gray-700 gap-4">
-                                    <span className="break-words flex-1 leading-tight font-medium text-[11px]">{detail.partName}</span>
-                                    <div className="flex items-center gap-1">
-                                      <span className="font-mono font-bold bg-gray-50 px-1.5 py-0.2 rounded border border-gray-100 text-gray-900 text-[11px]">{detail.quantity}</span>
-                                      <span className="text-[10px] opacity-70 font-semibold whitespace-nowrap">{detail.unit}</span>
-                                    </div>
-                                  </div>
-                                ))}
+                              <span className="font-mono font-black text-sm px-2 py-0.5 rounded bg-white border border-gray-200" style={{ color: activeStageConfig.lineColor }}>
+                                {Math.round((data[activeStageConfig.lineKey] || 0) * 100)}%
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-gray-700 space-y-1">
+                              <div className="flex justify-between">
+                                <span className="text-gray-500">• Sản phẩm quy đổi đạt:</span>
+                                <span className="font-mono font-bold" style={{ color: activeStageConfig.lineColor }}>{(data[activeStageConfig.convertedKey] || 0).toFixed(1)} SPQĐ</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500">• Mục tiêu khung giờ:</span>
+                                <span className="font-mono font-bold text-gray-900">{(data[activeStageConfig.targetKey] || 0).toFixed(1)} SPQĐ</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500">• Nhân sự khung giờ:</span>
+                                <span className="font-mono font-bold">{data[activeStageConfig.workerKey] || 0} người</span>
+                              </div>
+                              <div className="flex justify-between items-baseline gap-1">
+                                <span className="text-gray-500 whitespace-nowrap">• Công thức:</span>
+                                <span className="font-mono font-bold text-gray-700 text-right">
+                                  SPQĐ / ({data[activeStageConfig.workerKey] || 0} × {activeStageConfig.normPerShift} × {data.hourFactor === 0.125 ? '0.125' : '0.25'})
+                                </span>
                               </div>
                             </div>
-                          );
-                        })}
+                          </div>
+                        )}
+
+                        {/* Stage Produced Items Details */}
+                        {(() => {
+                          if (activeChartTab === 'MECHANICAL') {
+                            return ['Sơn', 'Dán Kính'].map((stName, sIdx) => {
+                              const items = data.details[stName] || [];
+                              if (items.length === 0) return null;
+                              return (
+                                <div key={sIdx} className="mb-3 last:mb-0">
+                                  <div className="font-bold flex items-center justify-between mb-1.5 text-xs text-gray-800">
+                                    <span className="uppercase tracking-widest">{stName}</span>
+                                    <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{data[stName]} Cái</span>
+                                  </div>
+                                  <div className="pl-3 space-y-1">
+                                    {items.map((detail: any, idx: number) => (
+                                      <div key={idx} className="flex justify-between items-start text-xs text-gray-700 gap-4">
+                                        <span className="break-words flex-1 leading-tight font-medium text-[11px]">{detail.partName}</span>
+                                        <span className="font-mono font-bold text-gray-900 text-[11px]">{detail.quantity} {detail.unit}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            });
+                          }
+
+                          if (activeStageConfig) {
+                            const items = data.details[activeStageConfig.stageName] || [];
+                            if (items.length === 0) return (
+                              <div className="text-xs text-gray-400 italic py-1 text-center">Không có sản lượng trong khung giờ này</div>
+                            );
+                            return (
+                              <div className="mb-2">
+                                <div className="font-bold flex items-center justify-between mb-1.5 text-xs text-gray-800 border-b border-gray-100 pb-1">
+                                  <span className="uppercase tracking-widest">Chi tiết sản lượng thực tế</span>
+                                  <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{data[activeStageConfig.barKey] || 0} Cái/Tấm</span>
+                                </div>
+                                <div className="pl-1 space-y-1 max-h-48 overflow-y-auto no-scrollbar">
+                                  {items.map((detail: any, idx: number) => (
+                                    <div key={idx} className="flex justify-between items-start text-xs text-gray-700 gap-4">
+                                      <span className="break-words flex-1 leading-tight font-medium text-[11px]">{detail.partName}</span>
+                                      <span className="font-mono font-bold text-gray-900 text-[11px] whitespace-nowrap">{detail.quantity} {detail.unit}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     );
                   }
                   return null;
                 }}
               />
-
-              {/* In STAGES tab: Show all 5 stage bars */}
-              {activeChartTab === 'STAGES' && (
-                <>
-                  <Bar yAxisId="left" dataKey="Cắt Laser" fill="#3B82F6" radius={[4, 4, 0, 0]} />
-                  <Bar yAxisId="left" dataKey="Chấn/Dập" fill="#9333EA" radius={[4, 4, 0, 0]} />
-                  <Bar yAxisId="left" dataKey="Hàn" fill="#10B981" radius={[4, 4, 0, 0]} />
-                  <Bar yAxisId="left" dataKey="Sơn" fill="#EAB308" radius={[4, 4, 0, 0]} />
-                  <Bar yAxisId="left" dataKey="Dán Kính" fill="#EF4444" radius={[4, 4, 0, 0]} />
-                </>
-              )}
 
               {/* In MECHANICAL tab: Show ONLY Painting & Glazing bars with soothing soft colors */}
               {activeChartTab === 'MECHANICAL' && (
@@ -6367,60 +6828,46 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   <Bar yAxisId="left" dataKey="Dán Kính" fill="#E06A6A" radius={[4, 4, 0, 0]} />
                 </>
               )}
+
+              {/* In Specific Stage tab: Show ONLY this stage's actual production bar */}
+              {activeStageConfig && (
+                <Bar 
+                  yAxisId="left" 
+                  dataKey={activeStageConfig.barKey} 
+                  fill={activeStageConfig.color} 
+                  radius={[4, 4, 0, 0]} 
+                />
+              )}
               
               <ReferenceLine y={1} yAxisId="right" stroke="#4B5563" strokeDasharray="3 3" strokeWidth={1.5} label={{ position: 'insideTopLeft', value: '100% Target', fill: '#4B5563', fontSize: 11, fontWeight: 'bold' }} />
 
-              {/* Stage Productivity Lines (Tab 1) */}
-              {activeChartTab === 'STAGES' && (
-                <>
-                  <Line yAxisId="right" type="monotone" dataKey="NSLD_ChanDap" stroke="#9333EA" strokeWidth={3} dot={{ r: 4, fill: '#9333EA', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} label={(props: any) => {
-                     const { x, y, value } = props;
-                     if (!value || value <= 0) return null;
-                     const labelY = y < 25 ? y + 16 : y - 12;
-                     return (
-                       <g>
-                         <rect x={x - 20} y={labelY - 10} width={40} height={15} fill="rgba(255, 255, 255, 0.95)" stroke="#9333EA" strokeWidth={1} rx={3} />
-                         <text x={x} y={labelY + 2} fill="#9333EA" fontSize={11} fontWeight="900" textAnchor="middle">{Math.round(value * 100)}%</text>
-                       </g>
-                     );
-                  }} />
-                  <Line yAxisId="right" type="monotone" dataKey="NSLD_Han" stroke="#10B981" strokeWidth={3} dot={{ r: 4, fill: '#10B981', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} label={(props: any) => {
-                     const { x, y, value } = props;
-                     if (!value || value <= 0) return null;
-                     const labelY = y < 25 ? y + 16 : y - 12;
-                     return (
-                       <g>
-                         <rect x={x - 20} y={labelY - 10} width={40} height={15} fill="rgba(255, 255, 255, 0.95)" stroke="#10B981" strokeWidth={1} rx={3} />
-                         <text x={x} y={labelY + 2} fill="#10B981" fontSize={11} fontWeight="900" textAnchor="middle">{Math.round(value * 100)}%</text>
-                       </g>
-                     );
-                  }} />
-                  <Line yAxisId="right" type="monotone" dataKey="NSLD_Son" stroke="#EAB308" strokeWidth={3} dot={{ r: 4, fill: '#EAB308', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} label={(props: any) => {
-                     const { x, y, value } = props;
-                     if (!value || value <= 0) return null;
-                     const labelY = y < 25 ? y + 16 : y - 12;
-                     return (
-                       <g>
-                         <rect x={x - 20} y={labelY - 10} width={40} height={15} fill="rgba(255, 255, 255, 0.95)" stroke="#CA8A04" strokeWidth={1} rx={3} />
-                         <text x={x} y={labelY + 2} fill="#CA8A04" fontSize={11} fontWeight="900" textAnchor="middle">{Math.round(value * 100)}%</text>
-                       </g>
-                     );
-                  }} />
-                  <Line yAxisId="right" type="monotone" dataKey="NSLD_DanKinh" stroke="#EF4444" strokeWidth={3} dot={{ r: 4, fill: '#EF4444', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} label={(props: any) => {
-                     const { x, y, value } = props;
-                     if (!value || value <= 0) return null;
-                     const labelY = y < 25 ? y + 16 : y - 12;
-                     return (
-                       <g>
-                         <rect x={x - 20} y={labelY - 10} width={40} height={15} fill="rgba(255, 255, 255, 0.95)" stroke="#EF4444" strokeWidth={1} rx={3} />
-                         <text x={x} y={labelY + 2} fill="#EF4444" fontSize={11} fontWeight="900" textAnchor="middle">{Math.round(value * 100)}%</text>
-                       </g>
-                     );
-                  }} />
-                </>
+              {/* Stage Specific Line */}
+              {activeStageConfig && (
+                <Line 
+                  yAxisId="right" 
+                  type="monotone" 
+                  dataKey={activeStageConfig.lineKey} 
+                  stroke={activeStageConfig.lineColor} 
+                  strokeWidth={3.5} 
+                  dot={{ r: 4.5, fill: activeStageConfig.lineColor, strokeWidth: 2, stroke: '#fff' }} 
+                  activeDot={{ r: 6.5 }} 
+                  label={(props: any) => {
+                    const { x, y, value } = props;
+                    if (!value || value <= 0) return null;
+                    const labelY = y < 35 ? y + 18 : y - 14;
+                    return (
+                      <g>
+                        <rect x={x - 22} y={labelY - 11} width={44} height={18} fill={activeStageConfig.lineColor} rx={5} />
+                        <text x={x} y={labelY + 2.5} fill="#ffffff" fontSize={11} fontWeight="800" fontFamily="monospace" textAnchor="middle">
+                          {Math.round(value * 100)}%
+                        </text>
+                      </g>
+                    );
+                  }} 
+                />
               )}
 
-              {/* Mechanical Workshop Productivity Single Line (Tab 2) - Soothing Indigo theme */}
+              {/* Mechanical Workshop Productivity Single Line (Tab 1) - Soothing Indigo theme */}
               {activeChartTab === 'MECHANICAL' && (
                 <Line 
                   yAxisId="right" 
