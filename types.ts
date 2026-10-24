@@ -174,6 +174,7 @@ export interface GlazingPlan {
   createdAt: number;
   status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
   producedQuantities?: Record<string, number>; // Track printed quantity per component ID
+  printedQuantities?: Record<string, number>;  // Track printed label count per component ID
   note?: string;
   excelRequiredDate?: number;
 }

@@ -20,6 +20,7 @@ import {
   CheckCircle2, 
   AlertCircle,
   Printer,
+  Sparkles,
   X,
   RotateCcw,
   ChevronRight,
@@ -7789,8 +7790,6 @@ function ProduceView({
         if (!hasAvailablePo && selectedStage !== 'GLAZING' && !isPaintingExempt && !hasInventory) return false; 
       }
 
-      if (sourceLocation === 'OUT' && glazingConfigPartIds.has(pUpper)) return false;
-
       if (selectedStage === 'LASER') {
         return (sourceLocation === 'IN' ? p.level === 3 : p.level === 2) && !p.skipLaser;
       }
@@ -7828,11 +7827,36 @@ function ProduceView({
 
   const availablePos = allAvailablePos.filter(p => p.partId === selectedPart);
 
+  // Check if selected part is in Glazing incoming configuration
+  const isGlazingPart = useMemo(() => {
+    if (!selectedPart) return false;
+    const cleanId = selectedPart.startsWith('GLZ-OUT-') 
+      ? selectedPart.trim().toUpperCase() 
+      : selectedPart.split(' - ')[0].trim().toUpperCase();
+    const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
+    const glazingConfigs = storageService.getGlazingConfigs();
+    return glazingConfigs.some(c => 
+      c.partId.trim().toUpperCase() === cleanId || 
+      (partObj?.name && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+    );
+  }, [selectedPart, parts]);
+
   // Handlers for selection
   const handlePartChange = (partId: string) => {
     setSelectedPart(partId);
     const pos = allAvailablePos.filter(p => p.partId === partId);
     setSelectedPoId(pos.length > 0 ? pos[0].id : "");
+
+    const cleanId = partId.startsWith('GLZ-OUT-') ? partId.trim().toUpperCase() : partId.split(' - ')[0].trim().toUpperCase();
+    const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
+    const glazingConfigs = storageService.getGlazingConfigs();
+    const isGlz = glazingConfigs.some(c => 
+      c.partId.trim().toUpperCase() === cleanId || 
+      (partObj?.name && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+    );
+    if (sourceLocation === 'OUT' && isGlz && selectedStage !== 'GLAZING') {
+      setTargetStageId('GLAZING');
+    }
   };
 
   const handlePoChange = (poId: string) => {
@@ -7841,6 +7865,16 @@ function ProduceView({
       const po = allAvailablePos.find(p => p.id === poId);
       if (po && po.partId !== selectedPart) {
         setSelectedPart(po.partId);
+        const cleanId = po.partId.split(' - ')[0].trim().toUpperCase();
+        const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
+        const glazingConfigs = storageService.getGlazingConfigs();
+        const isGlz = glazingConfigs.some(c => 
+          c.partId.trim().toUpperCase() === cleanId || 
+          (partObj?.name && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+        );
+        if (sourceLocation === 'OUT' && isGlz && selectedStage !== 'GLAZING') {
+          setTargetStageId('GLAZING');
+        }
       }
     }
   };
@@ -7856,6 +7890,12 @@ function ProduceView({
   }, [selectedStage, filteredParts, selectedPart, allAvailablePos]);
 
   useEffect(() => {
+    // If operator is exporting OUT and this component is configured for Glazing, auto-select destination to GLAZING
+    if (sourceLocation === 'OUT' && isGlazingPart && selectedStage !== 'GLAZING') {
+      setTargetStageId('GLAZING');
+      return;
+    }
+
     const currentIdx = STAGES.findIndex(s => s.id === selectedStage);
     const part = parts.find((p: any) => p.id === selectedPart);
     
@@ -7879,7 +7919,7 @@ function ProduceView({
     if (selectedStage === 'LASER' || selectedStage === 'WELDING' || selectedStage === 'GLAZING') {
       setSourceLocation('OUT');
     }
-  }, [selectedStage, selectedPart, sourceLocation, parts]);
+  }, [selectedStage, selectedPart, sourceLocation, parts, isGlazingPart]);
 
   const currentStock = useMemo(() => {
     const cleanId = selectedPart.startsWith('GLZ-OUT-') ? selectedPart.trim().toUpperCase() : selectedPart.split(' - ')[0].trim().toUpperCase();
@@ -8060,11 +8100,24 @@ function ProduceView({
 
           {sourceLocation === 'OUT' && (
             <div className="space-y-1.5 sm:space-y-3">
-              <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">4. Công đoạn đích (Nhập kho IN)</label>
+              <div className="flex flex-wrap justify-between items-center gap-1">
+                <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">4. Công đoạn đích (Nhập kho IN)</label>
+                {isGlazingPart && targetStageId === 'GLAZING' && (
+                  <span className="text-[10px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-2xs">
+                    <Sparkles size={11} className="text-emerald-600" />
+                    Tự động chọn: Dán Kính (Linh kiện kho IN Dán Kính)
+                  </span>
+                )}
+              </div>
               <select 
                 value={targetStageId}
                 onChange={(e) => setTargetStageId(e.target.value as StageId)}
-                className="w-full p-2.5 sm:p-4 rounded-xl border border-gray-200 font-bold text-xs sm:text-base focus:border-blue-600 outline-none bg-white cursor-pointer"
+                className={cn(
+                  "w-full p-2.5 sm:p-4 rounded-xl border font-bold text-xs sm:text-base outline-none bg-white cursor-pointer transition-all",
+                  isGlazingPart && targetStageId === 'GLAZING'
+                    ? "border-emerald-500 bg-emerald-50/30 text-emerald-950 ring-2 ring-emerald-200"
+                    : "border-gray-200 focus:border-blue-600"
+                )}
               >
                 {STAGES.map(s => (
                   <option key={s.id} value={s.id}>{s.name}</option>
@@ -9487,8 +9540,8 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
   const produced = (plan.producedQuantities || {})[norm.id] || 0;
   const printed = (plan.printedQuantities || {})[norm.id] || 0;
   const total = plan.targetQuantity;
-  const remainingProduce = total - produced;
-  const remainingPrint = produced - printed;
+  const remainingProduce = Math.max(0, total - produced);
+  const remainingPrint = Math.max(0, total - printed);
 
   // Bắt buộc để trống, không được đề xuất số sẵn (người dùng phải bấm vào tự điền)
   const [producedInputQty, setProducedInputQty] = useState<number | ''>('');
@@ -9517,7 +9570,7 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
   const isProduceDisabled = produced >= total || producedInputQty === '' || numProduced <= 0 || numProduced > remainingProduce;
 
   const numPrint = typeof printInputQty === 'number' ? printInputQty : 0;
-  const isPrintDisabled = produced === 0 || printed >= produced || printInputQty === '' || numPrint <= 0 || numPrint > remainingPrint;
+  const isPrintDisabled = printed >= total || printInputQty === '' || numPrint <= 0 || numPrint > remainingPrint;
 
   return (
     <div key={`${plan.id}-${norm.id}-${idx}`} className="bg-white p-3.5 sm:p-6 rounded-2xl sm:rounded-3xl shadow-sm sm:shadow-xl border border-gray-100 flex flex-col gap-3.5 sm:gap-6 group hover:shadow-md transition-all">
@@ -9627,15 +9680,18 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
           
           <div className="flex flex-col gap-2.5 sm:gap-3 pt-3 sm:pt-4 border-t border-gray-200 mt-1">
               <div className="flex justify-between items-center text-xs font-bold uppercase">
-                <span className="text-gray-400">Đã in nhãn:</span>
-                <span className={cn(printed >= produced && produced > 0 ? "text-green-600" : "text-gray-700")}>
-                  {printed.toLocaleString()} / {produced.toLocaleString()}
+                <span className="text-gray-500 font-bold">Đã in nhãn:</span>
+                <span className={cn(printed >= total ? "text-emerald-600 font-black" : "text-blue-700 font-black")}>
+                  {printed.toLocaleString()} / {total.toLocaleString()} {printed >= total ? '✓ (Đủ kế hoạch)' : ''}
                 </span>
               </div>
               <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-2 sm:gap-4">
                   <div className="flex-1">
                     <span className="text-[10px] font-bold text-gray-700 uppercase block mb-1">
                       Số lượng IN <span className="text-red-500">*</span>
+                      {remainingPrint > 0 && (
+                        <span className="text-gray-400 font-normal lowercase ml-1">(tối đa: {remainingPrint})</span>
+                      )}
                     </span>
                     <input 
                       type="number"
@@ -9651,9 +9707,10 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                             setPrintInputQty(isNaN(val) ? '' : val);
                           }
                       }}
-                      placeholder="Bắt buộc điền..."
+                      placeholder={printed >= total ? "Đã in đủ kế hoạch" : "Bắt buộc điền..."}
+                      disabled={printed >= total}
                       autoComplete="off"
-                      className="w-full bg-white border border-gray-300 focus:border-green-500 rounded-xl px-2.5 py-1.5 sm:py-2 font-black text-green-700 outline-none transition-all text-xs sm:text-sm placeholder:font-normal placeholder:text-gray-400 placeholder:italic"
+                      className="w-full bg-white border border-gray-300 focus:border-green-500 rounded-xl px-2.5 py-1.5 sm:py-2 font-black text-green-700 outline-none transition-all text-xs sm:text-sm placeholder:font-normal placeholder:text-gray-400 placeholder:italic disabled:bg-gray-100 disabled:cursor-not-allowed"
                     />
                   </div>
                   <button 
@@ -9674,7 +9731,7 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                         timestamp: Date.now(),
                         qrData: formatQR,
                         planId: plan.id,
-                        printed: false,
+                        printed: true,
                         kpiRecorded: true
                       };
                       
@@ -10456,7 +10513,7 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                               <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-0.5">Thành phần & Tiến độ in</div>
                               <div className="space-y-1">
                                 {components.map((c, i) => {
-                                  const printed = (plan.producedQuantities || {})[c.id] || 0;
+                                  const printed = (plan.printedQuantities || {})[c.id] || 0;
                                   const target = plan.targetQuantity;
                                   const compProgress = Math.min(100, (printed / target) * 100);
                                   
@@ -10938,119 +10995,220 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
           </div>
         )}
 
-        {activeTab === 'INBOUND' && (
-          <div className="space-y-4">
-            <h3 className="text-xs sm:text-base font-bold uppercase bg-blue-50 text-blue-800 p-3 sm:p-4 rounded-xl border border-blue-100 flex items-center gap-2">
-              <ArrowDownLeft size={18} />
-              <span>Tiếp nhận linh kiện từ công đoạn khác vào IN</span>
-            </h3>
+        {activeTab === 'INBOUND' && (() => {
+          const configsWithStock = [...configs].map(c => {
+            const sourceQty = globalInventory.find((i: any) => 
+              i.partId.toUpperCase() === c.partId.toUpperCase() && 
+              i.stageId === c.sourceStageId && 
+              i.location === 'OUT'
+            )?.quantity || 0;
+            return { ...c, sourceQty };
+          }).sort((a, b) => {
+            if (a.sourceQty > 0 && b.sourceQty <= 0) return -1;
+            if (a.sourceQty <= 0 && b.sourceQty > 0) return 1;
+            return 0;
+          });
 
-            {/* Mobile View: Clean Touch-Friendly Cards */}
-            <div className="sm:hidden space-y-2.5">
-              {configs.map(c => {
-                const sourceQty = globalInventory.find((i: any) => i.partId.toUpperCase() === c.partId.toUpperCase() && i.stageId === c.sourceStageId && i.location === 'OUT')?.quantity || 0;
-                return (
-                  <div key={c.partId} className="bg-white p-3 rounded-xl border border-gray-200 shadow-2xs space-y-2">
-                    <div className="flex justify-between items-start gap-2">
-                      <div className="min-w-0">
-                        <div className="font-bold text-xs text-gray-900 leading-tight">{c.partName}</div>
-                        <div className="font-mono text-[10px] text-gray-400">{c.partId}</div>
-                        <span className="inline-block mt-1 px-1.5 py-0.5 bg-gray-100 rounded text-[10px] font-bold text-gray-600">
-                          Từ: {STAGES.find(s => s.id === c.sourceStageId)?.name || c.sourceStageId}
-                        </span>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-[10px] text-gray-400 font-bold uppercase">OUT Nguồn</div>
-                        <div className="font-black text-sm text-blue-600">{sourceQty}</div>
-                      </div>
-                    </div>
-                    <div className="flex gap-2 items-center pt-2 border-t border-gray-100">
-                      <input 
-                        type="number"
-                        value={inboundQty[c.partId] || ''}
-                        onChange={e => setInboundQty({...inboundQty, [c.partId]: e.target.value})}
-                        placeholder="SL"
-                        min="1"
-                        max={sourceQty}
-                        className="w-20 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-center font-bold text-xs outline-none focus:border-blue-500"
-                      />
-                      <button 
-                        onClick={() => handleReceive(c)}
-                        disabled={sourceQty === 0}
-                        className={cn(
-                          "flex-1 py-1.5 px-3 rounded-lg font-bold text-xs uppercase text-white transition-all active:scale-95 cursor-pointer",
-                          sourceQty > 0 ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300 cursor-not-allowed"
-                        )}
-                      >
-                        Nhập IN
-                      </button>
-                    </div>
+          const availableCount = configsWithStock.filter(c => c.sourceQty > 0).length;
+
+          return (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-blue-50 via-sky-50 to-indigo-50 p-3.5 sm:p-4 rounded-xl border border-blue-200 shadow-2xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                    <ArrowDownLeft size={20} />
                   </div>
-                );
-              })}
-              {configs.length === 0 && (
-                <div className="text-center text-gray-400 py-8 text-xs italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                  Chưa có cấu hình tiếp nhận linh kiện. Vui lòng tải file ở tab Cấu hình.
+                  <div>
+                    <h3 className="text-xs sm:text-base font-bold uppercase text-blue-900 leading-tight">
+                      Tiếp nhận linh kiện từ công đoạn khác vào IN
+                    </h3>
+                    <p className="text-[11px] text-gray-500 font-medium mt-0.5">
+                      Linh kiện cấu hình sẽ <span className="text-emerald-700 font-bold">tự động sáng lên</span> khi công đoạn nguồn có hàng tại kho OUT
+                    </p>
+                  </div>
                 </div>
-              )}
-            </div>
+                {availableCount > 0 ? (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-black shadow-xs self-start sm:self-auto animate-pulse">
+                    <Sparkles size={14} className="text-emerald-600 shrink-0" />
+                    <span>{availableCount} / {configs.length} linh kiện có sẵn tại OUT nguồn!</span>
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-gray-400 font-bold self-start sm:self-auto px-2.5 py-1 bg-white/80 rounded-lg border border-gray-200">
+                    Tất cả OUT nguồn hiện đang bằng 0
+                  </div>
+                )}
+              </div>
 
-            {/* Desktop View: Standard Table */}
-            <div className="hidden sm:block overflow-x-auto no-scrollbar">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="bg-gray-50 text-gray-500 uppercase text-[10px] tracking-wider border-b border-gray-100">
-                    <th className="p-3">Linh kiện</th>
-                    <th className="p-3 w-36 text-center">Slg tại OUT nguồn</th>
-                    <th className="p-3 w-56">Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {configs.map(c => {
-                    const sourceQty = globalInventory.find((i: any) => i.partId.toUpperCase() === c.partId.toUpperCase() && i.stageId === c.sourceStageId && i.location === 'OUT')?.quantity || 0;
-                    return (
-                      <tr key={c.partId} className="hover:bg-gray-50/50">
-                        <td className="p-3">
-                          <div className="font-bold text-sm text-gray-900">{c.partName}</div>
+              {/* Mobile View: Clean Touch-Friendly Cards */}
+              <div className="sm:hidden space-y-2.5">
+                {configsWithStock.map(c => {
+                  const hasStock = c.sourceQty > 0;
+                  return (
+                    <div 
+                      key={c.partId} 
+                      className={cn(
+                        "p-3.5 rounded-xl border transition-all space-y-2 relative overflow-hidden",
+                        hasStock 
+                          ? "bg-gradient-to-br from-emerald-50 via-teal-50/60 to-white border-2 border-emerald-500 shadow-md ring-2 ring-emerald-300/60" 
+                          : "bg-white border-gray-200 shadow-2xs opacity-75"
+                      )}
+                    >
+                      {hasStock && (
+                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider shadow-xs mb-1">
+                          <Sparkles size={11} className="text-yellow-300 shrink-0" />
+                          <span>Có hàng sẵn sàng: {c.sourceQty}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="min-w-0">
+                          <div className={cn("font-bold text-xs leading-tight", hasStock ? "text-emerald-950 font-black text-sm" : "text-gray-900")}>
+                            {c.partName}
+                          </div>
                           <div className="font-mono text-[10px] text-gray-400">{c.partId}</div>
-                          <div className="inline-block mt-1 px-1.5 py-0.5 bg-gray-100 rounded text-[10px] font-bold text-gray-600">
+                          <span className={cn(
+                            "inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold",
+                            hasStock ? "bg-emerald-100 text-emerald-800 border border-emerald-200" : "bg-gray-100 text-gray-600"
+                          )}>
                             Từ: {STAGES.find(s => s.id === c.sourceStageId)?.name || c.sourceStageId}
+                          </span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className={cn("text-[10px] font-bold uppercase", hasStock ? "text-emerald-700" : "text-gray-400")}>
+                            OUT Nguồn
                           </div>
-                        </td>
-                        <td className="p-3 text-center">
-                          <div className="font-bold text-lg text-blue-600">{sourceQty}</div>
-                        </td>
-                        <td className="p-3">
-                          <div className="flex bg-gray-50 rounded-xl overflow-hidden border border-gray-200 p-0.5 max-w-[200px]">
-                            <input 
-                              type="number"
-                              value={inboundQty[c.partId] || ''}
-                              onChange={e => setInboundQty({...inboundQty, [c.partId]: e.target.value})}
-                              placeholder="SL"
-                              min="1"
-                              max={sourceQty}
-                              className="bg-transparent border-none p-2 w-16 outline-none text-center font-bold text-xs"
-                            />
-                            <button 
-                              onClick={() => handleReceive(c)}
-                              disabled={sourceQty === 0}
-                              className={cn(
-                                "flex-1 py-1.5 px-3 font-bold uppercase text-xs text-white transition-all rounded-lg active:scale-95 cursor-pointer", 
-                                sourceQty > 0 ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300 cursor-not-allowed"
+                          <div className={cn("font-black text-base font-mono", hasStock ? "text-emerald-700 text-lg" : "text-gray-400")}>
+                            {c.sourceQty}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 items-center pt-2 border-t border-gray-100">
+                        <input 
+                          type="number"
+                          value={inboundQty[c.partId] || ''}
+                          onChange={e => setInboundQty({...inboundQty, [c.partId]: e.target.value})}
+                          placeholder="SL"
+                          min="1"
+                          max={c.sourceQty}
+                          className={cn(
+                            "w-20 px-2.5 py-1.5 border rounded-lg text-center font-bold text-xs outline-none transition-all",
+                            hasStock 
+                              ? "bg-white border-emerald-400 focus:border-emerald-600 text-emerald-900 font-black" 
+                              : "bg-gray-50 border-gray-200 text-gray-400"
+                          )}
+                        />
+                        <button 
+                          onClick={() => handleReceive(c)}
+                          disabled={!hasStock}
+                          className={cn(
+                            "flex-1 py-1.5 px-3 rounded-lg font-bold text-xs uppercase text-white transition-all active:scale-95 cursor-pointer shadow-xs",
+                            hasStock 
+                              ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-emerald-500/30 font-black" 
+                              : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                          )}
+                        >
+                          Nhập IN
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {configs.length === 0 && (
+                  <div className="text-center text-gray-400 py-8 text-xs italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                    Chưa có cấu hình tiếp nhận linh kiện. Vui lòng tải file ở tab Cấu hình.
+                  </div>
+                )}
+              </div>
+
+              {/* Desktop View: Standard Table */}
+              <div className="hidden sm:block overflow-x-auto no-scrollbar">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 text-gray-500 uppercase text-[10px] tracking-wider border-b border-gray-100">
+                      <th className="p-3">Linh kiện</th>
+                      <th className="p-3 w-40 text-center">Slg tại OUT nguồn</th>
+                      <th className="p-3 w-56">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {configsWithStock.map(c => {
+                      const hasStock = c.sourceQty > 0;
+                      return (
+                        <tr 
+                          key={c.partId} 
+                          className={cn(
+                            "transition-all",
+                            hasStock 
+                              ? "bg-gradient-to-r from-emerald-50/90 via-teal-50/40 to-white hover:bg-emerald-100/50 border-l-4 border-l-emerald-500 shadow-2xs font-medium" 
+                              : "hover:bg-gray-50/50 opacity-75"
+                          )}
+                        >
+                          <td className="p-3">
+                            <div className="flex items-center gap-2">
+                              <div className={cn("font-bold text-sm", hasStock ? "text-emerald-950 font-black" : "text-gray-900")}>
+                                {c.partName}
+                              </div>
+                              {hasStock && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-black uppercase tracking-wider border border-emerald-300 animate-pulse">
+                                  <Sparkles size={10} className="text-emerald-600" /> Sẵn sàng nhập
+                                </span>
                               )}
-                            >
-                              Nhập
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                            </div>
+                            <div className="font-mono text-[10px] text-gray-400">{c.partId}</div>
+                            <div className={cn(
+                              "inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold",
+                              hasStock ? "bg-emerald-100/80 text-emerald-800 border border-emerald-200" : "bg-gray-100 text-gray-600"
+                            )}>
+                              Từ: {STAGES.find(s => s.id === c.sourceStageId)?.name || c.sourceStageId}
+                            </div>
+                          </td>
+                          <td className="p-3 text-center">
+                            <div className={cn("font-black text-xl font-mono", hasStock ? "text-emerald-700 drop-shadow-xs" : "text-gray-400")}>
+                              {c.sourceQty}
+                            </div>
+                            {hasStock && (
+                              <div className="text-[9px] font-black uppercase text-emerald-600">Có tồn OUT</div>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            <div className={cn(
+                              "flex rounded-xl overflow-hidden border p-0.5 max-w-[200px] transition-all",
+                              hasStock ? "bg-white border-emerald-400 shadow-sm" : "bg-gray-50 border-gray-200"
+                            )}>
+                              <input 
+                                type="number"
+                                value={inboundQty[c.partId] || ''}
+                                onChange={e => setInboundQty({...inboundQty, [c.partId]: e.target.value})}
+                                placeholder="SL"
+                                min="1"
+                                max={c.sourceQty}
+                                className={cn(
+                                  "bg-transparent border-none p-2 w-16 outline-none text-center font-bold text-xs",
+                                  hasStock ? "text-emerald-900 font-black" : "text-gray-500"
+                                )}
+                              />
+                              <button 
+                                onClick={() => handleReceive(c)}
+                                disabled={!hasStock}
+                                className={cn(
+                                  "flex-1 py-1.5 px-3 font-bold uppercase text-xs text-white transition-all rounded-lg active:scale-95 cursor-pointer shadow-xs", 
+                                  hasStock 
+                                    ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-emerald-500/20 font-black" 
+                                    : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                                )}
+                              >
+                                Nhập
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {activeTab === 'OUTBOUND' && (
           <div className="space-y-8 sm:space-y-12">

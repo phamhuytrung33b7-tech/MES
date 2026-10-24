@@ -304,19 +304,25 @@ async function flushPendingGpSaves() {
 async function persistGlazingPlansToSupabase(plans: import('./types').GlazingPlan[]) {
   if (!isSupabaseConfigured || !plans) return;
   try {
-    const dbRows = plans.map(p => ({
-      id: p.id,
-      model_id: p.modelId,
-      target_quantity: toBigIntOrDefault(p.targetQuantity, 0),
-      target_completion_time: toBigIntOrNull(p.targetCompletionTime),
-      planned_start_time: toBigIntOrNull(p.plannedStartTime),
-      expected_completion_time: toBigIntOrNull(p.expectedCompletionTime),
-      created_at: toBigIntOrDefault(p.createdAt, Date.now()),
-      status: p.status || 'PENDING',
-      produced_quantities: p.producedQuantities || {},
-      note: p.note || null,
-      excel_required_date: toBigIntOrNull(p.excelRequiredDate)
-    }));
+    const dbRows = plans.map(p => {
+      const producedPayload: Record<string, any> = { ...(p.producedQuantities || {}) };
+      if (p.printedQuantities && Object.keys(p.printedQuantities).length > 0) {
+        producedPayload.__printed = p.printedQuantities;
+      }
+      return {
+        id: p.id,
+        model_id: p.modelId,
+        target_quantity: toBigIntOrDefault(p.targetQuantity, 0),
+        target_completion_time: toBigIntOrNull(p.targetCompletionTime),
+        planned_start_time: toBigIntOrNull(p.plannedStartTime),
+        expected_completion_time: toBigIntOrNull(p.expectedCompletionTime),
+        created_at: toBigIntOrDefault(p.createdAt, Date.now()),
+        status: p.status || 'PENDING',
+        produced_quantities: producedPayload,
+        note: p.note || null,
+        excel_required_date: toBigIntOrNull(p.excelRequiredDate)
+      };
+    });
     for (let i = 0; i < dbRows.length; i += 150) {
       const chunk = dbRows.slice(i, i + 150);
       const { error } = await supabase.from('glazing_plans').upsert(chunk, { onConflict: 'id' });
@@ -825,10 +831,44 @@ export const storageService = {
   },
 
   getGlazingPlans(): import('./types').GlazingPlan[] {
-    return getCached(STORAGE_KEYS.GLAZING_PLANS, () => {
+    const plans: import('./types').GlazingPlan[] = getCached(STORAGE_KEYS.GLAZING_PLANS, () => {
       const data = localStorage.getItem(STORAGE_KEYS.GLAZING_PLANS);
       return data ? JSON.parse(data) : [];
     });
+
+    // Reconcile printed quantities from labels history if needed
+    try {
+      const rawLabels = localStorage.getItem('wip_labels');
+      if (rawLabels) {
+        const labels: Transaction[] = JSON.parse(rawLabels);
+        if (Array.isArray(labels) && labels.length > 0) {
+          let hasUpdates = false;
+          plans.forEach(plan => {
+            const printedMap = { ...(plan.printedQuantities || {}) };
+            let changed = false;
+            const partCounts: Record<string, number> = {};
+            labels.filter(l => l && l.planId === plan.id && l.partId).forEach(l => {
+              partCounts[l.partId] = (partCounts[l.partId] || 0) + (Number(l.quantity) || 0);
+            });
+            Object.entries(partCounts).forEach(([partId, count]) => {
+              if ((printedMap[partId] || 0) < count) {
+                printedMap[partId] = count;
+                changed = true;
+              }
+            });
+            if (changed) {
+              plan.printedQuantities = printedMap;
+              hasUpdates = true;
+            }
+          });
+          if (hasUpdates) {
+            localStorage.setItem(STORAGE_KEYS.GLAZING_PLANS, JSON.stringify(plans));
+          }
+        }
+      }
+    } catch {}
+
+    return plans;
   },
 
   saveGlazingPlans(plans: import('./types').GlazingPlan[]) {
@@ -4329,19 +4369,37 @@ export const storageService = {
         .order('created_at', { ascending: false });
 
       if (!gpErr && gpRows) {
-        const plans: import('./types').GlazingPlan[] = gpRows.map((r: any) => ({
-          id: r.id,
-          modelId: r.model_id,
-          targetQuantity: Number(r.target_quantity) || 0,
-          targetCompletionTime: Number(r.target_completion_time),
-          plannedStartTime: r.planned_start_time ? Number(r.planned_start_time) : undefined,
-          expectedCompletionTime: r.expected_completion_time ? Number(r.expected_completion_time) : undefined,
-          createdAt: Number(r.created_at),
-          status: r.status,
-          producedQuantities: r.produced_quantities || {},
-          note: r.note || undefined,
-          excelRequiredDate: r.excel_required_date ? Number(r.excel_required_date) : undefined
-        }));
+        const plans: import('./types').GlazingPlan[] = gpRows.map((r: any) => {
+          const rawProduced = r.produced_quantities || {};
+          let printedQuantities: Record<string, number> = {};
+          if (r.printed_quantities && typeof r.printed_quantities === 'object') {
+            printedQuantities = { ...r.printed_quantities };
+          } else if (rawProduced.__printed && typeof rawProduced.__printed === 'object') {
+            printedQuantities = { ...rawProduced.__printed };
+          }
+
+          const producedQuantities: Record<string, number> = {};
+          Object.entries(rawProduced).forEach(([k, v]) => {
+            if (k !== '__printed' && typeof v === 'number') {
+              producedQuantities[k] = v;
+            }
+          });
+
+          return {
+            id: r.id,
+            modelId: r.model_id,
+            targetQuantity: Number(r.target_quantity) || 0,
+            targetCompletionTime: Number(r.target_completion_time),
+            plannedStartTime: r.planned_start_time ? Number(r.planned_start_time) : undefined,
+            expectedCompletionTime: r.expected_completion_time ? Number(r.expected_completion_time) : undefined,
+            createdAt: Number(r.created_at),
+            status: r.status,
+            producedQuantities,
+            printedQuantities,
+            note: r.note || undefined,
+            excelRequiredDate: r.excel_required_date ? Number(r.excel_required_date) : undefined
+          };
+        });
         cache[STORAGE_KEYS.GLAZING_PLANS] = plans;
         try {
           localStorage.setItem(STORAGE_KEYS.GLAZING_PLANS, JSON.stringify(plans));
