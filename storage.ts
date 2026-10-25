@@ -5,7 +5,7 @@
 
 import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, UserAccount, View } from './types';
 import { format, addMilliseconds, setHours, setMinutes, setSeconds, getHours, getMinutes, isBefore, isAfter, startOfDay, addDays } from 'date-fns';
-import { supabase, isSupabaseConfigured, transferWipStageAtomicRpc, exportWipStageAtomicRpc, TransferAtomicParams, ExportAtomicParams } from './supabaseClient';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 const STORAGE_KEYS = {
   INVENTORY: 'wip_inventory',
@@ -2350,43 +2350,7 @@ export const storageService = {
     const std = (s: string) => s ? s.normalize('NFC').trim().toUpperCase() : '';
     const originalPartId = (std(finalPartId) !== std(partId)) ? partId : undefined;
 
-    // 1. ATOMIC DEDUCTION: Trừ tồn kho tại kho nguồn (Kho Sơn OUT) khi chuyển kho sang công đoạn mới
-    if (sourceStageId && sourceStageId !== currentStageId) {
-      const inv = this.getInventory();
-      const matchingSourceStock = inv.filter(i => 
-        (i.partId.toUpperCase() === partId.toUpperCase() || (originalPartId && i.partId.toUpperCase() === originalPartId.toUpperCase())) &&
-        i.stageId === sourceStageId &&
-        i.location === 'OUT'
-      );
-      let remainingDeduct = quantity;
-      for (const stock of matchingSourceStock) {
-        if (remainingDeduct <= 0) break;
-        const toTake = Math.min(stock.quantity, remainingDeduct);
-        this.updateInventory(stock.partId, sourceStageId as StageId, 'OUT', -toTake, stock.originalPartId);
-        remainingDeduct -= toTake;
-      }
-      if (remainingDeduct > 0) {
-        this.updateInventory(partId, sourceStageId as StageId, 'OUT', -remainingDeduct, originalPartId);
-      }
-    }
-
-    // 2. Cộng tồn kho tại kho đích (DCLR IN)
     this.updateInventory(finalPartId, currentStageId, finalTargetLocation, quantity, originalPartId);
-
-    // 3. Cập nhật nhãn QR sang trạng thái TRANSFERRED
-    if (sourceTxId) {
-      const labels = this.getLabels();
-      const targetLabel = labels.find(l => l.id === sourceTxId || (l.qrData && l.qrData.includes(sourceTxId)));
-      if (targetLabel) {
-        targetLabel.metadata = {
-          ...(targetLabel.metadata || {}),
-          status: 'TRANSFERRED',
-          transferredAt: Date.now(),
-          transferredToStage: currentStageId
-        };
-        this.saveLabels(labels);
-      }
-    }
 
     // 4. Record transaction
     const newTransaction: Transaction = {
@@ -2404,7 +2368,6 @@ export const storageService = {
     };
     transactions.unshift(newTransaction);
     this.saveTransactions(transactions);
-
 
     // 5. Update inventory for Level 2 parts if needed (BOM logic for Laser stage)
     // Actually, recordManualInbound has this logic, but recordStageIn should probably have it too if we scan a label.
@@ -4633,168 +4596,5 @@ export const storageService = {
       }
     }
   },
-
-  /**
-   * Stored Procedure (RPC) Atomic Transfer
-   * Transfers inventory between stages in a single Postgres transaction.
-   * If online, invokes public.transfer_wip_stage_atomic on Supabase, then refetches immediately.
-   * Fallback executes local atomic balance deduction and immediate sync.
-   */
-  async transferWipStageAtomic(params: {
-    qrId: string;
-    partCode: string;
-    fromStage: string;
-    toStage: string;
-    quantity: number;
-    fromLocation?: string;
-    toLocation?: string;
-    poId?: string;
-    operator?: string;
-  }): Promise<{ success: boolean; message: string; data?: any }> {
-    const fromLoc = params.fromLocation || 'OUT';
-    const toLoc = params.toLocation || 'IN';
-
-    if (isSupabaseConfigured) {
-      const rpcRes = await transferWipStageAtomicRpc({
-        qrId: params.qrId,
-        partCode: params.partCode,
-        fromStage: params.fromStage,
-        toStage: params.toStage,
-        quantity: params.quantity,
-        fromLocation: fromLoc,
-        toLocation: toLoc,
-        poId: params.poId,
-        operator: params.operator
-      });
-
-      if (rpcRes.success) {
-        // Refresh local cache directly from Supabase immediately (zero delay)
-        await this.refreshFromSupabase();
-        return {
-          success: true,
-          message: rpcRes.data?.message || 'Chuyển kho nguyên tử Supabase thành công!',
-          data: rpcRes.data
-        };
-      }
-
-      // If business check failed (insufficient stock, duplicate QR, etc.)
-      if (!rpcRes.rpcMissing) {
-        throw new Error(rpcRes.error || 'Lỗi khi thực hiện chuyển kho trên Supabase');
-      }
-
-      console.warn('[transferWipStageAtomic] RPC transfer_wip_stage_atomic chưa có trên Supabase, dùng cơ chế nguyên tử cục bộ.');
-    }
-
-    // Local atomic fallback
-    const fromStageId = STAGES.find(s => s.name === params.fromStage || s.id === params.fromStage)?.id || (params.fromStage as StageId);
-    const toStageId = STAGES.find(s => s.name === params.toStage || s.id === params.toStage)?.id || (params.toStage as StageId);
-
-    const inv = this.getInventory();
-    const sourceStocks = inv.filter(i => (i.partId.toUpperCase() === params.partCode.toUpperCase() || i.partId.toUpperCase().startsWith(params.partCode.toUpperCase())) && i.stageId === fromStageId && i.location === fromLoc);
-    const totalSourceStock = sourceStocks.reduce((sum, i) => sum + i.quantity, 0);
-
-    if (totalSourceStock < params.quantity) {
-      throw new Error(`INSUFFICIENT_STOCK: Kho nguồn [${params.fromStage}] (${fromLoc}) của [${params.partCode}] không đủ số lượng để chuyển! Cần ${params.quantity}, hiện có ${totalSourceStock}.`);
-    }
-
-    let rem = params.quantity;
-    for (const stock of sourceStocks) {
-      if (rem <= 0) break;
-      const take = Math.min(stock.quantity, rem);
-      this.updateInventory(stock.partId, fromStageId, fromLoc as any, -take, stock.originalPartId);
-      rem -= take;
-    }
-    if (rem > 0) {
-      this.updateInventory(params.partCode, fromStageId, fromLoc as any, -rem);
-    }
-
-    this.updateInventory(params.partCode, toStageId, toLoc as any, params.quantity);
-
-    const labels = this.getLabels();
-    const targetLabel = labels.find(l => l.id === params.qrId || (l.qrData && l.qrData.includes(params.qrId)));
-    if (targetLabel) {
-      targetLabel.metadata = {
-        ...(targetLabel.metadata || {}),
-        status: 'TRANSFERRED',
-        transferredAt: Date.now(),
-        transferredToStage: toStageId
-      };
-      this.saveLabels(labels);
-    }
-
-    const newTx: Transaction = {
-      id: `TR-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
-      type: 'STAGE_IN',
-      partId: params.partCode,
-      quantity: params.quantity,
-      stageId: toStageId,
-      location: toLoc as any,
-      sourceStageId: fromStageId,
-      targetStageId: toStageId,
-      timestamp: Date.now(),
-      qrData: params.qrId,
-      poId: params.poId
-    };
-    const txs = this.getTransactions();
-    txs.unshift(newTx);
-    this.saveTransactions(txs);
-
-    await flushPendingInvSaves();
-    await flushPendingTransactions();
-    await flushPendingLabels();
-
-    return {
-      success: true,
-      message: 'Chuyển kho thành công (chế độ cục bộ đã đồng bộ). Vui lòng chạy script SQL trên Supabase để kích hoạt Stored Procedure nguyên tử.',
-      data: newTx
-    };
-  },
-
-  /**
-   * Stored Procedure (RPC) Atomic Export
-   * Immediately deducts source inventory when generating QR label at stage OUT.
-   */
-  async exportWipStageAtomic(params: {
-    partCode: string;
-    stage: string;
-    quantity: number;
-    sourceLocation?: string;
-    targetStage?: string;
-    poId?: string;
-    qrId?: string;
-    qrData?: string;
-    operator?: string;
-  }): Promise<{ success: boolean; message: string; data?: any }> {
-    if (isSupabaseConfigured) {
-      const res = await exportWipStageAtomicRpc({
-        partCode: params.partCode,
-        stage: params.stage,
-        quantity: params.quantity,
-        sourceLocation: params.sourceLocation || 'OUT',
-        targetStage: params.targetStage,
-        poId: params.poId,
-        qrId: params.qrId,
-        qrData: params.qrData,
-        operator: params.operator
-      });
-      if (res.success) {
-        await this.refreshFromSupabase();
-        return { success: true, message: res.data?.message || 'Xuất kho nguyên tử thành công!', data: res.data };
-      }
-      if (!res.rpcMissing) {
-        throw new Error(res.error || 'Lỗi khi xuất kho trên Supabase');
-      }
-    }
-
-    // Local fallback
-    const stageId = STAGES.find(s => s.name === params.stage || s.id === params.stage)?.id || (params.stage as StageId);
-    const targetStageId = params.targetStage ? (STAGES.find(s => s.name === params.targetStage || s.id === params.targetStage)?.id || (params.targetStage as StageId)) : undefined;
-    const tx = this.recordStageOut(params.partCode, stageId, params.quantity, (params.sourceLocation as any) || 'OUT', targetStageId, params.poId);
-    await flushPendingInvSaves();
-    await flushPendingTransactions();
-    await flushPendingLabels();
-    return { success: true, message: 'Xuất kho thành công', data: tx };
-  },
 };
-
 
