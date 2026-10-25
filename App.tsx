@@ -1108,18 +1108,54 @@ export default function App() {
     }
   };
 
-  const onScanSuccess = (decodedText: string, targetLocation: 'IN' | 'OUT' = 'IN', overrideStageId?: StageId) => {
+  const onScanSuccess = async (decodedText: string, targetLocation: 'IN' | 'OUT' = 'IN', overrideStageId?: StageId) => {
     try {
-      storageService.recordStageIn(decodedText, overrideStageId || scanStage, targetLocation);
+      const targetStage = overrideStageId || scanStage;
+      const parts = decodedText ? decodedText.trim().split('|') : [];
+
+      // Inter-stage transfer handling (e.g. from Kho Sơn to Lắp ráp DCLR)
+      if (parts.length >= 5) {
+        const [idOrPo, quantityStr, sourceStageId, , sourceTxId] = parts;
+        const qty = parseFloat(quantityStr) || 1;
+        let partCode = idOrPo.split(' - ')[0].trim();
+        let poId: string | undefined;
+
+        if (idOrPo.startsWith('PO-') || idOrPo.startsWith('REPAIR-')) {
+          poId = idOrPo;
+          const pos = storageService.getProductionOrders();
+          const po = pos.find(p => p.id === idOrPo);
+          if (po) partCode = po.partId;
+        }
+
+        // Call atomic transfer via storageService
+        const result = await storageService.transferWipStageAtomic({
+          qrId: sourceTxId || decodedText,
+          partCode: partCode,
+          fromStage: sourceStageId,
+          toStage: targetStage,
+          quantity: qty,
+          fromLocation: 'OUT',
+          toLocation: targetLocation,
+          poId: poId,
+          operator: currentUser?.name || 'OPERATOR'
+        });
+
+        setSuccess(result.message || 'Chuyển kho nguyên tử thành công!');
+        refreshData();
+        return;
+      }
+
+      storageService.recordStageIn(decodedText, targetStage, targetLocation);
       setSuccess('Nhập kho thành công!');
       refreshData();
       // Don't switch view automatically, let user see the success detail
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Dữ liệu QR không hợp lệ';
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : (err?.message || 'Dữ liệu QR không hợp lệ');
       setError(msg);
       throw err; // Re-throw to let ScanView know it failed
     }
   };
+
 
   const handleManualInbound = (partId: string, stageId: StageId, location: 'IN' | 'OUT', qty: number, poId?: string) => {
     try {
@@ -11674,11 +11710,11 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
     }
   };
 
-  const processQrCodeInput = (input: string) => {
+  const processQrCodeInput = async (input: string) => {
     const qrParts = input.split('|');
     
     try {
-      onScanSuccess(input, targetLocation);
+      await onScanSuccess(input, targetLocation);
       
       if (qrParts.length >= 5) {
         const pId = qrParts[0];
@@ -11692,7 +11728,7 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
           status: 'success'
         });
       }
-    } catch (err) {
+    } catch (err: any) {
       if (qrParts.length >= 5) {
         const pId = qrParts[0];
         const sId = qrParts[2];
@@ -11703,7 +11739,7 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
           partName: parts.find((p: any) => p.id === pId)?.name || pId,
           sourceName: STAGES.find(s => s.id === sId)?.name || sId,
           status: 'error',
-          errorMsg: err instanceof Error ? err.message : 'Lỗi không xác định'
+          errorMsg: err instanceof Error ? err.message : (err?.message || 'Lỗi không xác định')
         });
       } else {
         setLastScanned({
@@ -11713,6 +11749,7 @@ function InboundView({ selectedStage, setSelectedStage, onScanSuccess, parts, se
       }
     }
   };
+
 
   return (
     <motion.div 
