@@ -58,6 +58,7 @@ import {
   LogOut,
   ShieldCheck,
   UserCheck,
+  Filter,
   Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -3583,6 +3584,33 @@ function LabelHistoryView({
   const [searchQuery, setSearchQuery] = useState("");
   const [limit, setLimit] = useState(50);
   const [activeTab, setActiveTab] = useState<'PENDING' | 'FINISHED' | 'PAINTING' | 'DISPOSAL' | 'GLAZING'>('PENDING');
+  const [adminStageFilter, setAdminStageFilter] = useState<string>('ALL');
+
+  const isAdmin = currentUser?.role === 'ADMIN';
+  const userDefaultStage = useMemo(() => getUserDefaultStage(currentUser), [currentUser]);
+
+  const getLabelTargetStage = (label: Transaction): string => {
+    if (label.targetStageId) return label.targetStageId;
+    if (label.qrData) {
+      const qrParts = label.qrData.split('|');
+      if (qrParts.length > 5 && qrParts[5]) {
+        return qrParts[5];
+      }
+    }
+    // Flow tiêu chuẩn công đoạn:
+    if (label.stageId === 'LASER') return 'BENDING';
+    if (label.stageId === 'BENDING') return 'WELDING';
+    if (label.stageId === 'WELDING') return 'PAINTING';
+    if (label.stageId === 'PAINTING') return 'DCLR';
+    if (label.stageId === 'GLAZING') return 'DCLR';
+    return '';
+  };
+
+  const getStageLabel = (stageId?: string) => {
+    if (!stageId) return '';
+    const match = STAGES.find(s => s.id === stageId);
+    return match ? match.name : stageId;
+  };
 
   useEffect(() => {
     setLabels(initialLabels);
@@ -3656,16 +3684,16 @@ function LabelHistoryView({
     if (password === 'admin123') {
       if (showInboundModal) {
         const label = labels.find(l => l.id === showInboundModal);
-        if (label && label.qrData) {
-          const qrParts = label.qrData.split('|');
-          const targetStageId = qrParts[5] as StageId;
+        if (label) {
+          const qrParts = label.qrData ? label.qrData.split('|') : [];
+          const targetStageId = (label.targetStageId || qrParts[5] || getLabelTargetStage(label)) as StageId;
           if (!targetStageId) {
             alert('Nhãn này không có công đoạn đích được chỉ định. Không thể nhập kho tức thì.');
             return;
           }
           
           try {
-            onManualInboundQR(label.qrData, targetStageId);
+            onManualInboundQR(label.qrData || label.id, targetStageId);
             // Update labels status locally
             setScannedIds(prev => {
               const next = new Set(prev);
@@ -3695,6 +3723,14 @@ function LabelHistoryView({
     if (activeTab === 'PENDING') {
       // Pending: Not scanned and NOT specialized labels
       if (isScanned || isPaintingOut || isGlazingOut || isDisposal) return false;
+
+      // Phân quyền theo công đoạn đích của nhãn QR
+      const targetStage = getLabelTargetStage(label);
+      if (!isAdmin) {
+        if (targetStage !== userDefaultStage) return false;
+      } else if (adminStageFilter !== 'ALL') {
+        if (targetStage !== adminStageFilter) return false;
+      }
     } else if (activeTab === 'PAINTING') {
       // Painting: Only Painting OUT labels
       if (!isPaintingOut) return false;
@@ -3723,6 +3759,25 @@ function LabelHistoryView({
     const labelDate = format(label.timestamp, 'yyyy-MM-dd');
     return labelDate === dateFilter;
   });
+
+  const pendingCount = useMemo(() => {
+    return labels.filter(label => {
+      const isScanned = scannedIds.has(label.id);
+      const isPaintingOut = label.stageId === 'PAINTING' && label.type === 'STAGE_OUT';
+      const isGlazingOut = label.stageId === 'GLAZING' && label.type === 'STAGE_OUT';
+      const isDisposal = label.type === 'DISPOSAL';
+      if (isScanned || isPaintingOut || isGlazingOut || isDisposal) return false;
+
+      const targetStage = getLabelTargetStage(label);
+      if (!isAdmin) {
+        return targetStage === userDefaultStage;
+      }
+      if (adminStageFilter !== 'ALL') {
+        return targetStage === adminStageFilter;
+      }
+      return true;
+    }).length;
+  }, [labels, scannedIds, isAdmin, userDefaultStage, adminStageFilter]);
 
   const displayedLabels = filteredLabels.slice(0, limit);
 
@@ -3784,11 +3839,17 @@ function LabelHistoryView({
             <button 
               onClick={() => setActiveTab('PENDING')}
               className={cn(
-                "px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold uppercase tracking-tight rounded-lg transition-all shrink-0 sm:flex-1 cursor-pointer",
+                "px-2.5 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-xs font-bold uppercase tracking-tight rounded-lg transition-all shrink-0 sm:flex-1 cursor-pointer flex items-center justify-center gap-1",
                 activeTab === 'PENDING' ? "bg-white text-blue-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
               )}
             >
-              Chờ nhập kho
+              <span>Chờ nhập kho</span>
+              <span className={cn(
+                "px-1.5 py-0.2 rounded-full text-[9px] font-black",
+                activeTab === 'PENDING' ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"
+              )}>
+                {pendingCount}
+              </span>
             </button>
             <button 
               onClick={() => setActiveTab('FINISHED')}
@@ -3827,6 +3888,63 @@ function LabelHistoryView({
               Hàng Hủy
             </button>
           </div>
+
+          {activeTab === 'PENDING' && (
+            isAdmin ? (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700">
+                    <Filter size={13} className="text-slate-500" />
+                    <span>Lọc công đoạn đích (Admin):</span>
+                  </div>
+                  {adminStageFilter !== 'ALL' && (
+                    <button 
+                      onClick={() => setAdminStageFilter('ALL')}
+                      className="text-[10px] text-blue-600 font-bold hover:underline cursor-pointer"
+                    >
+                      Xem tất cả
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    { id: 'ALL', label: 'Tất cả đích' },
+                    { id: 'BENDING', label: 'Chấn/Dập' },
+                    { id: 'WELDING', label: 'Hàn' },
+                    { id: 'PAINTING', label: 'Sơn' },
+                    { id: 'GLAZING', label: 'Dán Kính' },
+                    { id: 'DCLR', label: 'Lắp ráp (DCLR)' },
+                  ].map(item => (
+                    <button
+                      key={item.id}
+                      onClick={() => setAdminStageFilter(item.id)}
+                      className={cn(
+                        "px-2 py-1 rounded-md text-[10px] font-bold transition-all cursor-pointer",
+                        adminStageFilter === item.id 
+                          ? "bg-blue-600 text-white shadow-xs" 
+                          : "bg-white text-slate-600 hover:bg-slate-200/80 border border-slate-200"
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-2.5 flex items-center justify-between text-xs text-blue-900">
+                <div className="flex items-center gap-1.5 font-medium">
+                  <ShieldCheck size={16} className="text-blue-600 shrink-0" />
+                  <span>Chờ nhập kho cho:</span>
+                  <span className="font-extrabold uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[11px]">
+                    {getStageLabel(userDefaultStage)}
+                  </span>
+                </div>
+                <span className="text-[10px] text-blue-600/80 font-mono font-medium">
+                  (Đích đến: {getStageLabel(userDefaultStage)})
+                </span>
+              </div>
+            )
+          )}
           
           <div className="relative group">
             <input 
@@ -3863,6 +3981,9 @@ function LabelHistoryView({
                 const isScanned = scannedIds.has(label.id);
                 const isPrinted = printedIds.has(label.id);
                 const isPaintingOut = label.stageId === 'PAINTING' && !label.targetStageId && label.type === 'STAGE_OUT';
+                const targetStage = getLabelTargetStage(label);
+                const originName = getStageLabel(label.stageId);
+                const targetName = getStageLabel(targetStage);
 
                 return (
                   <div 
@@ -3885,12 +4006,23 @@ function LabelHistoryView({
                         ) : null}
                         <span className="font-bold text-sm">{parts.find(p => p.id === label.partId)?.name || label.partId}</span>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         {label.poId && (
-                          <div className="text-[10px] font-mono font-bold text-blue-600">
+                          <div className="text-[10px] font-mono font-bold text-blue-600 bg-blue-50 px-1 rounded border border-blue-100">
                             {label.poId}
                           </div>
                         )}
+                        {originName && targetName ? (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded flex items-center gap-1">
+                            <span>{originName}</span>
+                            <span className="text-indigo-400 font-black">➔</span>
+                            <span className="font-extrabold text-indigo-900">{targetName}</span>
+                          </span>
+                        ) : targetName ? (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded">
+                            Đích: {targetName}
+                          </span>
+                        ) : null}
                         {isPaintingOut && (
                           <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded">Sơn OUT</span>
                         )}
@@ -5354,8 +5486,13 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     setStagePlannedWorkers(storageService.getStagePlannedWorkers(chartDate));
   }, [chartDate]);
 
-  const handleStagePlannedWorkersChange = (stageKey: keyof StagePlannedWorkers, val: number) => {
-    const updated = { ...stagePlannedWorkers, [stageKey]: val };
+  const handleStagePlannedWorkersChange = (stageKey: keyof StagePlannedWorkers, val: number | undefined) => {
+    const updated = { ...stagePlannedWorkers };
+    if (val === undefined || isNaN(val)) {
+      delete updated[stageKey];
+    } else {
+      updated[stageKey] = val;
+    }
     setStagePlannedWorkers(updated);
     storageService.saveStagePlannedWorkers(updated, chartDate);
   };
@@ -5467,36 +5604,61 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     });
   };
 
-  const handleHourlyLaserChange = (slotLabel: string, val: number) => {
-    const newLaser = { ...hourlyPeopleLaser, [slotLabel]: val };
+  const handleHourlyLaserChange = (slotLabel: string, val: number | undefined) => {
+    const newLaser = { ...hourlyPeopleLaser };
+    if (val === undefined || isNaN(val)) {
+      delete newLaser[slotLabel];
+    } else {
+      newLaser[slotLabel] = val;
+    }
     setHourlyPeopleLaser(newLaser);
     storageService.saveHourlyPeopleLaser(newLaser, chartDate);
     syncDailyPeopleAverage(newLaser, hourlyPeopleBending, hourlyPeopleWelding, hourlyPeoplePainting, hourlyPeopleGlazing);
   };
 
-  const handleHourlyBendingChange = (slotLabel: string, val: number) => {
-    const newBending = { ...hourlyPeopleBending, [slotLabel]: val };
+  const handleHourlyBendingChange = (slotLabel: string, val: number | undefined) => {
+    const newBending = { ...hourlyPeopleBending };
+    if (val === undefined || isNaN(val)) {
+      delete newBending[slotLabel];
+    } else {
+      newBending[slotLabel] = val;
+    }
     setHourlyPeopleBending(newBending);
     storageService.saveHourlyPeopleBending(newBending, chartDate);
     syncDailyPeopleAverage(hourlyPeopleLaser, newBending, hourlyPeopleWelding, hourlyPeoplePainting, hourlyPeopleGlazing);
   };
 
-  const handleHourlyWeldingChange = (slotLabel: string, val: number) => {
-    const newWelding = { ...hourlyPeopleWelding, [slotLabel]: val };
+  const handleHourlyWeldingChange = (slotLabel: string, val: number | undefined) => {
+    const newWelding = { ...hourlyPeopleWelding };
+    if (val === undefined || isNaN(val)) {
+      delete newWelding[slotLabel];
+    } else {
+      newWelding[slotLabel] = val;
+    }
     setHourlyPeopleWelding(newWelding);
     storageService.saveHourlyPeopleWelding(newWelding, chartDate);
     syncDailyPeopleAverage(hourlyPeopleLaser, hourlyPeopleBending, newWelding, hourlyPeoplePainting, hourlyPeopleGlazing);
   };
 
-  const handleHourlyPaintingChange = (slotLabel: string, val: number) => {
-    const newPainting = { ...hourlyPeoplePainting, [slotLabel]: val };
+  const handleHourlyPaintingChange = (slotLabel: string, val: number | undefined) => {
+    const newPainting = { ...hourlyPeoplePainting };
+    if (val === undefined || isNaN(val)) {
+      delete newPainting[slotLabel];
+    } else {
+      newPainting[slotLabel] = val;
+    }
     setHourlyPeoplePainting(newPainting);
     storageService.saveHourlyPeoplePainting(newPainting, chartDate);
     syncDailyPeopleAverage(hourlyPeopleLaser, hourlyPeopleBending, hourlyPeopleWelding, newPainting, hourlyPeopleGlazing);
   };
 
-  const handleHourlyGlazingChange = (slotLabel: string, val: number) => {
-    const newGlazing = { ...hourlyPeopleGlazing, [slotLabel]: val };
+  const handleHourlyGlazingChange = (slotLabel: string, val: number | undefined) => {
+    const newGlazing = { ...hourlyPeopleGlazing };
+    if (val === undefined || isNaN(val)) {
+      delete newGlazing[slotLabel];
+    } else {
+      newGlazing[slotLabel] = val;
+    }
     setHourlyPeopleGlazing(newGlazing);
     storageService.saveHourlyPeopleGlazing(newGlazing, chartDate);
     syncDailyPeopleAverage(hourlyPeopleLaser, hourlyPeopleBending, hourlyPeopleWelding, hourlyPeoplePainting, newGlazing);
@@ -7536,11 +7698,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                       <input 
                         type="number" 
                         min="0"
-                        placeholder="4"
+                        placeholder=""
                         value={stagePlannedWorkers.LASER === undefined ? '' : stagePlannedWorkers.LASER}
                         onChange={(e) => {
-                          const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                          handleStagePlannedWorkersChange('LASER', val);
+                          const raw = e.target.value.trim();
+                          const val = raw === '' ? undefined : parseInt(raw);
+                          handleStagePlannedWorkersChange('LASER', val !== undefined && !isNaN(val) ? val : undefined);
                         }}
                         className="w-full border border-gray-200 rounded-lg p-1.5 text-base font-mono font-bold text-center text-amber-900 outline-none focus:border-amber-500 focus:bg-amber-50/30"
                       />
@@ -7550,11 +7713,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                       <input 
                         type="number" 
                         min="0"
-                        placeholder="8"
+                        placeholder=""
                         value={stagePlannedWorkers.BENDING === undefined ? '' : stagePlannedWorkers.BENDING}
                         onChange={(e) => {
-                          const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                          handleStagePlannedWorkersChange('BENDING', val);
+                          const raw = e.target.value.trim();
+                          const val = raw === '' ? undefined : parseInt(raw);
+                          handleStagePlannedWorkersChange('BENDING', val !== undefined && !isNaN(val) ? val : undefined);
                         }}
                         className="w-full border border-gray-200 rounded-lg p-1.5 text-base font-mono font-bold text-center text-amber-900 outline-none focus:border-amber-500 focus:bg-amber-50/30"
                       />
@@ -7564,11 +7728,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                       <input 
                         type="number" 
                         min="0"
-                        placeholder="8"
+                        placeholder=""
                         value={stagePlannedWorkers.WELDING === undefined ? '' : stagePlannedWorkers.WELDING}
                         onChange={(e) => {
-                          const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                          handleStagePlannedWorkersChange('WELDING', val);
+                          const raw = e.target.value.trim();
+                          const val = raw === '' ? undefined : parseInt(raw);
+                          handleStagePlannedWorkersChange('WELDING', val !== undefined && !isNaN(val) ? val : undefined);
                         }}
                         className="w-full border border-gray-200 rounded-lg p-1.5 text-base font-mono font-bold text-center text-amber-900 outline-none focus:border-amber-500 focus:bg-amber-50/30"
                       />
@@ -7578,11 +7743,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                       <input 
                         type="number" 
                         min="0"
-                        placeholder="8"
+                        placeholder=""
                         value={stagePlannedWorkers.PAINTING === undefined ? '' : stagePlannedWorkers.PAINTING}
                         onChange={(e) => {
-                          const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                          handleStagePlannedWorkersChange('PAINTING', val);
+                          const raw = e.target.value.trim();
+                          const val = raw === '' ? undefined : parseInt(raw);
+                          handleStagePlannedWorkersChange('PAINTING', val !== undefined && !isNaN(val) ? val : undefined);
                         }}
                         className="w-full border border-gray-200 rounded-lg p-1.5 text-base font-mono font-bold text-center text-amber-900 outline-none focus:border-amber-500 focus:bg-amber-50/30"
                       />
@@ -7592,11 +7758,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                       <input 
                         type="number" 
                         min="0"
-                        placeholder="8"
+                        placeholder=""
                         value={stagePlannedWorkers.GLAZING === undefined ? '' : stagePlannedWorkers.GLAZING}
                         onChange={(e) => {
-                          const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                          handleStagePlannedWorkersChange('GLAZING', val);
+                          const raw = e.target.value.trim();
+                          const val = raw === '' ? undefined : parseInt(raw);
+                          handleStagePlannedWorkersChange('GLAZING', val !== undefined && !isNaN(val) ? val : undefined);
                         }}
                         className="w-full border border-gray-200 rounded-lg p-1.5 text-base font-mono font-bold text-center text-amber-900 outline-none focus:border-amber-500 focus:bg-amber-50/30"
                       />
@@ -7615,11 +7782,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                           <input 
                             type="number" 
                             min="0"
-                            placeholder="8"
+                            placeholder=""
                             value={hourlyPeopleLaser[slotLabel] === undefined ? '' : hourlyPeopleLaser[slotLabel]}
                             onChange={(e) => {
-                               const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                               handleHourlyLaserChange(slotLabel, val);
+                               const raw = e.target.value.trim();
+                               const val = raw === '' ? undefined : parseInt(raw);
+                               handleHourlyLaserChange(slotLabel, val !== undefined && !isNaN(val) ? val : undefined);
                             }}
                             className="w-full border border-gray-200 rounded p-1.5 text-sm font-mono text-center outline-none focus:border-green-500"
                           />
@@ -7629,11 +7797,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                           <input 
                             type="number" 
                             min="0"
-                            placeholder="8"
+                            placeholder=""
                             value={hourlyPeopleBending[slotLabel] === undefined ? '' : hourlyPeopleBending[slotLabel]}
                             onChange={(e) => {
-                               const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                               handleHourlyBendingChange(slotLabel, val);
+                               const raw = e.target.value.trim();
+                               const val = raw === '' ? undefined : parseInt(raw);
+                               handleHourlyBendingChange(slotLabel, val !== undefined && !isNaN(val) ? val : undefined);
                             }}
                             className="w-full border border-gray-200 rounded p-1.5 text-sm font-mono text-center outline-none focus:border-green-500"
                           />
@@ -7643,11 +7812,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                           <input 
                             type="number" 
                             min="0"
-                            placeholder="8"
+                            placeholder=""
                             value={hourlyPeopleWelding[slotLabel] === undefined ? '' : hourlyPeopleWelding[slotLabel]}
                             onChange={(e) => {
-                               const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                               handleHourlyWeldingChange(slotLabel, val);
+                               const raw = e.target.value.trim();
+                               const val = raw === '' ? undefined : parseInt(raw);
+                               handleHourlyWeldingChange(slotLabel, val !== undefined && !isNaN(val) ? val : undefined);
                             }}
                             className="w-full border border-gray-200 rounded p-1.5 text-sm font-mono text-center outline-none focus:border-green-500"
                           />
@@ -7657,11 +7827,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                           <input 
                             type="number" 
                             min="0"
-                            placeholder="8"
+                            placeholder=""
                             value={hourlyPeoplePainting[slotLabel] === undefined ? '' : hourlyPeoplePainting[slotLabel]}
                             onChange={(e) => {
-                               const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                               handleHourlyPaintingChange(slotLabel, val);
+                               const raw = e.target.value.trim();
+                               const val = raw === '' ? undefined : parseInt(raw);
+                               handleHourlyPaintingChange(slotLabel, val !== undefined && !isNaN(val) ? val : undefined);
                             }}
                             className="w-full border border-gray-200 rounded p-1.5 text-sm font-mono text-center outline-none focus:border-green-500"
                           />
@@ -7671,11 +7842,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                           <input 
                             type="number" 
                             min="0"
-                            placeholder="8"
+                            placeholder=""
                             value={hourlyPeopleGlazing[slotLabel] === undefined ? '' : hourlyPeopleGlazing[slotLabel]}
                             onChange={(e) => {
-                               const val = e.target.value === '' ? 0 : (parseInt(e.target.value) || 0);
-                               handleHourlyGlazingChange(slotLabel, val);
+                               const raw = e.target.value.trim();
+                               const val = raw === '' ? undefined : parseInt(raw);
+                               handleHourlyGlazingChange(slotLabel, val !== undefined && !isNaN(val) ? val : undefined);
                             }}
                             className="w-full border border-gray-200 rounded p-1.5 text-sm font-mono text-center outline-none focus:border-green-500"
                           />

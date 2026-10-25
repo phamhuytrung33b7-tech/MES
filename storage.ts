@@ -946,9 +946,15 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
+    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
     if (date) {
-      Object.entries(record).forEach(([slot, val]) => {
-        updated[`${date}_${slot}`] = val;
+      timeSlots.forEach(slot => {
+        const val = record[slot];
+        if (val === undefined || val === null || isNaN(val)) {
+          delete updated[`${date}_${slot}`];
+        } else {
+          updated[`${date}_${slot}`] = val;
+        }
       });
     } else {
       Object.assign(updated, record);
@@ -972,9 +978,15 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
+    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
     if (date) {
-      Object.entries(record).forEach(([slot, val]) => {
-        updated[`${date}_${slot}`] = val;
+      timeSlots.forEach(slot => {
+        const val = record[slot];
+        if (val === undefined || val === null || isNaN(val)) {
+          delete updated[`${date}_${slot}`];
+        } else {
+          updated[`${date}_${slot}`] = val;
+        }
       });
     } else {
       Object.assign(updated, record);
@@ -998,9 +1010,15 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
+    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
     if (date) {
-      Object.entries(record).forEach(([slot, val]) => {
-        updated[`${date}_${slot}`] = val;
+      timeSlots.forEach(slot => {
+        const val = record[slot];
+        if (val === undefined || val === null || isNaN(val)) {
+          delete updated[`${date}_${slot}`];
+        } else {
+          updated[`${date}_${slot}`] = val;
+        }
       });
     } else {
       Object.assign(updated, record);
@@ -1024,9 +1042,15 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
+    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
     if (date) {
-      Object.entries(record).forEach(([slot, val]) => {
-        updated[`${date}_${slot}`] = val;
+      timeSlots.forEach(slot => {
+        const val = record[slot];
+        if (val === undefined || val === null || isNaN(val)) {
+          delete updated[`${date}_${slot}`];
+        } else {
+          updated[`${date}_${slot}`] = val;
+        }
       });
     } else {
       Object.assign(updated, record);
@@ -1050,9 +1074,15 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
+    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
     if (date) {
-      Object.entries(record).forEach(([slot, val]) => {
-        updated[`${date}_${slot}`] = val;
+      timeSlots.forEach(slot => {
+        const val = record[slot];
+        if (val === undefined || val === null || isNaN(val)) {
+          delete updated[`${date}_${slot}`];
+        } else {
+          updated[`${date}_${slot}`] = val;
+        }
       });
     } else {
       Object.assign(updated, record);
