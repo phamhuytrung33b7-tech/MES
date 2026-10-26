@@ -229,6 +229,8 @@ export interface UserAccount {
   defaultStage?: StageId; // Công đoạn phụ trách / mặc định (Cắt Laser, Chấn/Dập, Hàn, Sơn, DCLR, Dán kính)
   allowedViews: View[];
   canApproveOddPO?: boolean;
+  canViewOwnStageExportedLabels?: boolean; // Cho phép xem tem QR do chính công đoạn mình xuất đi (mặc định: true)
+  canViewAllStageLabels?: boolean; // Cho phép xem nhãn QR của tất cả các công đoạn (như Admin)
   isActive: boolean;
   createdAt: number;
   lastLoginAt?: number;

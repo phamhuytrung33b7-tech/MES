@@ -377,6 +377,16 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
                                 )}
                               </>
                             )}
+                            {user.canViewAllStageLabels && (
+                              <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded-md font-bold border border-purple-200" title="Được quyền xem nhãn QR của toàn bộ công đoạn như Admin">
+                                ✦ Xem QR mọi CĐ
+                              </span>
+                            )}
+                            {user.canApproveOddPO && (
+                              <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-md font-bold border border-amber-200" title="Được quyền phê duyệt PO lẻ">
+                                ✦ Duyệt PO lẻ
+                              </span>
+                            )}
                           </div>
                         )}
                       </td>
@@ -537,6 +547,8 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
   const [defaultStage, setDefaultStage] = useState<StageId | 'ALL'>(initialData?.defaultStage || 'ALL');
   const [isActive, setIsActive] = useState<boolean>(initialData?.isActive ?? true);
   const [canApproveOddPO, setCanApproveOddPO] = useState<boolean>(initialData?.canApproveOddPO ?? false);
+  const [canViewOwnStageExportedLabels, setCanViewOwnStageExportedLabels] = useState<boolean>(initialData?.canViewOwnStageExportedLabels ?? true);
+  const [canViewAllStageLabels, setCanViewAllStageLabels] = useState<boolean>(initialData?.canViewAllStageLabels ?? (initialData?.role === 'ADMIN' ? true : false));
   const [allowedViews, setAllowedViews] = useState<View[]>(() => {
     if (initialData?.allowedViews) return [...initialData.allowedViews];
     return ['dashboard', 'produce', 'inbound'];
@@ -586,6 +598,8 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
       defaultStage: defaultStage === 'ALL' ? undefined : (defaultStage as StageId),
       allowedViews: role === 'ADMIN' ? AVAILABLE_TABS.map(t => t.key) : allowedViews,
       canApproveOddPO: role === 'ADMIN' ? true : canApproveOddPO,
+      canViewOwnStageExportedLabels: role === 'ADMIN' ? true : canViewOwnStageExportedLabels,
+      canViewAllStageLabels: role === 'ADMIN' ? true : canViewAllStageLabels,
       isActive,
     });
   };
@@ -760,6 +774,56 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+            </label>
+          </div>
+
+          {/* Quyền xem nhãn QR do công đoạn mình xuất đi */}
+          <div className="flex items-center justify-between p-3.5 bg-blue-50/80 rounded-xl border border-blue-200">
+            <div>
+              <span className="text-xs font-bold text-blue-950 flex items-center gap-1.5">
+                <QrCode size={16} className="text-blue-600" />
+                <span>Xem nhãn QR do công đoạn mình xuất ra</span>
+              </span>
+              <p className="text-[11px] text-blue-700 mt-0.5">
+                {role === 'ADMIN' 
+                  ? 'Quản trị viên (Admin) luôn có toàn quyền xem nhãn QR của tất cả công đoạn' 
+                  : 'Cho phép xem tem do chính công đoạn mình xuất đi để kiểm tra đã in chưa hoặc xuất đi đâu (ngoài tem có đích đến là mình)'}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={role === 'ADMIN' || canViewOwnStageExportedLabels}
+                disabled={role === 'ADMIN'}
+                onChange={(e) => setCanViewOwnStageExportedLabels(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+            </label>
+          </div>
+
+          {/* Quyền xem nhãn QR của TẤT CẢ các công đoạn (như Admin) */}
+          <div className="flex items-center justify-between p-3.5 bg-purple-50/80 rounded-xl border border-purple-200">
+            <div>
+              <span className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                <Layers size={16} className="text-purple-600" />
+                <span>Xem nhãn QR tất cả các công đoạn (giống Admin)</span>
+              </span>
+              <p className="text-[11px] text-purple-700 mt-0.5">
+                {role === 'ADMIN' 
+                  ? 'Quản trị viên (Admin) luôn có toàn quyền xem nhãn QR của tất cả công đoạn' 
+                  : 'Cho phép tài khoản này (Tổ trưởng, KCS, Quản lý...) xem và lọc toàn bộ danh sách tem nhãn QR của mọi công đoạn giống tài khoản Admin'}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={role === 'ADMIN' || canViewAllStageLabels}
+                disabled={role === 'ADMIN'}
+                onChange={(e) => setCanViewAllStageLabels(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
             </label>
           </div>
 

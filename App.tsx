@@ -3585,8 +3585,11 @@ function LabelHistoryView({
   const [limit, setLimit] = useState(50);
   const [activeTab, setActiveTab] = useState<'PENDING' | 'FINISHED' | 'PAINTING' | 'DISPOSAL' | 'GLAZING'>('PENDING');
   const [adminStageFilter, setAdminStageFilter] = useState<string>('ALL');
+  const [stageDirectionFilter, setStageDirectionFilter] = useState<'ALL' | 'INBOUND' | 'OUTBOUND'>('ALL');
 
   const isAdmin = currentUser?.role === 'ADMIN';
+  const canViewAllStages = isAdmin || Boolean(currentUser?.canViewAllStageLabels);
+  const canViewOwnStageExported = isAdmin || canViewAllStages || currentUser?.canViewOwnStageExportedLabels !== false;
   const userDefaultStage = useMemo(() => getUserDefaultStage(currentUser), [currentUser]);
 
   const getLabelTargetStage = (label: Transaction): string => {
@@ -3610,6 +3613,21 @@ function LabelHistoryView({
     if (!stageId) return '';
     const match = STAGES.find(s => s.id === stageId);
     return match ? match.name : stageId;
+  };
+
+  const isLabelRelatedToStage = (
+    label: Transaction, 
+    stage: string, 
+    direction: 'ALL' | 'INBOUND' | 'OUTBOUND', 
+    allowExported: boolean
+  ): boolean => {
+    const targetStage = getLabelTargetStage(label);
+    const isIncoming = targetStage === stage;
+    const isOutgoing = allowExported && label.stageId === stage;
+
+    if (direction === 'INBOUND') return isIncoming;
+    if (direction === 'OUTBOUND') return isOutgoing;
+    return isIncoming || isOutgoing;
   };
 
   useEffect(() => {
@@ -3724,12 +3742,15 @@ function LabelHistoryView({
       // Pending: Not scanned and NOT specialized labels
       if (isScanned || isPaintingOut || isGlazingOut || isDisposal) return false;
 
-      // Phân quyền theo công đoạn đích của nhãn QR
-      const targetStage = getLabelTargetStage(label);
-      if (!isAdmin) {
-        if (targetStage !== userDefaultStage) return false;
+      // Phân quyền theo công đoạn & chiều tem (đích đến hoặc do chính công đoạn xuất đi)
+      if (!canViewAllStages) {
+        if (!isLabelRelatedToStage(label, userDefaultStage, stageDirectionFilter, canViewOwnStageExported)) {
+          return false;
+        }
       } else if (adminStageFilter !== 'ALL') {
-        if (targetStage !== adminStageFilter) return false;
+        if (!isLabelRelatedToStage(label, adminStageFilter, stageDirectionFilter, true)) {
+          return false;
+        }
       }
     } else if (activeTab === 'PAINTING') {
       // Painting: Only Painting OUT labels
@@ -3760,24 +3781,72 @@ function LabelHistoryView({
     return labelDate === dateFilter;
   });
 
-  const pendingCount = useMemo(() => {
-    return labels.filter(label => {
+  // Counts for non-admin user
+  const userPendingCounts = useMemo(() => {
+    let inbound = 0;
+    let outbound = 0;
+    let all = 0;
+
+    labels.forEach(label => {
       const isScanned = scannedIds.has(label.id);
       const isPaintingOut = label.stageId === 'PAINTING' && label.type === 'STAGE_OUT';
       const isGlazingOut = label.stageId === 'GLAZING' && label.type === 'STAGE_OUT';
       const isDisposal = label.type === 'DISPOSAL';
-      if (isScanned || isPaintingOut || isGlazingOut || isDisposal) return false;
+      if (isScanned || isPaintingOut || isGlazingOut || isDisposal) return;
 
-      const targetStage = getLabelTargetStage(label);
-      if (!isAdmin) {
-        return targetStage === userDefaultStage;
-      }
+      const target = getLabelTargetStage(label);
+      const isInc = target === userDefaultStage;
+      const isOut = canViewOwnStageExported && label.stageId === userDefaultStage;
+
+      if (isInc) inbound++;
+      if (isOut) outbound++;
+      if (isInc || isOut) all++;
+    });
+
+    return { inbound, outbound, all };
+  }, [labels, scannedIds, userDefaultStage, canViewOwnStageExported]);
+
+  // Counts for Admin
+  const adminPendingCounts = useMemo(() => {
+    let inbound = 0;
+    let outbound = 0;
+    let all = 0;
+    let totalAllPending = 0;
+
+    labels.forEach(label => {
+      const isScanned = scannedIds.has(label.id);
+      const isPaintingOut = label.stageId === 'PAINTING' && label.type === 'STAGE_OUT';
+      const isGlazingOut = label.stageId === 'GLAZING' && label.type === 'STAGE_OUT';
+      const isDisposal = label.type === 'DISPOSAL';
+      if (isScanned || isPaintingOut || isGlazingOut || isDisposal) return;
+
+      totalAllPending++;
+
       if (adminStageFilter !== 'ALL') {
-        return targetStage === adminStageFilter;
+        const target = getLabelTargetStage(label);
+        const isInc = target === adminStageFilter;
+        const isOut = label.stageId === adminStageFilter;
+
+        if (isInc) inbound++;
+        if (isOut) outbound++;
+        if (isInc || isOut) all++;
       }
-      return true;
-    }).length;
-  }, [labels, scannedIds, isAdmin, userDefaultStage, adminStageFilter]);
+    });
+
+    return { inbound, outbound, all, totalAllPending };
+  }, [labels, scannedIds, adminStageFilter]);
+
+  const pendingTabCount = useMemo(() => {
+    if (!canViewAllStages) {
+      if (stageDirectionFilter === 'INBOUND') return userPendingCounts.inbound;
+      if (stageDirectionFilter === 'OUTBOUND') return userPendingCounts.outbound;
+      return userPendingCounts.all;
+    }
+    if (adminStageFilter === 'ALL') return adminPendingCounts.totalAllPending;
+    if (stageDirectionFilter === 'INBOUND') return adminPendingCounts.inbound;
+    if (stageDirectionFilter === 'OUTBOUND') return adminPendingCounts.outbound;
+    return adminPendingCounts.all;
+  }, [canViewAllStages, stageDirectionFilter, userPendingCounts, adminStageFilter, adminPendingCounts]);
 
   const displayedLabels = filteredLabels.slice(0, limit);
 
@@ -3810,8 +3879,8 @@ function LabelHistoryView({
                 <span className="text-[9px] font-bold opacity-60 uppercase">Đã in nhãn</span>
               </div>
               <div className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-gray-200 border border-gray-300" />
-                <span className="text-[9px] font-bold opacity-60 uppercase">Chưa in/nhập</span>
+                <div className="w-2 h-2 rounded-full bg-amber-500" />
+                <span className="text-[9px] font-bold opacity-60 uppercase">Chưa in nhãn</span>
               </div>
             </div>
           </div>
@@ -3848,7 +3917,7 @@ function LabelHistoryView({
                 "px-1.5 py-0.2 rounded-full text-[9px] font-black",
                 activeTab === 'PENDING' ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"
               )}>
-                {pendingCount}
+                {pendingTabCount}
               </span>
             </button>
             <button 
@@ -3890,30 +3959,31 @@ function LabelHistoryView({
           </div>
 
           {activeTab === 'PENDING' && (
-            isAdmin ? (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-1.5">
+            canViewAllStages ? (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-700">
                     <Filter size={13} className="text-slate-500" />
-                    <span>Lọc công đoạn đích (Admin):</span>
+                    <span>{isAdmin ? 'Lọc công đoạn (Admin):' : 'Lọc công đoạn (Toàn quyền tất cả CĐ):'}</span>
                   </div>
                   {adminStageFilter !== 'ALL' && (
                     <button 
-                      onClick={() => setAdminStageFilter('ALL')}
+                      onClick={() => { setAdminStageFilter('ALL'); setStageDirectionFilter('ALL'); }}
                       className="text-[10px] text-blue-600 font-bold hover:underline cursor-pointer"
                     >
-                      Xem tất cả
+                      Xem tất cả ({adminPendingCounts.totalAllPending})
                     </button>
                   )}
                 </div>
                 <div className="flex flex-wrap gap-1">
                   {[
-                    { id: 'ALL', label: 'Tất cả đích' },
+                    { id: 'ALL', label: 'Tất cả' },
                     { id: 'BENDING', label: 'Chấn/Dập' },
                     { id: 'WELDING', label: 'Hàn' },
                     { id: 'PAINTING', label: 'Sơn' },
                     { id: 'GLAZING', label: 'Dán Kính' },
                     { id: 'DCLR', label: 'Lắp ráp (DCLR)' },
+                    { id: 'LASER', label: 'Cắt Laser' },
                   ].map(item => (
                     <button
                       key={item.id}
@@ -3929,19 +3999,101 @@ function LabelHistoryView({
                     </button>
                   ))}
                 </div>
+
+                {adminStageFilter !== 'ALL' && (
+                  <div className="flex flex-wrap items-center gap-1 pt-1.5 border-t border-slate-200/80">
+                    <span className="text-[10px] font-bold text-slate-500 mr-1">Hướng tem:</span>
+                    <button
+                      onClick={() => setStageDirectionFilter('ALL')}
+                      className={cn(
+                        "px-2 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer",
+                        stageDirectionFilter === 'ALL' 
+                          ? "bg-slate-800 text-white shadow-xs" 
+                          : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                      )}
+                    >
+                      Cả đến & xuất ({adminPendingCounts.all})
+                    </button>
+                    <button
+                      onClick={() => setStageDirectionFilter('INBOUND')}
+                      className={cn(
+                        "px-2 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer",
+                        stageDirectionFilter === 'INBOUND' 
+                          ? "bg-blue-600 text-white shadow-xs" 
+                          : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                      )}
+                    >
+                      Đích đến ({adminPendingCounts.inbound})
+                    </button>
+                    <button
+                      onClick={() => setStageDirectionFilter('OUTBOUND')}
+                      className={cn(
+                        "px-2 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer",
+                        stageDirectionFilter === 'OUTBOUND' 
+                          ? "bg-emerald-600 text-white shadow-xs" 
+                          : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                      )}
+                    >
+                      Xuất đi ({adminPendingCounts.outbound})
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-2.5 flex items-center justify-between text-xs text-blue-900">
-                <div className="flex items-center gap-1.5 font-medium">
-                  <ShieldCheck size={16} className="text-blue-600 shrink-0" />
-                  <span>Chờ nhập kho cho:</span>
-                  <span className="font-extrabold uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[11px]">
-                    {getStageLabel(userDefaultStage)}
+              <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-2.5 space-y-2">
+                <div className="flex items-center justify-between text-xs text-blue-900">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <ShieldCheck size={16} className="text-blue-600 shrink-0" />
+                    <span>Công đoạn phụ trách:</span>
+                    <span className="font-extrabold uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[11px]">
+                      {getStageLabel(userDefaultStage)}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-blue-600 font-mono font-bold">
+                    @{currentUser?.username || 'user'}
                   </span>
                 </div>
-                <span className="text-[10px] text-blue-600/80 font-mono font-medium">
-                  (Đích đến: {getStageLabel(userDefaultStage)})
-                </span>
+
+                {canViewOwnStageExported && (
+                  <div className="flex flex-wrap items-center gap-1 pt-1 border-t border-blue-200/60">
+                    <button
+                      onClick={() => setStageDirectionFilter('ALL')}
+                      className={cn(
+                        "px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1",
+                        stageDirectionFilter === 'ALL' 
+                          ? "bg-blue-600 text-white shadow-xs" 
+                          : "bg-white text-blue-800 border border-blue-200 hover:bg-blue-100/70"
+                      )}
+                    >
+                      <span>Tất cả</span>
+                      <span className="opacity-80 font-black font-mono">({userPendingCounts.all})</span>
+                    </button>
+                    <button
+                      onClick={() => setStageDirectionFilter('INBOUND')}
+                      className={cn(
+                        "px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1",
+                        stageDirectionFilter === 'INBOUND' 
+                          ? "bg-blue-600 text-white shadow-xs" 
+                          : "bg-white text-blue-800 border border-blue-200 hover:bg-blue-100/70"
+                      )}
+                    >
+                      <span>Đích đến (Chờ nhập)</span>
+                      <span className="opacity-80 font-black font-mono">({userPendingCounts.inbound})</span>
+                    </button>
+                    <button
+                      onClick={() => setStageDirectionFilter('OUTBOUND')}
+                      className={cn(
+                        "px-2 py-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1",
+                        stageDirectionFilter === 'OUTBOUND' 
+                          ? "bg-emerald-600 text-white shadow-xs" 
+                          : "bg-white text-emerald-800 border border-emerald-200 hover:bg-emerald-100/70"
+                      )}
+                    >
+                      <span>Do mình xuất đi (Kiểm tra in)</span>
+                      <span className="opacity-80 font-black font-mono">({userPendingCounts.outbound})</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )
           )}
@@ -3984,6 +4136,9 @@ function LabelHistoryView({
                 const targetStage = getLabelTargetStage(label);
                 const originName = getStageLabel(label.stageId);
                 const targetName = getStageLabel(targetStage);
+                const currentStageContext = canViewAllStages ? (adminStageFilter === 'ALL' ? '' : adminStageFilter) : userDefaultStage;
+                const isExportedByCurrentStage = currentStageContext && label.stageId === currentStageContext;
+                const isArrivingAtCurrentStage = currentStageContext && targetStage === currentStageContext;
 
                 return (
                   <div 
@@ -4023,6 +4178,16 @@ function LabelHistoryView({
                             Đích: {targetName}
                           </span>
                         ) : null}
+                        {isExportedByCurrentStage && (
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded">
+                            Xuất đi
+                          </span>
+                        )}
+                        {isArrivingAtCurrentStage && (
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 bg-sky-100 text-sky-800 rounded">
+                            Chờ nhập
+                          </span>
+                        )}
                         {isPaintingOut && (
                           <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded">Sơn OUT</span>
                         )}
@@ -4044,7 +4209,9 @@ function LabelHistoryView({
                         <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 bg-green-100 text-green-700 rounded whitespace-nowrap">Đã nhập</span>
                       ) : isPrinted ? (
                         <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded whitespace-nowrap">Đã in</span>
-                      ) : null}
+                      ) : (
+                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded whitespace-nowrap">Chưa in</span>
+                      )}
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();

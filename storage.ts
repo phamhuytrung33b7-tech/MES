@@ -630,14 +630,16 @@ export const storageService = {
             'glazing', 'labels', 'po', 'defects', 'working_hours', 'norms', 'odd_po', 'settings'
           ],
           canApproveOddPO: true,
+          canViewOwnStageExportedLabels: true,
+          canViewAllStageLabels: true,
           isActive: true,
           createdAt: Date.now()
         };
         users = [defaultAdmin];
         try { localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users)); } catch {}
       } else {
-        // Ensure all ADMIN accounts have canApproveOddPO enabled
-        users = users.map(u => u.role === 'ADMIN' ? { ...u, canApproveOddPO: true } : u);
+        // Ensure all ADMIN accounts have canApproveOddPO, canViewOwnStageExportedLabels & canViewAllStageLabels enabled
+        users = users.map(u => u.role === 'ADMIN' ? { ...u, canApproveOddPO: true, canViewOwnStageExportedLabels: true, canViewAllStageLabels: true } : u);
       }
       return users;
     });
