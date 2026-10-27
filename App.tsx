@@ -1442,10 +1442,10 @@ export default function App() {
               onClick={() => syncWithRemote(true)}
               disabled={syncStatus.syncing}
               title="Tải dữ liệu mới nhất từ Supabase (Thủ công khi cần)"
-              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200 transition-all shadow-xs active:scale-95 cursor-pointer disabled:opacity-50"
+              className="flex items-center gap-1.5 px-2 py-1.5 sm:px-2.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-semibold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition-all shadow-xs active:scale-95 cursor-pointer disabled:opacity-50 shrink-0"
             >
-              <RefreshCw size={13} className={syncStatus.syncing ? "animate-spin text-blue-600" : "text-gray-500"} />
-              <span className="hidden xl:inline">Làm mới dữ liệu</span>
+              <RefreshCw size={13} className={syncStatus.syncing ? "animate-spin text-blue-600" : "text-blue-600"} />
+              <span>Làm mới<span className="hidden sm:inline"> dữ liệu</span></span>
             </button>
 
             {/* Backup/Restore JSON Button (Hidden on Mobile) */}
@@ -1506,6 +1506,17 @@ export default function App() {
                           </div>
 
                           <div className="py-1">
+                            <button
+                              onClick={() => {
+                                syncWithRemote(true);
+                                setShowUserDropdown(false);
+                              }}
+                              disabled={syncStatus.syncing}
+                              className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors text-left cursor-pointer md:hidden"
+                            >
+                              <RefreshCw size={15} className={syncStatus.syncing ? "animate-spin text-blue-600" : "text-blue-600"} />
+                              <span>Làm mới dữ liệu</span>
+                            </button>
                             {currentUser.role === 'ADMIN' && (
                               <button
                                 onClick={() => {
@@ -5886,7 +5897,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       });
 
       let laserConverted = 0;
-      let sonConverted = 0;
+      let sonConverted = 0; // Tính theo HSQĐ Sơn riêng (Tab HSQĐ Sơn) cho tab riêng Sơn
+      let sonConvertedDclr = 0; // Tính theo HSQĐ DCLR cho Biểu đồ Năng suất Xưởng Cơ Khí
       let danKinhConvertedMechanical = 0; // Tính theo HSQĐ Dán Kính 1 (Xưởng Cơ Khí)
       let danKinhConvertedStage = 0;      // Tính theo HSQĐ Dán Kính 2 (Công đoạn riêng lẻ)
       let chanDapConverted = 0;
@@ -5901,24 +5913,30 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         const unit = part?.unit || 'cái';
         
         let itemHsqd = 0;
+        let itemHsqdMech = 0;
         if (t.stageId === 'LASER') {
            if (!isLaserScrapItem(t.partId, t.partName)) {
              itemHsqd = getLaserHSQD(t.partId);
+             itemHsqdMech = itemHsqd;
              laserConverted += ((t.quantity || 0) * itemHsqd);
            }
         } else if (t.stageId === 'PAINTING') {
-           itemHsqd = getPaintingHSQD(t.partId);
+           itemHsqd = getPaintingHSQD(t.partId); // Tab HSQĐ Sơn (cho tab riêng Sơn)
+           itemHsqdMech = dclrNormsMap.get(t.partId) || 0; // Tab HSQĐ DCLR (cho Năng suất Xưởng Cơ Khí)
            sonConverted += ((t.quantity || 0) * itemHsqd);
+           sonConvertedDclr += ((t.quantity || 0) * itemHsqdMech);
         } else if (t.stageId === 'GLAZING') {
-           const hsqdMech = glazingHSQD(t.partId);
-           itemHsqd = getGlazingStageHSQD(t.partId);
-           danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
+           itemHsqdMech = glazingHSQD(t.partId); // Tab HSQĐ Dán Kính 1 (Xưởng CK)
+           itemHsqd = getGlazingStageHSQD(t.partId); // Tab HSQĐ Dán Kính 2 (Công đoạn)
+           danKinhConvertedMechanical += ((t.quantity || 0) * itemHsqdMech);
            danKinhConvertedStage += ((t.quantity || 0) * itemHsqd);
         } else if (t.stageId === 'BENDING') {
            itemHsqd = getBendingWeldingHSQD(t.partId);
+           itemHsqdMech = itemHsqd;
            chanDapConverted += ((t.quantity || 0) * itemHsqd);
         } else if (t.stageId === 'WELDING') {
            itemHsqd = getBendingWeldingHSQD(t.partId);
+           itemHsqdMech = itemHsqd;
            hanConverted += ((t.quantity || 0) * itemHsqd);
         }
 
@@ -5928,12 +5946,16 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           if ((!existingDetail.hsqd || existingDetail.hsqd === 0) && itemHsqd > 0) {
             existingDetail.hsqd = itemHsqd;
           }
+          if ((!existingDetail.hsqdMech || existingDetail.hsqdMech === 0) && itemHsqdMech > 0) {
+            existingDetail.hsqdMech = itemHsqdMech;
+          }
         } else {
           slotData.details[stageName].push({ 
             partName, 
             quantity: (t.quantity || 0), 
             unit,
             hsqd: itemHsqd,
+            hsqdMech: itemHsqdMech,
             partId: t.partId 
           });
         }
@@ -5948,8 +5970,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         const partName = part ? part.name : (t.partName || t.partId);
         const unit = part?.unit || 'cái';
         
-        const hsqdMech = glazingHSQD(t.partId);
-        const itemHsqd = getGlazingStageHSQD(t.partId);
+        const hsqdMech = glazingHSQD(t.partId); // Tab HSQĐ Dán Kính 1 (Xưởng CK)
+        const itemHsqd = getGlazingStageHSQD(t.partId); // Tab HSQĐ Dán Kính 2 (Công đoạn)
         danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
         danKinhConvertedStage += ((t.quantity || 0) * itemHsqd);
 
@@ -5959,12 +5981,16 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           if ((!existingDetail.hsqd || existingDetail.hsqd === 0) && itemHsqd > 0) {
             existingDetail.hsqd = itemHsqd;
           }
+          if ((!existingDetail.hsqdMech || existingDetail.hsqdMech === 0) && hsqdMech > 0) {
+            existingDetail.hsqdMech = hsqdMech;
+          }
         } else {
           slotData.details[stageName].push({ 
             partName, 
             quantity: (t.quantity || 0), 
             unit,
             hsqd: itemHsqd,
+            hsqdMech: hsqdMech,
             partId: t.partId
           });
         }
@@ -6000,8 +6026,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       slotData['NSLD_Han'] = targetQDHan > 0 ? (hanConverted / targetQDHan) : 0;
 
       // Năng suất lao động phân xưởng cơ khí từng khung giờ:
-      // NSLĐ = Tổng sản phẩm quy đổi của khung giờ (Sơn + Dán kính tính theo HSQĐ Xưởng) / (Tổng số người của khung giờ đó * hourFactor) / 28.3
-      const totalConvertedMechanical = sonConverted + danKinhConvertedMechanical;
+      // NSLĐ = Tổng sản phẩm quy đổi của khung giờ (Sơn DCLR + Dán kính tính theo HSQĐ Xưởng) / (Tổng số người của khung giờ đó * hourFactor) / 28.3
+      const totalConvertedMechanical = sonConvertedDclr + danKinhConvertedMechanical;
       const totalWorkersMechanical = workerCountLaser + workerCountChanDap + workerCountHan + workerCountSon + workerCountDanKinh;
       const slotMandays = totalWorkersMechanical * hourFactor;
       
@@ -7199,14 +7225,16 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                   </div>
                                   <div className="pl-2 space-y-1.5 max-h-48 overflow-y-auto no-scrollbar">
                                     {items.map((detail: any, idx: number) => {
-                                      const hasHsqd = detail.hsqd !== undefined && detail.hsqd > 0;
-                                      const convertedVal = hasHsqd ? ((detail.quantity || 0) * detail.hsqd) : 0;
+                                      const mechHsqd = detail.hsqdMech !== undefined ? detail.hsqdMech : detail.hsqd;
+                                      const hasHsqd = mechHsqd !== undefined && mechHsqd > 0;
+                                      const convertedVal = hasHsqd ? ((detail.quantity || 0) * mechHsqd) : 0;
+                                      const hsqdLabel = stName === 'Sơn' ? 'DCLR' : 'Xưởng CK';
                                       return (
                                         <div key={idx} className="flex justify-between items-start text-xs text-gray-700 gap-3 border-b border-gray-50 pb-1 last:border-0 last:pb-0">
                                           <div className="flex-1 min-w-0">
                                             <span className="break-words leading-tight font-medium text-[11px] text-gray-800 block">{detail.partName}</span>
                                             <span className="text-[10px] text-gray-400 font-mono block mt-0.5">
-                                              HSQĐ: {hasHsqd ? <span className="font-bold text-gray-700">{detail.hsqd}</span> : <span className="italic text-amber-600 font-medium">Trống (tính 0)</span>}
+                                              HSQĐ ({hsqdLabel}): {hasHsqd ? <span className="font-bold text-gray-700">{mechHsqd}</span> : <span className="italic text-amber-600 font-medium">Trống (tính 0)</span>}
                                               {hasHsqd && <span className="text-gray-500"> → <span className="font-bold text-indigo-600">{convertedVal.toFixed(1)} SPQĐ</span></span>}
                                             </span>
                                           </div>
