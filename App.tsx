@@ -927,68 +927,7 @@ export default function App() {
   }, [inventory]);
 
   useEffect(() => {
-    // Migration: ensure transformations use part IDs instead of part names
     const existingParts = storageService.getParts();
-    const transformations = storageService.getTransformations();
-    let migrated = false;
-    const stdSearch = (val: string) => val ? val.toUpperCase().normalize('NFC').trim() : '';
-
-    const newTransformations = transformations.map(t => {
-      let finalSource = t.sourcePartId;
-      let finalTarget = t.targetPartId;
-      
-      const ptSrc = existingParts.find(p => p.id === t.sourcePartId);
-      if (!ptSrc) {
-        const ptSrcByName = existingParts.find(p => stdSearch(p.name) === stdSearch(t.sourcePartId));
-        if (ptSrcByName) {
-          finalSource = ptSrcByName.id;
-          migrated = true;
-        }
-      }
-
-      const ptTgt = existingParts.find(p => p.id === t.targetPartId);
-      if (!ptTgt) {
-        const ptTgtByName = existingParts.find(p => stdSearch(p.name) === stdSearch(t.targetPartId));
-        if (ptTgtByName) {
-          finalTarget = ptTgtByName.id;
-          migrated = true;
-        }
-      }
-
-      return { ...t, sourcePartId: finalSource, targetPartId: finalTarget };
-    });
-
-    if (migrated) {
-      storageService.saveTransformations(newTransformations);
-    }
-    
-    // Migration: ensure inventory partIds match catalog case
-    const existingInv = storageService.getInventory();
-    let invMigrated = false;
-    const migratedInv = existingInv.map(i => {
-      let fPart = i.partId;
-      let fOrig = i.originalPartId;
-      const mPart = existingParts.find(p => p.id.toUpperCase() === i.partId.toUpperCase() || p.name.toUpperCase() === i.partId.toUpperCase());
-      if (mPart && i.partId !== mPart.id) {
-        fPart = mPart.id;
-        invMigrated = true;
-      }
-      if (i.originalPartId) {
-        const mOrig = existingParts.find(p => p.id.toUpperCase() === i.originalPartId?.toUpperCase() || p.name.toUpperCase() === i.originalPartId?.toUpperCase());
-        if (mOrig && i.originalPartId !== mOrig.id) {
-          fOrig = mOrig.id;
-          invMigrated = true;
-        }
-      }
-      return { ...i, partId: fPart, originalPartId: fOrig };
-    });
-    if (invMigrated) {
-      storageService.saveInventory(migratedInv);
-    }
-
-    // Initialize with some dummy data if empty
-    const existing = migratedInv;
-    
     if (existingParts.length > 0 && !selectedPart) {
       setSelectedPart(existingParts[0].id);
     }
@@ -996,15 +935,14 @@ export default function App() {
     // Initial immediate local render (0ms lag)
     refreshData();
 
-    // Async hydration & sync with Supabase online
+    // Async event-driven check on startup / F5:
+    // Kiểm tra đúng 1 dòng duy nhất 'data_reset_version'.
+    // Nếu version thay đổi hoặc LocalStorage trống -> PULL dữ liệu sạch.
+    // Nếu version khớp -> dùng trực tiếp LocalStorage (0 Egress / 0 Request ngầm).
     let isMounted = true;
     (async () => {
       try {
-        await storageService.init(true);
-        if (isMounted) refreshData();
-      } catch {}
-      try {
-        await storageService.autoCleanupOldData();
+        await storageService.init(false);
         if (isMounted) refreshData();
       } catch {}
     })();
@@ -1030,48 +968,14 @@ export default function App() {
     setSelectedPart(prev => (!prev && currentParts.length > 0 ? currentParts[0].id : prev));
   }, []);
 
-  // Throttled remote sync (uses 60s cooldown to eliminate redundant queries)
-  const syncWithRemote = useCallback(async (force: boolean = false) => {
+  // Deliberate manual remote sync (force = true pulls all tables on user click)
+  const syncWithRemote = useCallback(async (force: boolean = true) => {
     if (!isSupabaseConfigured) return;
     try {
       await storageService.init(force);
       refreshData();
     } catch {}
   }, [refreshData]);
-
-  // Polling & Visibility Change Auto-Refresh Effect (Every 90s, paused when tab is hidden)
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout | null = null;
-
-    const startPolling = () => {
-      if (intervalId) clearInterval(intervalId);
-      intervalId = setInterval(() => {
-        if (!document.hidden) {
-          syncWithRemote(false);
-        }
-      }, 90000); // 90 seconds interval (reduces Supabase log queries by ~70%)
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        if (intervalId) {
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-      } else {
-        syncWithRemote(false);
-        startPolling();
-      }
-    };
-
-    startPolling();
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [syncWithRemote]);
 
   const handleProduce = async (e: React.FormEvent, sourceLocation: 'IN' | 'OUT' = 'IN', targetStageId?: StageId, poId?: string) => {
     e.preventDefault();
@@ -1531,6 +1435,17 @@ export default function App() {
                   <span className="hidden lg:inline">Cấu hình Supabase</span>
                 </>
               )}
+            </button>
+
+            {/* Manual Sync Button (User-Driven, 0 Background Polling) */}
+            <button
+              onClick={() => syncWithRemote(true)}
+              disabled={syncStatus.syncing}
+              title="Tải dữ liệu mới nhất từ Supabase (Thủ công khi cần)"
+              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200 transition-all shadow-xs active:scale-95 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={syncStatus.syncing ? "animate-spin text-blue-600" : "text-gray-500"} />
+              <span className="hidden xl:inline">Làm mới dữ liệu</span>
             </button>
 
             {/* Backup/Restore JSON Button (Hidden on Mobile) */}
@@ -3600,6 +3515,15 @@ function LabelHistoryView({
         return qrParts[5];
       }
     }
+    // Check if this component is specifically configured to route to GLAZING from label.stageId
+    const cleanId = (label.partId || '').normalize('NFC').trim().toUpperCase().replace(/\s*-\s*(H|CD|S|C|GLZ|OUT|IN)$/i, '');
+    const glazingConfigs = storageService.getGlazingConfigs();
+    const isGlzTarget = glazingConfigs.some(c => 
+      c.sourceStageId === label.stageId && 
+      c.partId.normalize('NFC').trim().toUpperCase().replace(/\s*-\s*(H|CD|S|C|GLZ|OUT|IN)$/i, '') === cleanId
+    );
+    if (isGlzTarget) return 'GLAZING';
+
     // Flow tiêu chuẩn công đoạn:
     if (label.stageId === 'LASER') return 'BENDING';
     if (label.stageId === 'BENDING') return 'WELDING';
@@ -4645,6 +4569,18 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     return glazingHSQD(partId);
   };
 
+  const paintingHSQDArray = storageService.getPaintingHSQD();
+  const paintingHSQDMap = new Map(paintingHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
+  const getPaintingHSQD = (partId: string) => {
+    const upper = (partId || '').trim().toUpperCase();
+    if (paintingHSQDMap.has(upper)) return paintingHSQDMap.get(upper)!;
+    const cleanId = upper.replace(/^PNT-OUT-/i, '').replace(/\s*-\s*SƠN$/i, '').trim();
+    if (cleanId && paintingHSQDMap.has(cleanId)) return paintingHSQDMap.get(cleanId)!;
+    const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
+    if (matchedPart && paintingHSQDMap.has(matchedPart.id.toUpperCase())) return paintingHSQDMap.get(matchedPart.id.toUpperCase())!;
+    return dclrNormsMap.get(partId) || 0;
+  };
+
   const [sY, sM, sD] = dateStr.split('-').map(Number);
   const start = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
   start.setHours(0, 0, 0, 0);
@@ -4772,9 +4708,10 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
        const isLaser = stageInfo.id === 'LASER';
        const isBW = stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING';
        const isGlz = stageInfo.id === 'GLAZING';
+       const isPainting = stageInfo.id === 'PAINTING';
        const hsqd = isLaser
          ? getLaserHSQD(partId)
-         : (isBW ? getBendingWeldingHSQD(partId) : (isGlz ? getGlazingStageHSQD(partId) : glazingHSQD(partId)));
+         : (isBW ? getBendingWeldingHSQD(partId) : (isPainting ? getPaintingHSQD(partId) : (isGlz ? getGlazingStageHSQD(partId) : glazingHSQD(partId))));
        const thucHien = partTotals.get(partId) || 0;
        
        // get KHSX based on Stage
@@ -5538,7 +5475,7 @@ const STAGE_CHART_CONFIGS: Record<string, {
     convertedKey: 'sonConverted',
     targetKey: 'targetQDSon',
     workerKey: 'workerCountSon',
-    hsqdSource: 'Tab Định Mức DCLR',
+    hsqdSource: 'Tab HSQĐ Sơn',
   },
   GLAZING: {
     name: 'Dán Kính',
@@ -5918,6 +5855,18 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       return glazingHSQD(partId);
     };
 
+    const paintingHSQDArray = storageService.getPaintingHSQD();
+    const paintingHSQDMap = new Map(paintingHSQDArray.map(n => [n.partId.toUpperCase(), n.hsqd]));
+    const getPaintingHSQD = (partId: string) => {
+      const upper = (partId || '').trim().toUpperCase();
+      if (paintingHSQDMap.has(upper)) return paintingHSQDMap.get(upper)!;
+      const cleanId = upper.replace(/^PNT-OUT-/i, '').replace(/\s*-\s*SƠN$/i, '').trim();
+      if (cleanId && paintingHSQDMap.has(cleanId)) return paintingHSQDMap.get(cleanId)!;
+      const matchedPart = parts.find((p: any) => p.id.toUpperCase() === upper || (cleanId && (p.name.toUpperCase().trim() === cleanId || p.id.toUpperCase() === cleanId)));
+      if (matchedPart && paintingHSQDMap.has(matchedPart.id.toUpperCase())) return paintingHSQDMap.get(matchedPart.id.toUpperCase())!;
+      return dclrNormsMap.get(partId) || 0;
+    };
+
     return timeSlots.map(slot => {
       const slotData: any = { name: slot.label, details: {} };
       targetStages.forEach(stageId => {
@@ -5958,7 +5907,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
              laserConverted += ((t.quantity || 0) * itemHsqd);
            }
         } else if (t.stageId === 'PAINTING') {
-           itemHsqd = dclrNormsMap.get(t.partId) || 0;
+           itemHsqd = getPaintingHSQD(t.partId);
            sonConverted += ((t.quantity || 0) * itemHsqd);
         } else if (t.stageId === 'GLAZING') {
            const hsqdMech = glazingHSQD(t.partId);
@@ -8166,19 +8115,26 @@ function ProduceView({
 
   const availablePos = allAvailablePos.filter(p => p.partId === selectedPart);
 
-  // Check if selected part is in Glazing incoming configuration
-  const isGlazingPart = useMemo(() => {
-    if (!selectedPart) return false;
+  // Check if selected part is in Glazing incoming configuration FOR THIS CURRENT STAGE
+  const matchedGlazingConfig = useMemo(() => {
+    if (!selectedPart) return null;
     const cleanId = selectedPart.startsWith('GLZ-OUT-') 
       ? selectedPart.trim().toUpperCase() 
       : selectedPart.split(' - ')[0].trim().toUpperCase();
     const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
     const glazingConfigs = storageService.getGlazingConfigs();
-    return glazingConfigs.some(c => 
-      c.partId.trim().toUpperCase() === cleanId || 
-      (partObj?.name && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
-    );
-  }, [selectedPart, parts]);
+    
+    // Strict requirement: Only route to GLAZING if this component is specifically configured
+    // to be pulled from THIS current stage's OUT warehouse!
+    return glazingConfigs.find(c => 
+      c.sourceStageId === selectedStage && (
+        c.partId.trim().toUpperCase() === cleanId || 
+        (partObj?.name && c.partName && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+      )
+    ) || null;
+  }, [selectedPart, parts, selectedStage]);
+
+  const isGlazingPart = Boolean(matchedGlazingConfig);
 
   // Handlers for selection
   const handlePartChange = (partId: string) => {
@@ -8189,12 +8145,19 @@ function ProduceView({
     const cleanId = partId.startsWith('GLZ-OUT-') ? partId.trim().toUpperCase() : partId.split(' - ')[0].trim().toUpperCase();
     const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
     const glazingConfigs = storageService.getGlazingConfigs();
-    const isGlz = glazingConfigs.some(c => 
-      c.partId.trim().toUpperCase() === cleanId || 
-      (partObj?.name && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+    const isGlzThisStage = glazingConfigs.some(c => 
+      c.sourceStageId === selectedStage && (
+        c.partId.trim().toUpperCase() === cleanId || 
+        (partObj?.name && c.partName && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+      )
     );
-    if (sourceLocation === 'OUT' && isGlz && selectedStage !== 'GLAZING') {
-      setTargetStageId('GLAZING');
+    if (sourceLocation === 'OUT') {
+      if (isGlzThisStage && selectedStage !== 'GLAZING') {
+        setTargetStageId('GLAZING');
+      } else {
+        const standardNext = (STAGES.find(s => s.id === selectedStage)?.nextStageId || 'BENDING') as StageId;
+        setTargetStageId(standardNext);
+      }
     }
   };
 
@@ -8207,12 +8170,19 @@ function ProduceView({
         const cleanId = po.partId.split(' - ')[0].trim().toUpperCase();
         const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
         const glazingConfigs = storageService.getGlazingConfigs();
-        const isGlz = glazingConfigs.some(c => 
-          c.partId.trim().toUpperCase() === cleanId || 
-          (partObj?.name && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+        const isGlzThisStage = glazingConfigs.some(c => 
+          c.sourceStageId === selectedStage && (
+            c.partId.trim().toUpperCase() === cleanId || 
+            (partObj?.name && c.partName && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+          )
         );
-        if (sourceLocation === 'OUT' && isGlz && selectedStage !== 'GLAZING') {
-          setTargetStageId('GLAZING');
+        if (sourceLocation === 'OUT') {
+          if (isGlzThisStage && selectedStage !== 'GLAZING') {
+            setTargetStageId('GLAZING');
+          } else {
+            const standardNext = (STAGES.find(s => s.id === selectedStage)?.nextStageId || 'BENDING') as StageId;
+            setTargetStageId(standardNext);
+          }
         }
       }
     }
@@ -8229,7 +8199,7 @@ function ProduceView({
   }, [selectedStage, filteredParts, selectedPart, allAvailablePos]);
 
   useEffect(() => {
-    // If operator is exporting OUT and this component is configured for Glazing, auto-select destination to GLAZING
+    // If operator is exporting OUT and this component is configured to go to Glazing FROM THIS STAGE
     if (sourceLocation === 'OUT' && isGlazingPart && selectedStage !== 'GLAZING') {
       setTargetStageId('GLAZING');
       return;
@@ -10217,35 +10187,55 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
         
         if (data.length < 2) return alert('File Excel không có dữ liệu');
 
-        const headers = data[0].map(h => String(h).toLowerCase().trim());
+        const headers = data[0].map(h => String(h || '').normalize('NFC').toLowerCase().trim());
         const nameIdx = headers.findIndex(h => h.includes('tên'));
-        const codeIdx = headers.findIndex(h => h.includes('mã'));
-        const sourceIdx = headers.findIndex(h => h.includes('công đoạn tiếp nhận') || h.includes('từ kho'));
+        const codeIdx = headers.findIndex(h => h.includes('mã') || h.includes('code') || h.includes('part'));
+        const sourceIdx = headers.findIndex(h => 
+          h.includes('tiếp nhận') || 
+          h.includes('từ kho') || 
+          h.includes('công đoạn') || 
+          h.includes('nguồn') || 
+          h.includes('source')
+        );
 
-        if (nameIdx === -1 || codeIdx === -1 || sourceIdx === -1) {
-          return alert('Không tìm thấy cột Tên, Mã, hoặc Nguồn trong file Excel.');
+        if (codeIdx === -1 || sourceIdx === -1) {
+          return alert('Không tìm thấy cột "Mã Linh kiện" hoặc "Công đoạn tiếp nhận từ kho OUT của" trong file Excel.');
         }
 
         const newConfigs: import('./types').GlazingConfig[] = [];
-        const seenPartIds = new Set<string>();
+        const seenPartKeys = new Set<string>();
 
         for (let i = 1; i < data.length; i++) {
           const row = data[i];
-          if (!row[codeIdx]) continue;
+          if (!row || !row[codeIdx]) continue;
           
           const partIdStr = String(row[codeIdx]).trim();
-          if (!partIdStr || seenPartIds.has(partIdStr)) continue;
-          seenPartIds.add(partIdStr);
+          if (!partIdStr) continue;
 
-          let sourceStr = String(row[sourceIdx] || '').toUpperCase();
+          const dedupeKey = partIdStr.toUpperCase();
+          if (seenPartKeys.has(dedupeKey)) continue;
+          seenPartKeys.add(dedupeKey);
+
+          let partNameStr = nameIdx !== -1 ? String(row[nameIdx] || '').trim() : '';
+          if (!partNameStr) {
+            const foundP = parts.find((p: any) => p.id.toUpperCase() === partIdStr.toUpperCase());
+            if (foundP) partNameStr = foundP.name;
+          }
+
+          const sourceRaw = String(row[sourceIdx] || '').normalize('NFC').toUpperCase().trim();
           let sId: StageId = 'BENDING';
-          if (sourceStr.includes('CHẤN') || sourceStr.includes('DẬP')) sId = 'BENDING';
-          else if (sourceStr.includes('SƠN') || sourceStr.includes('PAINT')) sId = 'PAINTING';
-          else if (sourceStr.includes('LASER')) sId = 'LASER';
-          else if (sourceStr.includes('HÀN')) sId = 'WELDING';
+          if (sourceRaw.includes('SƠN') || sourceRaw.includes('SON') || sourceRaw.includes('PAINT')) {
+            sId = 'PAINTING';
+          } else if (sourceRaw.includes('CHẤN') || sourceRaw.includes('DẬP') || sourceRaw.includes('CHAN') || sourceRaw.includes('DAP') || sourceRaw.includes('BEND')) {
+            sId = 'BENDING';
+          } else if (sourceRaw.includes('HÀN') || sourceRaw.includes('HAN') || sourceRaw.includes('WELD')) {
+            sId = 'WELDING';
+          } else if (sourceRaw.includes('LASER') || sourceRaw.includes('CẮT')) {
+            sId = 'LASER';
+          }
 
           newConfigs.push({
-            partName: String(row[nameIdx]).trim(),
+            partName: partNameStr || partIdStr,
             partId: partIdStr,
             sourceStageId: sId
           });
@@ -10253,7 +10243,7 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
 
         storageService.saveGlazingConfigs(newConfigs);
         setConfigs(newConfigs);
-        alert(`Đã nạp ${newConfigs.length} cấu hình Dán Kính.`);
+        alert(`Đã nạp thành công ${newConfigs.length} cấu hình tiếp nhận linh kiện Dán Kính từ kho OUT các công đoạn.`);
       } catch (err) {
         alert('Lỗi đọc file: ' + err);
       }
@@ -10323,17 +10313,62 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
     const qty = parseFloat(inboundQty[config.partId]);
     if (!qty || qty <= 0) return alert('Vui lòng nhập số lượng hợp lệ');
     
-    const sourceInv = globalInventory.find((i: any) => i.partId.toUpperCase() === config.partId.toUpperCase() && i.stageId === config.sourceStageId && i.location === 'OUT');
-    if (!sourceInv || sourceInv.quantity < qty) {
-      return alert(`Không đủ tồn kho OUT tại ${STAGES.find(s => s.id === config.sourceStageId)?.name || config.sourceStageId}. Kho hiện có: ${sourceInv?.quantity || 0}`);
+    const norm = (s: string) => (s || '').normalize('NFC').trim().toUpperCase().replace(/\s*-\s*(H|CD|S|C|GLZ|OUT|IN)$/i, '');
+    const cleanTargetId = norm(config.partId);
+    const cleanTargetName = config.partName ? norm(config.partName) : '';
+
+    // Find all matching stocks in source stage OUT
+    const matchingStocks = globalInventory.filter((i: any) => {
+      if (i.stageId !== config.sourceStageId || i.location !== 'OUT' || (i.quantity || 0) <= 0) return false;
+      const cleanInvId = norm(i.partId);
+      if (cleanInvId === cleanTargetId) return true;
+      if (i.originalPartId && norm(i.originalPartId) === cleanTargetId) return true;
+      if (cleanTargetName) {
+        const catalogPart = parts.find((p: any) => norm(p.id) === cleanInvId);
+        if (catalogPart && norm(catalogPart.name) === cleanTargetName) return true;
+      }
+      return false;
+    });
+
+    const totalAvailable = matchingStocks.reduce((sum: number, i: any) => sum + (i.quantity || 0), 0);
+    const sourceStageName = STAGES.find(s => s.id === config.sourceStageId)?.name || config.sourceStageId;
+
+    if (totalAvailable < qty) {
+      return alert(`Không đủ tồn kho OUT tại ${sourceStageName}. Kho hiện có: ${totalAvailable}, Yêu cầu nhập: ${qty}`);
     }
 
     try {
-      storageService.recordStageOut(config.partId, config.sourceStageId, qty, 'OUT', 'GLAZING');
-      storageService.recordManualInbound(config.partId, 'GLAZING', 'IN', qty);
-      setInboundQty({...inboundQty, [config.partId]: ''});
+      // 1. Deduct from source stage OUT across matching stocks
+      let remainingToDeduct = qty;
+      for (const stock of matchingStocks) {
+        if (remainingToDeduct <= 0) break;
+        const toTake = Math.min(stock.quantity, remainingToDeduct);
+        storageService.updateInventory(stock.partId, config.sourceStageId, 'OUT', -toTake, stock.originalPartId);
+        remainingToDeduct -= toTake;
+      }
+
+      // 2. Add to GLAZING IN
+      storageService.updateInventory(config.partId, 'GLAZING', 'IN', qty);
+
+      // 3. Record transaction
+      const ts = Date.now();
+      const txId = `GLZ-RCV-${ts}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      const receiveTx: import('./types').Transaction = {
+        id: txId,
+        type: 'STAGE_IN',
+        partId: config.partId,
+        partName: config.partName || (parts.find((p: any) => p.id === config.partId)?.name || config.partId),
+        quantity: qty,
+        stageId: 'GLAZING',
+        location: 'IN',
+        sourceStageId: config.sourceStageId,
+        timestamp: ts
+      };
+      storageService.saveTransactions([receiveTx, ...storageService.getTransactions()]);
+
+      setInboundQty(prev => ({ ...prev, [config.partId]: '' }));
       refreshData();
-      alert('Nhập kho thành công!');
+      alert(`Đã tiếp nhận ${qty} ${config.partName || config.partId} từ kho OUT ${sourceStageName} vào kho IN Dán Kính thành công!`);
     } catch(err) {
       alert(err instanceof Error ? err.message : 'Lỗi nhập kho');
     }
@@ -11249,17 +11284,49 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                 </div>
 
                 {configs.length > 0 && (
-                  <table className="w-full text-left bg-white text-sm">
-                    <thead><tr className="bg-gray-100 text-gray-500 uppercase"><th className="p-3">Mã</th><th className="p-3">Nguồn</th></tr></thead>
-                    <tbody>
-                      {configs.map((c) => (
-                        <tr key={c.partId} className="border-b">
-                          <td className="p-3 font-mono text-xs">{c.partId}</td>
-                          <td className="p-3 font-bold">{STAGES.find(s => s.id === c.sourceStageId)?.name || c.sourceStageId}</td>
+                  <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-2xs max-h-[350px] overflow-y-auto">
+                    <div className="p-3 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
+                      <span className="text-xs font-bold uppercase text-gray-700">Đã nạp {configs.length} linh kiện tiếp nhận IN</span>
+                      <button 
+                        onClick={() => {
+                          if (confirm('Xóa toàn bộ cấu hình tiếp nhận linh kiện kho IN?')) {
+                            storageService.saveGlazingConfigs([]);
+                            setConfigs([]);
+                          }
+                        }}
+                        className="text-red-500 hover:text-red-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Trash2 size={13} /> Xóa tất cả
+                      </button>
+                    </div>
+                    <table className="w-full text-left bg-white text-xs">
+                      <thead>
+                        <tr className="bg-gray-100/70 text-gray-500 uppercase text-[10px] tracking-wider border-b">
+                          <th className="p-2.5">Tên linh kiện</th>
+                          <th className="p-2.5">Mã linh kiện</th>
+                          <th className="p-2.5">Kho OUT nguồn</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {configs.map((c) => (
+                          <tr key={c.partId} className="hover:bg-blue-50/30">
+                            <td className="p-2.5 font-bold text-gray-800">{c.partName || '-'}</td>
+                            <td className="p-2.5 font-mono text-gray-600">{c.partId}</td>
+                            <td className="p-2.5">
+                              <span className={cn(
+                                "px-2 py-0.5 rounded text-[10px] font-black uppercase",
+                                c.sourceStageId === 'BENDING' ? "bg-amber-100 text-amber-800" :
+                                c.sourceStageId === 'PAINTING' ? "bg-purple-100 text-purple-800" :
+                                "bg-blue-100 text-blue-800"
+                              )}>
+                                {STAGES.find(s => s.id === c.sourceStageId)?.name || c.sourceStageId}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
 
@@ -11335,12 +11402,24 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
         )}
 
         {activeTab === 'INBOUND' && (() => {
+          const norm = (s: string) => (s || '').normalize('NFC').trim().toUpperCase().replace(/\s*-\s*(H|CD|S|C|GLZ|OUT|IN)$/i, '');
           const configsWithStock = [...configs].map(c => {
-            const sourceQty = globalInventory.find((i: any) => 
-              i.partId.toUpperCase() === c.partId.toUpperCase() && 
-              i.stageId === c.sourceStageId && 
-              i.location === 'OUT'
-            )?.quantity || 0;
+            const cleanTargetId = norm(c.partId);
+            const cleanTargetName = c.partName ? norm(c.partName) : '';
+
+            const matchingStocks = globalInventory.filter((i: any) => {
+              if (i.stageId !== c.sourceStageId || i.location !== 'OUT' || (i.quantity || 0) <= 0) return false;
+              const cleanInvId = norm(i.partId);
+              if (cleanInvId === cleanTargetId) return true;
+              if (i.originalPartId && norm(i.originalPartId) === cleanTargetId) return true;
+              if (cleanTargetName) {
+                const catalogPart = parts.find((p: any) => norm(p.id) === cleanInvId);
+                if (catalogPart && norm(catalogPart.name) === cleanTargetName) return true;
+              }
+              return false;
+            });
+
+            const sourceQty = matchingStocks.reduce((sum: number, i: any) => sum + (i.quantity || 0), 0);
             return { ...c, sourceQty };
           }).sort((a, b) => {
             if (a.sourceQty > 0 && b.sourceQty <= 0) return -1;
@@ -14093,10 +14172,11 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
 }
 
 function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () => void }) {
-  const [activeTab, setActiveTab] = useState<StageId | 'NESTING' | 'BW_HSQD' | 'LASER_HSQD' | 'GLAZING_STAGE'>('NESTING');
-  const [bendingWeldingHSQD, setBendingWeldingHSQD] = useState<{partId: string, hsqd: number}[]>(() => storageService.getBendingWeldingHSQD());
-  const [laserHSQD, setLaserHSQD] = useState<{partId: string, hsqd: number}[]>(() => storageService.getLaserHSQD());
-  const [glazingStageHSQD, setGlazingStageHSQD] = useState<{partId: string, hsqd: number}[]>(() => storageService.getGlazingStageHSQD());
+  const [activeTab, setActiveTab] = useState<StageId | 'NESTING' | 'BW_HSQD' | 'LASER_HSQD' | 'GLAZING_STAGE' | 'PAINTING_HSQD'>('NESTING');
+  const [bendingWeldingHSQD, setBendingWeldingHSQD] = useState<{partId: string, hsqd: number, partName?: string}[]>(() => storageService.getBendingWeldingHSQD());
+  const [laserHSQD, setLaserHSQD] = useState<{partId: string, hsqd: number, partName?: string}[]>(() => storageService.getLaserHSQD());
+  const [glazingStageHSQD, setGlazingStageHSQD] = useState<{partId: string, hsqd: number, partName?: string}[]>(() => storageService.getGlazingStageHSQD());
+  const [paintingHSQD, setPaintingHSQD] = useState<{partId: string, hsqd: number, partName?: string}[]>(() => storageService.getPaintingHSQD());
   const [isImporting, setIsImporting] = useState(false);
   const norms = storageService.getNorms();
   const nesting = storageService.getLaserNesting();
@@ -14216,8 +14296,8 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
             alert(`Đã nhập thành công ${imported.length} linh kiện vào ${nestingTotals.size} tổ hợp Laser!`);
             onNormsChange();
           }
-        } else if (activeTab === 'LASER_HSQD' || activeTab === 'BW_HSQD' || activeTab === 'GLAZING_STAGE') {
-          // Xử lý HSQĐ Laser, HSQĐ Chấn/Hàn hoặc HSQĐ Dán Kính 2
+        } else if (activeTab === 'LASER_HSQD' || activeTab === 'BW_HSQD' || activeTab === 'GLAZING_STAGE' || activeTab === 'PAINTING_HSQD') {
+          // Xử lý HSQĐ Laser, HSQĐ Chấn/Hàn, HSQĐ Dán Kính 2 hoặc HSQĐ Sơn
           interface SheetCandidate {
             sheetName: string;
             score: number;
@@ -14237,6 +14317,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
             if (activeTab === 'LASER_HSQD' && sNameClean.includes('laser')) sheetBaseScore += 50;
             if (activeTab === 'BW_HSQD' && (sNameClean.includes('chan') || sNameClean.includes('han') || sNameClean.includes('dap'))) sheetBaseScore += 50;
             if (activeTab === 'GLAZING_STAGE' && (sNameClean.includes('kinh') || sNameClean.includes('dan'))) sheetBaseScore += 60;
+            if (activeTab === 'PAINTING_HSQD' && (sNameClean.includes('son') || sNameClean.includes('paint'))) sheetBaseScore += 60;
 
             let bestHeaderRowIdx = -1;
             let bestIdCol = -1, bestNameCol = -1, bestHsqdCol = -1;
@@ -14394,6 +14475,10 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
               storageService.saveGlazingStageHSQD(imported);
               setGlazingStageHSQD(imported);
               alert(`Đã nhập thành công ${imported.length} HSQĐ cho Dán Kính 2 (từ sheet "${bestCandidate.sheetName}")!`);
+            } else if (activeTab === 'PAINTING_HSQD') {
+              storageService.savePaintingHSQD(imported);
+              setPaintingHSQD(imported);
+              alert(`Đã nhập thành công ${imported.length} HSQĐ cho Sơn (từ sheet "${bestCandidate.sheetName}")!`);
             } else {
               storageService.saveBendingWeldingHSQD(imported);
               setBendingWeldingHSQD(imported);
@@ -14599,16 +14684,28 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
         {STAGES.filter(s => s.id !== 'LASER').map(stage => {
           const tabLabel = stage.id === 'GLAZING' ? 'HSQĐ Dán Kính (Xưởng CK)' : (stage.id === 'DCLR' ? 'HSQĐ DCLR' : stage.name);
           return (
-            <button
-              key={stage.id}
-              onClick={() => setActiveTab(stage.id)}
-              className={cn(
-                "flex-1 py-4 px-6 rounded-xl font-bold uppercase tracking-widest transition-all whitespace-nowrap",
-                activeTab === stage.id ? "bg-blue-600 text-white shadow-lg" : "text-gray-400 hover:bg-gray-50"
+            <React.Fragment key={stage.id}>
+              <button
+                onClick={() => setActiveTab(stage.id)}
+                className={cn(
+                  "flex-1 py-4 px-6 rounded-xl font-bold uppercase tracking-widest transition-all whitespace-nowrap",
+                  activeTab === stage.id ? "bg-blue-600 text-white shadow-lg" : "text-gray-400 hover:bg-gray-50"
+                )}
+              >
+                {tabLabel}
+              </button>
+              {stage.id === 'PAINTING' && (
+                <button
+                  onClick={() => setActiveTab('PAINTING_HSQD')}
+                  className={cn(
+                    "flex-1 py-4 px-6 rounded-xl font-bold uppercase tracking-widest transition-all whitespace-nowrap",
+                    activeTab === 'PAINTING_HSQD' ? "bg-yellow-500 text-white shadow-lg" : "text-gray-400 hover:bg-gray-50"
+                  )}
+                >
+                  HSQĐ Sơn
+                </button>
               )}
-            >
-              {tabLabel}
-            </button>
+            </React.Fragment>
           );
         })}
         <button
@@ -14638,6 +14735,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
               {activeTab === 'NESTING' ? 'Định mức Tổ hợp (Nesting) Laser' 
                 : activeTab === 'LASER_HSQD' ? 'Hệ số quy đổi (HSQĐ) Cắt Laser'
                 : activeTab === 'BW_HSQD' ? 'Hệ số quy đổi (HSQĐ) Chấn/Hàn'
+                : activeTab === 'PAINTING_HSQD' ? 'Hệ số quy đổi (HSQĐ) Sơn (Biểu đồ công đoạn Sơn)'
                 : activeTab === 'GLAZING_STAGE' ? 'Hệ số quy đổi (HSQĐ) Dán Kính 2 (Biểu đồ công đoạn riêng lẻ)'
                 : activeTab === 'GLAZING' ? 'Hệ số quy đổi (HSQĐ) Dán Kính (Biểu đồ Năng suất Xưởng Cơ Khí)'
                 : activeTab === 'DCLR'
@@ -14651,6 +14749,8 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                 ? 'Quản lý hệ số quy đổi sản phẩm/linh kiện cho công đoạn Cắt Laser'
                 : activeTab === 'BW_HSQD'
                 ? 'Quản lý hệ số quy đổi sản phẩm/linh kiện cho công đoạn Chấn/Dập và Hàn'
+                : activeTab === 'PAINTING_HSQD'
+                ? 'Quản lý hệ số quy đổi sản phẩm/linh kiện tính riêng cho đường biểu đồ năng suất lao động của công đoạn Sơn'
                 : activeTab === 'GLAZING_STAGE'
                 ? 'Quản lý hệ số quy đổi tính riêng cho đường biểu đồ năng suất lao động của công đoạn Dán Kính'
                 : activeTab === 'GLAZING'
@@ -14675,13 +14775,15 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
             {((activeTab === 'NESTING' && nesting.length > 0) ||
               (activeTab === 'LASER_HSQD' && laserHSQD.length > 0) ||
               (activeTab === 'BW_HSQD' && bendingWeldingHSQD.length > 0) ||
+              (activeTab === 'PAINTING_HSQD' && paintingHSQD.length > 0) ||
               (activeTab === 'GLAZING_STAGE' && glazingStageHSQD.length > 0) ||
-              (activeTab !== 'NESTING' && activeTab !== 'LASER_HSQD' && activeTab !== 'BW_HSQD' && activeTab !== 'GLAZING_STAGE' && norms.filter(n => n.stageId === activeTab).length > 0)) && (
+              (activeTab !== 'NESTING' && activeTab !== 'LASER_HSQD' && activeTab !== 'BW_HSQD' && activeTab !== 'GLAZING_STAGE' && activeTab !== 'PAINTING_HSQD' && norms.filter(n => n.stageId === activeTab).length > 0)) && (
               <button 
                 onClick={() => {
                   const tabName = activeTab === 'NESTING' ? 'định mức tổ hợp Laser'
                     : activeTab === 'LASER_HSQD' ? 'toàn bộ HSQĐ Laser'
                     : activeTab === 'BW_HSQD' ? 'toàn bộ HSQĐ Chấn/Hàn'
+                    : activeTab === 'PAINTING_HSQD' ? 'toàn bộ HSQĐ Sơn'
                     : activeTab === 'GLAZING_STAGE' ? 'toàn bộ HSQĐ Dán Kính 2'
                     : activeTab === 'GLAZING' ? 'toàn bộ HSQĐ Dán Kính (Xưởng Cơ Khí)'
                     : activeTab === 'DCLR'
@@ -14694,6 +14796,10 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                     } else if (activeTab === 'LASER_HSQD') {
                       storageService.saveLaserHSQD([]);
                       setLaserHSQD([]);
+                      onNormsChange();
+                    } else if (activeTab === 'PAINTING_HSQD') {
+                      storageService.savePaintingHSQD([]);
+                      setPaintingHSQD([]);
                       onNormsChange();
                     } else if (activeTab === 'GLAZING_STAGE') {
                       storageService.saveGlazingStageHSQD([]);
@@ -14721,7 +14827,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
               isImporting && "opacity-50 cursor-not-allowed"
             )}>
               <FileUp size={18} />
-              {isImporting ? 'Đang nhập...' : `Nhập ${activeTab === 'NESTING' ? 'file Tổ hợp' : activeTab === 'LASER_HSQD' ? 'HSQĐ Laser' : activeTab === 'BW_HSQD' ? 'HSQĐ Chấn/Hàn' : activeTab === 'GLAZING_STAGE' ? 'HSQĐ Dán Kính 2' : (activeTab === 'DCLR' || activeTab === 'GLAZING') ? `HSQĐ ${activeTab === 'GLAZING' ? 'Dán Kính (Xưởng CK)' : STAGES.find(s => s.id === activeTab)?.name}` : `định mức ${activeTab}`}`}
+              {isImporting ? 'Đang nhập...' : `Nhập ${activeTab === 'NESTING' ? 'file Tổ hợp' : activeTab === 'LASER_HSQD' ? 'HSQĐ Laser' : activeTab === 'BW_HSQD' ? 'HSQĐ Chấn/Hàn' : activeTab === 'PAINTING_HSQD' ? 'HSQĐ Sơn' : activeTab === 'GLAZING_STAGE' ? 'HSQĐ Dán Kính 2' : (activeTab === 'DCLR' || activeTab === 'GLAZING') ? `HSQĐ ${activeTab === 'GLAZING' ? 'Dán Kính (Xưởng CK)' : STAGES.find(s => s.id === activeTab)?.name}` : `định mức ${activeTab}`}`}
               <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImport} disabled={isImporting} />
             </label>
           </div>
@@ -14926,6 +15032,52 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                     <td colSpan={4} className="p-24 text-center text-gray-400 italic">
                       <p className="text-xl">Chưa có hệ số quy đổi cho Dán Kính 2 (Biểu đồ công đoạn riêng lẻ).</p>
                       <p className="text-sm mt-2 font-mono uppercase">Vui lòng nhập file Excel chứa cột Mã linh kiện / Mã thành phẩm, Tên linh kiện, Hệ số quy đổi (HSQĐ).</p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          ) : activeTab === 'PAINTING_HSQD' ? (
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-gray-50/50 border-b border-gray-100">
+                  <th className="p-8 pl-12 text-sm font-mono uppercase opacity-75">Mã linh kiện / Thành phẩm</th>
+                  <th className="p-8 text-sm font-mono uppercase opacity-75">Tên linh kiện / Thành phẩm</th>
+                  <th className="p-8 text-sm font-mono uppercase opacity-75 text-center">HSQĐ Sơn</th>
+                  <th className="p-8 pr-12 text-sm font-mono uppercase opacity-75 text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {paintingHSQD.map((item, idx) => {
+                  const part = parts.find(p => p.id === item.partId || p.id.toUpperCase() === item.partId.toUpperCase());
+                  return (
+                    <tr key={idx} className="hover:bg-gray-50/30 transition-colors">
+                      <td className="p-8 pl-12 font-mono text-lg font-bold">{item.partId}</td>
+                      <td className="p-8 text-lg font-medium text-gray-600">{item.partName || part?.name || 'N/A'}</td>
+                      <td className="p-8 text-center">
+                        <span className="font-mono text-2xl font-black text-amber-500">{item.hsqd}</span>
+                      </td>
+                      <td className="p-8 pr-12 text-right">
+                        <button 
+                          onClick={() => {
+                            const updated = paintingHSQD.filter(n => n.partId !== item.partId);
+                            storageService.savePaintingHSQD(updated);
+                            setPaintingHSQD(updated);
+                            onNormsChange();
+                          }}
+                          className="p-3 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
+                        >
+                          <Trash2 size={24} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {paintingHSQD.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="p-24 text-center text-gray-400 italic">
+                      <p className="text-xl">Chưa có hệ số quy đổi cho công đoạn Sơn.</p>
+                      <p className="text-sm mt-2 font-mono uppercase">Vui lòng nhập file Excel chứa cột Mã linh kiện, Tên linh kiện, Hệ số quy đổi (HSQĐ).</p>
                     </td>
                   </tr>
                 )}

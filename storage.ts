@@ -36,6 +36,7 @@ const STORAGE_KEYS = {
   BENDING_WELDING_HSQD: 'wip_bending_welding_hsqd',
   LASER_HSQD: 'wip_laser_hsqd',
   GLAZING_STAGE_HSQD: 'wip_glazing_stage_hsqd',
+  PAINTING_HSQD: 'wip_painting_hsqd',
   STAGE_PLANNED_WORKERS: 'wip_stage_planned_workers',
   USERS: 'wip_users',
   DATA_RESET_VERSION: 'data_reset_version',
@@ -49,6 +50,7 @@ const effectivePartIdCache = new Map<string, string>();
 let isSyncing = false;
 let lastSyncTime: number | null = null;
 let syncError: string | null = null;
+let isRemoteHydrated = false; // CHẶN ĐẨY DỮ LIỆU CŨ: Tuyệt đối chỉ cho phép write-through sau khi đã PULL thành công từ Cloud
 const syncListeners = new Set<(status: { connected: boolean; syncing: boolean; lastSynced: number | null; error: string | null }) => void>();
 
 function notifySyncChange() {
@@ -83,6 +85,7 @@ const pendingConfigSaves = new Map<string, any>();
 let configSaveTimer: any = null;
 
 function queueConfigPersist(key: string, value: any) {
+  if (!isSupabaseConfigured || !isRemoteHydrated) return;
   pendingConfigSaves.set(key, value);
   if (!configSaveTimer) {
     configSaveTimer = setTimeout(flushPendingConfigSaves, 400);
@@ -91,7 +94,7 @@ function queueConfigPersist(key: string, value: any) {
 
 async function flushPendingConfigSaves() {
   configSaveTimer = null;
-  if (!isSupabaseConfigured || pendingConfigSaves.size === 0) return;
+  if (!isSupabaseConfigured || !isRemoteHydrated || pendingConfigSaves.size === 0) return;
   const entries = Array.from(pendingConfigSaves.entries());
   pendingConfigSaves.clear();
   try {
@@ -101,24 +104,6 @@ async function flushPendingConfigSaves() {
   } catch (err: any) {
     quietWarn('system_configs', 'Failed to persist system_configs:', err);
   }
-}
-
-let pendingPoSave: ProductionOrder[] | null = null;
-let poSaveTimer: any = null;
-
-function queueProductionOrdersPersist(orders: ProductionOrder[]) {
-  pendingPoSave = orders;
-  if (!poSaveTimer) {
-    poSaveTimer = setTimeout(flushPendingPoSaves, 400);
-  }
-}
-
-async function flushPendingPoSaves() {
-  poSaveTimer = null;
-  if (!isSupabaseConfigured || !pendingPoSave) return;
-  const orders = pendingPoSave;
-  pendingPoSave = null;
-  await persistProductionOrdersToSupabase(orders);
 }
 
 function toBigIntOrNull(val: any): number | null {
@@ -131,8 +116,9 @@ function toBigIntOrDefault(val: any, defaultVal: number = 0): number {
   return Math.round(Number(val));
 }
 
+// WRITE-THROUGH: Chỉ upsert các PO được chỉ định (tạo mới / cập nhật)
 async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
-  if (!isSupabaseConfigured || !orders || orders.length === 0) return;
+  if (!isSupabaseConfigured || !isRemoteHydrated || !orders || orders.length === 0) return;
   try {
     const dbOrders = orders.map(po => ({
       id: po.id,
@@ -172,24 +158,25 @@ async function deletePOFromSupabase(id: string) {
   }
 }
 
-let pendingInvSave: InventoryItem[] | null = null;
-let invSaveTimer: any = null;
-
-function queueInventoryPersist(inventory: InventoryItem[]) {
-  pendingInvSave = inventory;
-  if (!invSaveTimer) {
-    invSaveTimer = setTimeout(flushPendingInvSaves, 500);
+// WRITE-THROUGH: Cập nhật đúng 1 item tồn kho thay vì đẩy toàn bộ bảng
+async function persistSingleInventoryItemToSupabase(item: InventoryItem) {
+  if (!isSupabaseConfigured || !isRemoteHydrated || !item) return;
+  try {
+    const dbRow = {
+      id: `${item.partId}_${item.stageId}_${item.location}_${item.originalPartId || ''}`,
+      part_id: item.partId,
+      original_part_id: item.originalPartId || '',
+      stage_id: item.stageId,
+      location: item.location,
+      quantity: toBigIntOrDefault(item.quantity, 0)
+    };
+    await supabase.from('wip_inventory').upsert(dbRow, { onConflict: 'id' });
+  } catch (err: any) {
+    quietWarn('persistSingleInventoryItem', 'persistSingleInventoryItem error:', err);
   }
 }
 
-async function flushPendingInvSaves() {
-  invSaveTimer = null;
-  if (!isSupabaseConfigured || !pendingInvSave) return;
-  const inv = pendingInvSave;
-  pendingInvSave = null;
-  await persistInventoryToSupabase(inv);
-}
-
+// Dùng cho trường hợp người dùng bấm nút thủ công "Đẩy dữ liệu lên Supabase"
 async function persistInventoryToSupabase(inventory: InventoryItem[]) {
   if (!isSupabaseConfigured || !inventory) return;
   try {
@@ -234,6 +221,7 @@ let pendingTxs: Transaction[] = [];
 let txSaveTimer: any = null;
 
 function queueTransactionInsert(tx: Transaction) {
+  if (!isSupabaseConfigured || !isRemoteHydrated || !tx || !tx.id) return;
   pendingTxs.push(tx);
   if (!txSaveTimer) {
     txSaveTimer = setTimeout(flushPendingTransactions, 300);
@@ -242,7 +230,7 @@ function queueTransactionInsert(tx: Transaction) {
 
 async function flushPendingTransactions() {
   txSaveTimer = null;
-  if (!isSupabaseConfigured || pendingTxs.length === 0) return;
+  if (!isSupabaseConfigured || !isRemoteHydrated || pendingTxs.length === 0) return;
   const toSave = [...pendingTxs];
   pendingTxs = [];
   await persistTransactionsToSupabase(toSave);
@@ -283,26 +271,9 @@ async function persistTransactionsToSupabase(transactions: Transaction[]) {
   }
 }
 
-let pendingGpSave: import('./types').GlazingPlan[] | null = null;
-let gpSaveTimer: any = null;
-
-function queueGlazingPlansPersist(plans: import('./types').GlazingPlan[]) {
-  pendingGpSave = plans;
-  if (!gpSaveTimer) {
-    gpSaveTimer = setTimeout(flushPendingGpSaves, 500);
-  }
-}
-
-async function flushPendingGpSaves() {
-  gpSaveTimer = null;
-  if (!isSupabaseConfigured || !pendingGpSave) return;
-  const plans = pendingGpSave;
-  pendingGpSave = null;
-  await persistGlazingPlansToSupabase(plans);
-}
-
+// WRITE-THROUGH: Chỉ upsert các kế hoạch dán kính được tạo mới / sửa đổi
 async function persistGlazingPlansToSupabase(plans: import('./types').GlazingPlan[]) {
-  if (!isSupabaseConfigured || !plans) return;
+  if (!isSupabaseConfigured || !isRemoteHydrated || !plans || plans.length === 0) return;
   try {
     const dbRows = plans.map(p => {
       const producedPayload: Record<string, any> = { ...(p.producedQuantities || {}) };
@@ -346,6 +317,7 @@ let pendingLabels: Transaction[] = [];
 let labelSaveTimer: any = null;
 
 function queueLabelInsert(label: Transaction) {
+  if (!isSupabaseConfigured || !isRemoteHydrated || !label || !label.id) return;
   pendingLabels.push(label);
   if (!labelSaveTimer) {
     labelSaveTimer = setTimeout(flushPendingLabels, 300);
@@ -354,14 +326,14 @@ function queueLabelInsert(label: Transaction) {
 
 async function flushPendingLabels() {
   labelSaveTimer = null;
-  if (!isSupabaseConfigured || pendingLabels.length === 0) return;
+  if (!isSupabaseConfigured || !isRemoteHydrated || pendingLabels.length === 0) return;
   const toSave = [...pendingLabels];
   pendingLabels = [];
   await persistLabelsToSupabase(toSave);
 }
 
 async function persistLabelsToSupabase(labels: Transaction[]) {
-  if (!isSupabaseConfigured || !labels || labels.length === 0) return;
+  if (!isSupabaseConfigured || !isRemoteHydrated || !labels || labels.length === 0) return;
   try {
     const cutoff = Math.round(Date.now() - 24 * 60 * 60 * 1000);
     const recent = labels.filter(l => l && l.timestamp && Math.round(Number(l.timestamp)) >= cutoff);
@@ -876,7 +848,6 @@ export const storageService = {
   saveGlazingPlans(plans: import('./types').GlazingPlan[]) {
     localStorage.setItem(STORAGE_KEYS.GLAZING_PLANS, JSON.stringify(plans));
     cache[STORAGE_KEYS.GLAZING_PLANS] = plans;
-    queueGlazingPlansPersist(plans);
   },
 
   getPeoplePerDay(): Record<string, number> {
@@ -1302,6 +1273,19 @@ export const storageService = {
     queueConfigPersist(STORAGE_KEYS.GLAZING_STAGE_HSQD, data);
   },
 
+  getPaintingHSQD(): { partId: string; partName?: string; hsqd: number }[] {
+    return getCached(STORAGE_KEYS.PAINTING_HSQD, () => {
+      const data = localStorage.getItem(STORAGE_KEYS.PAINTING_HSQD);
+      return data ? JSON.parse(data) : [];
+    });
+  },
+
+  savePaintingHSQD(data: { partId: string; partName?: string; hsqd: number }[]) {
+    localStorage.setItem(STORAGE_KEYS.PAINTING_HSQD, JSON.stringify(data));
+    cache[STORAGE_KEYS.PAINTING_HSQD] = data;
+    queueConfigPersist(STORAGE_KEYS.PAINTING_HSQD, data);
+  },
+
   createGlazingPlan(modelId: string, quantity: number, targetCompletion: number, note?: string, excelRequiredDate?: number, customId?: string) {
     const plans = this.getGlazingPlans();
     const schedule = this.getGlazingSchedule(modelId, quantity, targetCompletion);
@@ -1320,6 +1304,7 @@ export const storageService = {
     };
     plans.push(newPlan);
     this.saveGlazingPlans(plans);
+    persistGlazingPlansToSupabase([newPlan]);
     return newPlan;
   },
 
@@ -1356,6 +1341,7 @@ export const storageService = {
 
     const updated = [...newPlans, ...plans];
     this.saveGlazingPlans(updated);
+    persistGlazingPlansToSupabase(newPlans);
     return newPlans;
   },
 
@@ -1411,6 +1397,7 @@ export const storageService = {
     if (planIndex !== -1) {
       plans[planIndex].status = 'COMPLETED';
       this.saveGlazingPlans(plans);
+      persistGlazingPlansToSupabase([plans[planIndex]]);
     }
   },
 
@@ -1424,6 +1411,7 @@ export const storageService = {
       
       plans[planIndex] = { ...plan, producedQuantities, status: 'IN_PROGRESS' };
       this.saveGlazingPlans(plans);
+      persistGlazingPlansToSupabase([plans[planIndex]]);
     }
   },
 
@@ -1436,6 +1424,7 @@ export const storageService = {
       printedQuantities[partId] = (printedQuantities[partId] || 0) + quantity;
       plans[planIndex] = { ...plan, printedQuantities };
       this.saveGlazingPlans(plans);
+      persistGlazingPlansToSupabase([plans[planIndex]]);
     }
   },
 
@@ -1466,7 +1455,7 @@ export const storageService = {
   saveInventory(inventory: InventoryItem[]) {
     localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify(inventory));
     cache[STORAGE_KEYS.INVENTORY] = inventory;
-    queueInventoryPersist(inventory);
+    // WRITE-THROUGH ONLY: Không tự động push toàn bộ mảng inventory lên Cloud!
   },
 
   saveTransactions(transactions: Transaction[]) {
@@ -1474,9 +1463,8 @@ export const storageService = {
     const filtered = transactions.filter((t: any) => t && t.timestamp && t.timestamp >= cutoff);
     localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(filtered));
     cache[STORAGE_KEYS.TRANSACTIONS] = filtered;
-    queueTransactionInsert(filtered[0] || ({} as any));
-    if (filtered.length > 1) {
-      persistTransactionsToSupabase(filtered);
+    if (filtered.length > 0 && filtered[0]?.id) {
+      queueTransactionInsert(filtered[0]);
     }
   },
 
@@ -1486,7 +1474,6 @@ export const storageService = {
     const filtered = labels.filter(l => l && l.timestamp && l.timestamp >= cutoff);
     localStorage.setItem('wip_labels', JSON.stringify(filtered));
     cache['wip_labels'] = filtered;
-    persistLabelsToSupabase(filtered);
   },
 
   getLabels(): Transaction[] {
@@ -1566,6 +1553,8 @@ export const storageService = {
             }
           }
           this.saveProductionOrders(pos);
+          const masterPo = po.masterPoId ? pos.find(p => p.id === po.masterPoId) : undefined;
+          persistProductionOrdersToSupabase([po, masterPo].filter(Boolean) as ProductionOrder[]);
         }
       }
       
@@ -1580,6 +1569,7 @@ export const storageService = {
           }
           plan.status = 'IN_PROGRESS';
           this.saveGlazingPlans(plans);
+          persistGlazingPlansToSupabase([plan]);
         }
       }
 
@@ -1612,6 +1602,8 @@ export const storageService = {
             }
           }
           this.saveProductionOrders(pos);
+          const masterPo = po.masterPoId ? pos.find(p => p.id === po.masterPoId) : undefined;
+          persistProductionOrdersToSupabase([po, masterPo].filter(Boolean) as ProductionOrder[]);
         }
       }
     } else if (tx.type === 'STAGE_OUT' || tx.type === 'DISPOSAL') {
@@ -1655,6 +1647,8 @@ export const storageService = {
             }
           }
           this.saveProductionOrders(pos);
+          const masterPo = po.masterPoId ? pos.find(p => p.id === po.masterPoId) : undefined;
+          persistProductionOrdersToSupabase([po, masterPo].filter(Boolean) as ProductionOrder[]);
         }
       }
     }
@@ -1816,6 +1810,7 @@ export const storageService = {
       }
     );
 
+    let itemToSave: InventoryItem | null = null;
     if (index >= 0) {
       inventory[index].quantity += delta;
       inventory[index].quantity = Math.round(inventory[index].quantity * 10000) / 10000;
@@ -1823,19 +1818,24 @@ export const storageService = {
       // Option: update it to the proper case if it was wrong
       inventory[index].partId = targetId; 
       if (targetOrigId) inventory[index].originalPartId = targetOrigId;
+      itemToSave = inventory[index];
     } else {
       if (delta > 0) {
-        inventory.push({ 
+        itemToSave = { 
           partId: targetId, 
           originalPartId: targetOrigId || undefined,
           stageId, 
           location, 
           quantity: Math.max(0, delta) 
-        });
+        };
+        inventory.push(itemToSave);
       }
     }
 
     this.saveInventory(inventory);
+    if (itemToSave) {
+      persistSingleInventoryItemToSupabase(itemToSave);
+    }
   },
 
   setInventoryQuantity(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', quantity: number, originalPartId?: string) {
@@ -1862,21 +1862,27 @@ export const storageService = {
       }
     );
 
+    let itemToSave: InventoryItem | null = null;
     if (index >= 0) {
       inventory[index].quantity = Math.max(0, quantity);
       inventory[index].partId = targetId;
       if (targetOrigId) inventory[index].originalPartId = targetOrigId;
+      itemToSave = inventory[index];
     } else {
-      inventory.push({ 
+      itemToSave = { 
         partId: targetId, 
         originalPartId: targetOrigId || undefined,
         stageId, 
         location, 
         quantity: Math.max(0, quantity) 
-      });
+      };
+      inventory.push(itemToSave);
     }
 
     this.saveInventory(inventory);
+    if (itemToSave) {
+      persistSingleInventoryItemToSupabase(itemToSave);
+    }
   },
 
   deleteInventoryItem(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', originalPartId?: string) {
@@ -2178,6 +2184,8 @@ export const storageService = {
         }
       }
       this.saveProductionOrders(pos);
+      const masterPo = po.masterPoId ? pos.find(p => p.id === po.masterPoId) : undefined;
+      persistProductionOrdersToSupabase([po, masterPo].filter(Boolean) as ProductionOrder[]);
     } else if (sourceLocation === 'OUT' && poIndex !== -1) {
       const po = pos[poIndex];
       if ((po.exportedQuantity || 0) + quantity > po.producedQuantity) {
@@ -2197,6 +2205,8 @@ export const storageService = {
         }
       }
       this.saveProductionOrders(pos);
+      const masterPo = po.masterPoId ? pos.find(p => p.id === po.masterPoId) : undefined;
+      persistProductionOrdersToSupabase([po, masterPo].filter(Boolean) as ProductionOrder[]);
     }
 
     // 1. Inventory movement
@@ -2461,6 +2471,8 @@ export const storageService = {
         }
 
         this.saveProductionOrders(pos);
+        const masterPo = po.masterPoId ? pos.find(p => p.id === po.masterPoId) : undefined;
+        persistProductionOrdersToSupabase([po, masterPo].filter(Boolean) as ProductionOrder[]);
       }
     } else if (location === 'IN') {
       // Validate PO limit for IN (Never allow exceeding PO limit at any stage)
@@ -2712,7 +2724,6 @@ export const storageService = {
     const filtered = this.filterExpiredCompletedPOs(orders);
     localStorage.setItem(STORAGE_KEYS.PRODUCTION_ORDERS, JSON.stringify(filtered));
     cache[STORAGE_KEYS.PRODUCTION_ORDERS] = filtered;
-    queueProductionOrdersPersist(filtered);
   },
 
   resetShiftConfigs() {
@@ -2961,6 +2972,7 @@ export const storageService = {
     });
     
     this.saveProductionOrders(pos);
+    persistProductionOrdersToSupabase([masterPo, ...subPos]);
   },
 
   createMasterPO(modelId: string, quantity: number, plannedStartTime?: number, customLeadTime?: number, idPrefix: string = "PO", targetStageId?: string, selectedLaserPartIds?: string[], customNote?: string, excelRequiredDate?: number) {
@@ -2968,6 +2980,7 @@ export const storageService = {
     const pos = this.getProductionOrders();
     const updatedPOs = [masterPo, ...allChildPOs, ...pos];
     this.saveProductionOrders(updatedPOs);
+    persistProductionOrdersToSupabase([masterPo, ...allChildPOs]);
     return masterPo;
   },
 
@@ -3016,6 +3029,7 @@ export const storageService = {
 
     const updatedPOs = [...newMasterPOs, ...newChildPOs, ...pos];
     this.saveProductionOrders(updatedPOs);
+    persistProductionOrdersToSupabase([...newMasterPOs, ...newChildPOs]);
     return newMasterPOs;
   },
 
@@ -3649,6 +3663,7 @@ export const storageService = {
       approvedAt: canApprove ? Date.now() : undefined,
     };
     this.saveProductionOrders([newPo, ...pos]);
+    persistProductionOrdersToSupabase([newPo]);
     return newPo;
   },
 
@@ -3666,6 +3681,7 @@ export const storageService = {
       note: (pos[index].note || '').replace(' - Chờ Admin phê duyệt', '') + ' (Đã duyệt)'
     };
     this.saveProductionOrders(pos);
+    persistProductionOrdersToSupabase([pos[index]]);
     return { success: true, po: pos[index] };
   },
 
@@ -3680,6 +3696,7 @@ export const storageService = {
       note: (pos[index].note || '') + ' (Đã từ chối)'
     };
     this.saveProductionOrders(pos);
+    persistProductionOrdersToSupabase([pos[index]]);
     return { success: true };
   },
 
@@ -3721,6 +3738,7 @@ export const storageService = {
     }
 
     this.saveProductionOrders(pos);
+    persistProductionOrdersToSupabase([targetPo]);
   },
 
   updateSubPoTime(id: string, newExpectedTime: number) {
@@ -3735,6 +3753,7 @@ export const storageService = {
     }
 
     this.saveProductionOrders(pos);
+    persistProductionOrdersToSupabase([targetPo]);
   },
 
   getStorageStats() {
@@ -4212,17 +4231,33 @@ export const storageService = {
   async flushAllPending(): Promise<void> {
     await Promise.allSettled([
       flushPendingConfigSaves(),
-      flushPendingPoSaves(),
-      flushPendingInvSaves(),
       flushPendingTransactions(),
-      flushPendingGpSaves(),
       flushPendingLabels()
     ]);
   },
 
+  hasLocalData(): boolean {
+    try {
+      const pos = localStorage.getItem(STORAGE_KEYS.PRODUCTION_ORDERS);
+      const inv = localStorage.getItem(STORAGE_KEYS.INVENTORY);
+      const parts = localStorage.getItem(STORAGE_KEYS.PARTS);
+      if (pos && pos.trim() !== '[]' && pos.trim() !== '') return true;
+      if (inv && inv.trim() !== '[]' && inv.trim() !== '') return true;
+      if (parts && parts.trim() !== '[]' && parts.trim() !== '') return true;
+      return false;
+    } catch {
+      return false;
+    }
+  },
+
   /**
    * Initializes data from Supabase online into memory cache
-   * Uses selective columns to optimize egress on Free tier
+   * EVENT-DRIVEN / ZERO-POLLING:
+   * - App mount / F5: Queries ONLY 1 row (data_reset_version).
+   * - If version matches & LocalStorage has data: 0 cloud queries, renders from LocalStorage immediately.
+   * - If version mismatch: clears LocalStorage, sets new version, PULLs clean data.
+   * - If LocalStorage empty: PULLs clean data once.
+   * - When force === true (User clicks "Làm mới / Đồng bộ"): PULLs all tables.
    */
   async init(force: boolean = false): Promise<boolean> {
     if (!isSupabaseConfigured) return false;
@@ -4236,9 +4271,8 @@ export const storageService = {
     notifySyncChange();
 
     try {
-      // 0. KIỂM TRA CỜ RESET HỆ THỐNG (System Reset Flag: data_reset_version)
-      // Nếu Admin đã TRUNCATE/làm sạch DB trên Cloud, Admin cập nhật data_reset_version.
-      // Khi phát hiện version thay đổi, máy trạm PHẢI xóa sạch localStorage và KHÔNG ĐƯỢC push dữ liệu cũ lên Cloud.
+      // 0. KIỂM TRA CỜ RESET HỆ THỐNG (CHỈ TRUY VẤN ĐÚNG 1 DÒNG DUY NHẤT TRONG system_configs)
+      let resetOccurred = false;
       const { data: resetRow, error: resetErr } = await supabase
         .from('system_configs')
         .select('value')
@@ -4256,20 +4290,15 @@ export const storageService = {
         const localResetVersion = localStorage.getItem(STORAGE_KEYS.DATA_RESET_VERSION);
 
         if (!localResetVersion || localResetVersion !== remoteResetVersion) {
-          console.warn(`[Supabase Reset Flag] Phát hiện phiên bản reset mới từ Cloud: "${remoteResetVersion}" (Phiên bản máy trạm: "${localResetVersion}"). Tiến hành xóa sạch localStorage...`);
+          console.warn(`[Supabase Reset Flag] Cờ reset thay đổi! Remote: "${remoteResetVersion}" !== Local: "${localResetVersion}". Tiến hành xóa sạch localStorage...`);
+          resetOccurred = true;
 
           // Hủy bỏ mọi hàng đợi lưu pending để TUYỆT ĐỐI KHÔNG đẩy dữ liệu cũ lên Cloud
           pendingConfigSaves.clear();
-          pendingPoSave = null;
-          pendingInvSave = null;
           pendingTxs = [];
-          pendingGpSave = null;
           pendingLabels = [];
           if (configSaveTimer) { clearTimeout(configSaveTimer); configSaveTimer = null; }
-          if (poSaveTimer) { clearTimeout(poSaveTimer); poSaveTimer = null; }
-          if (invSaveTimer) { clearTimeout(invSaveTimer); invSaveTimer = null; }
           if (txSaveTimer) { clearTimeout(txSaveTimer); txSaveTimer = null; }
-          if (gpSaveTimer) { clearTimeout(gpSaveTimer); gpSaveTimer = null; }
           if (labelSaveTimer) { clearTimeout(labelSaveTimer); labelSaveTimer = null; }
 
           // Xóa sạch LocalStorage trên máy trạm
@@ -4279,6 +4308,21 @@ export const storageService = {
           // Lưu lại cờ phiên bản reset mới
           localStorage.setItem(STORAGE_KEYS.DATA_RESET_VERSION, remoteResetVersion);
         }
+      }
+
+      // KIỂM TRA ĐIỀU KIỆN PULL BẢNG:
+      // Chỉ PULL khi: Người dùng bấm Làm mới (force = true) HOẶC vừa bị Reset phiên bản HOẶC máy trạm chưa có dữ liệu Local
+      const hasData = this.hasLocalData();
+      const shouldPull = force || resetOccurred || !hasData;
+
+      if (!shouldPull) {
+        console.log('[Supabase Sync] data_reset_version khớp và LocalStorage đã có dữ liệu. Không fetch lại Cloud (0 Egress / 0 Request ngầm).');
+        isRemoteHydrated = true;
+        lastSyncTime = Date.now();
+        isSyncing = false;
+        syncError = null;
+        notifySyncChange();
+        return true;
       }
 
       // 1. Fetch system_configs (only key, value columns)
@@ -4467,7 +4511,8 @@ export const storageService = {
         } catch {}
       }
 
-      // Cập nhật trạng thái hoàn thành PULL
+      // Cập nhật trạng thái hoàn thành PULL (Cloud là nguồn chân lý duy nhất)
+      isRemoteHydrated = true;
       lastSyncTime = Date.now();
       isSyncing = false;
       syncError = null;
@@ -4495,6 +4540,7 @@ export const storageService = {
       return { success: false, message: 'Chưa cấu hình SUPABASE_URL hoặc SUPABASE_ANON_KEY' };
     }
 
+    isRemoteHydrated = true;
     isSyncing = true;
     notifySyncChange();
 
@@ -4518,6 +4564,7 @@ export const storageService = {
         STORAGE_KEYS.BENDING_WELDING_HSQD,
         STORAGE_KEYS.LASER_HSQD,
         STORAGE_KEYS.GLAZING_STAGE_HSQD,
+        STORAGE_KEYS.PAINTING_HSQD,
         STORAGE_KEYS.PEOPLE_PER_DAY,
         STORAGE_KEYS.MANDAYS_PER_DAY,
         STORAGE_KEYS.EXPORT_WEEK_NAME,
