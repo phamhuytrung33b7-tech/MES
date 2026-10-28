@@ -4644,13 +4644,16 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   };
   
 
-  const timeSlots = [
+  const daySlots = [
     { label: '6h-8h', start: 6, end: 8 },
     { label: '8h-10h', start: 8, end: 10 },
     { label: '10h-12h', start: 10, end: 12 },
     { label: '13h-15h', start: 13, end: 15 },
     { label: '15h-17h', start: 15, end: 17 },
     { label: '17h-19h', start: 17, end: 19 },
+  ];
+
+  const nightSlots = [
     { label: '19h-20h', start: 19, end: 20 },
     { label: '20h-22h', start: 20, end: 22 },
     { label: '22h-0h', start: 22, end: 24 },
@@ -4659,99 +4662,138 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     { label: '4h-6h', start: 4, end: 6 },
   ];
 
+  const shifts = [
+    { id: 'DAY', name: 'Ca Ngày', timeSlots: daySlots, hoursDesc: '6h - 19h' },
+    { id: 'NIGHT', name: 'Ca Đêm', timeSlots: nightSlots, hoursDesc: '19h - 6h' },
+  ];
+
+  const getWorkerCount = (stageId: string, sLabel: string) => {
+    if (stageId === 'LASER') return hourlyPeopleLaser[sLabel] !== undefined ? hourlyPeopleLaser[sLabel] : 0;
+    if (stageId === 'PAINTING') return hourlyPeoplePainting[sLabel] !== undefined ? hourlyPeoplePainting[sLabel] : 8;
+    if (stageId === 'GLAZING') return hourlyPeopleGlazing[sLabel] !== undefined ? hourlyPeopleGlazing[sLabel] : 8;
+    if (stageId === 'BENDING') return hourlyPeopleBending[sLabel] !== undefined ? hourlyPeopleBending[sLabel] : 8;
+    if (stageId === 'WELDING') return hourlyPeopleWelding[sLabel] !== undefined ? hourlyPeopleWelding[sLabel] : 8;
+    return 8;
+  };
+
+  const titleDate = `${String(sD).padStart(2, '0')}/${String(sM).padStart(2, '0')}/${sY}`;
+
   stagesToExport.forEach(stageInfo => {
     const stageTx = rangeTx.filter(t => {
       if (t.stageId !== stageInfo.id) return false;
       if (stageInfo.id === 'LASER' && isLaserScrapItem(t.partId, t.partName)) return false;
       return true;
     });
-    
-    const partTotals = new Map<string, number>();
-    const partSlots = new Map<string, number[]>();
-    
-    stageTx.forEach(t => {
-      partTotals.set(t.partId, (partTotals.get(t.partId) || 0) + (t.quantity || 0));
-      const H = new Date(t.timestamp).getHours();
-      
-      const slotIndex = timeSlots.findIndex(s => H >= s.start && H < s.end);
-      if (slotIndex !== -1) {
+
+    const isStandardPOStage = stageInfo.id === 'PAINTING' || stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING' || stageInfo.id === 'LASER';
+
+    shifts.forEach(shift => {
+      const timeSlots = shift.timeSlots;
+      const isDay = shift.id === 'DAY';
+
+      const shiftTx = stageTx.filter(t => {
+        const H = new Date(t.timestamp).getHours();
+        return isDay ? (H >= 6 && H < 19) : ((H >= 19 && H < 24) || (H >= 0 && H < 6));
+      });
+
+      const partTotals = new Map<string, number>();
+      const partSlots = new Map<string, number[]>();
+
+      shiftTx.forEach(t => {
+        partTotals.set(t.partId, (partTotals.get(t.partId) || 0) + (t.quantity || 0));
+        const H = new Date(t.timestamp).getHours();
+        let slotIndex = -1;
+        if (isDay) {
+          if (H >= 6 && H < 8) slotIndex = 0;
+          else if (H >= 8 && H < 10) slotIndex = 1;
+          else if (H >= 10 && H < 12) slotIndex = 2;
+          else if (H === 12) slotIndex = 2; // Khung nghỉ trưa gộp vào 10h-12h
+          else if (H >= 13 && H < 15) slotIndex = 3;
+          else if (H >= 15 && H < 17) slotIndex = 4;
+          else if (H >= 17 && H < 19) slotIndex = 5;
+        } else {
+          if (H >= 19 && H < 20) slotIndex = 0;
+          else if (H >= 20 && H < 22) slotIndex = 1;
+          else if (H >= 22 && H < 24) slotIndex = 2;
+          else if (H >= 0 && H < 2) slotIndex = 3;
+          else if (H >= 2 && H < 4) slotIndex = 4;
+          else if (H >= 4 && H < 6) slotIndex = 5;
+        }
+
+        if (slotIndex !== -1) {
           if (!partSlots.has(t.partId)) {
-             partSlots.set(t.partId, Array(timeSlots.length).fill(0));
+            partSlots.set(t.partId, Array(timeSlots.length).fill(0));
           }
           const arr = partSlots.get(t.partId)!;
           arr[slotIndex] += (t.quantity || 0);
-      }
-    });
+        }
+      });
 
-    const activeParts = Array.from(partTotals.keys());
-    if (activeParts.length === 0) return;
+      const activeParts = Array.from(partTotals.keys());
 
-    const sheetData: any[] = [];
-    
-    // Title Row
-    const titleDate = format(new Date(), 'dd/MM/yyyy');
-    const titleRowText = `BÁO CÁO SẢN XUẤT THEO CUNG GIỜ ${stageInfo.name.toUpperCase()} NGÀY ${titleDate}`;
-    const titleRow = [titleRowText];
-    
-    // Rows 1 and 2 headers
-    const row1 = ['Tên linh kiện', 'KHSX Ngày', 'Thực Hiện', 'Còn Lại', 'Tỉ lệ Hoàn\nThành KHSX', 'HSQĐ', 'KHSX sau QĐ', 'Sản lượng theo múi giờ'];
-    for(let i=0; i<timeSlots.length - 1; i++) row1.push('');
-    row1.push('Tổng sản\nlượng');
-    
-    for(let i=0; i<row1.length - 1; i++) titleRow.push('');
-    
-    const row2 = ['', '', '', '', '', '', ''];
-    timeSlots.forEach(s => row2.push(s.label));
-    row2.push('');
-    
-    sheetData.push(titleRow, row1, row2);
-    
-    let sumKHSX = 0;
-    let sumTH = 0;
-    let sumKHSX_QD = 0;
-    let sumSlots = Array(timeSlots.length).fill(0);
-    let sumSlots_QD = Array(timeSlots.length).fill(0);
-    let totalQD = 0;
+      const sheetData: any[] = [];
 
-    activeParts.sort().forEach(partId => {
-       const part = parts.find(p => p.id === partId);
-       const partName = part?.name || partId;
-       const isLaser = stageInfo.id === 'LASER';
-       const isBW = stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING';
-       const isGlz = stageInfo.id === 'GLAZING';
-       const isPainting = stageInfo.id === 'PAINTING';
-       const hsqd = isLaser
-         ? getLaserHSQD(partId)
-         : (isBW ? getBendingWeldingHSQD(partId) : (isPainting ? getPaintingHSQD(partId) : (isGlz ? getGlazingStageHSQD(partId) : glazingHSQD(partId))));
-       const thucHien = partTotals.get(partId) || 0;
-       
-       // get KHSX based on Stage
-       let khsx = 0;
-       const isStandardPOStage = stageInfo.id === 'PAINTING' || stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING' || stageInfo.id === 'LASER';
-       if (isStandardPOStage) {
-           const orders = storageService.getProductionOrders().filter(o => o.stageId === stageInfo.id && o.partId === partId);
-           khsx = orders.filter(o => {
-               const dt = o.plannedStartTime || o.createdAt;
-               return dt >= startMs && dt <= endMs;
-           }).reduce((s, o) => s + (o.targetQuantity || 0), 0);
-       } else if (stageInfo.id === 'GLAZING') {
-           const glazingPlans = storageService.getGlazingPlans();
-           const glazingPlanNorms = storageService.getGlazingPlanNorms();
-           const planNorm = glazingPlanNorms.find(n => n.id === partId);
-           if (planNorm) {
-               khsx = glazingPlans.filter(p => p.modelId === planNorm.appliedModel && (p.plannedStartTime || p.createdAt) >= startMs && (p.plannedStartTime || p.createdAt) <= endMs).reduce((s, p) => s + p.targetQuantity, 0);
-           }
-       }
-       
-       const conLai = khsx - thucHien;
-       const tiLe = khsx > 0 ? (thucHien/khsx) : 0;
-       const khsx_qd = khsx * hsqd;
-       
-       sumKHSX += khsx;
-       sumTH += thucHien;
-       sumKHSX_QD += khsx_qd;
-       
-       const r = [
+      // Title Row
+      const titleRowText = `BÁO CÁO SẢN XUẤT THEO CUNG GIỜ ${stageInfo.name.toUpperCase()} - ${shift.name.toUpperCase()} NGÀY ${titleDate}`;
+      const titleRow = [titleRowText];
+
+      // Rows 1 and 2 headers
+      const row1 = ['Tên linh kiện', 'KHSX Ngày', 'Thực Hiện', 'Còn Lại', 'Tỉ lệ Hoàn\nThành KHSX', 'HSQĐ', 'KHSX sau QĐ', 'Sản lượng theo múi giờ'];
+      for (let i = 0; i < timeSlots.length - 1; i++) row1.push('');
+      row1.push('Tổng sản\nlượng');
+
+      for (let i = 0; i < row1.length - 1; i++) titleRow.push('');
+
+      const row2 = ['', '', '', '', '', '', ''];
+      timeSlots.forEach(s => row2.push(s.label));
+      row2.push('');
+
+      sheetData.push(titleRow, row1, row2);
+
+      let sumKHSX = 0;
+      let sumTH = 0;
+      let sumKHSX_QD = 0;
+      let sumSlots = Array(timeSlots.length).fill(0);
+      let sumSlots_QD = Array(timeSlots.length).fill(0);
+      let totalQD = 0;
+
+      activeParts.sort().forEach(partId => {
+        const part = parts.find(p => p.id === partId);
+        const partName = part?.name || partId;
+        const isLaser = stageInfo.id === 'LASER';
+        const isBW = stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING';
+        const isGlz = stageInfo.id === 'GLAZING';
+        const isPainting = stageInfo.id === 'PAINTING';
+        const hsqd = isLaser
+          ? getLaserHSQD(partId)
+          : (isBW ? getBendingWeldingHSQD(partId) : (isPainting ? getPaintingHSQD(partId) : (isGlz ? getGlazingStageHSQD(partId) : glazingHSQD(partId))));
+        const thucHien = partTotals.get(partId) || 0;
+
+        // get KHSX based on Stage
+        let khsx = 0;
+        if (isStandardPOStage) {
+          const orders = storageService.getProductionOrders().filter(o => o.stageId === stageInfo.id && o.partId === partId);
+          khsx = orders.filter(o => {
+            const dt = o.plannedStartTime || o.createdAt;
+            return dt >= startMs && dt <= endMs;
+          }).reduce((s, o) => s + (o.targetQuantity || 0), 0);
+        } else if (stageInfo.id === 'GLAZING') {
+          const glazingPlans = storageService.getGlazingPlans();
+          const glazingPlanNorms = storageService.getGlazingPlanNorms();
+          const planNorm = glazingPlanNorms.find(n => n.id === partId);
+          if (planNorm) {
+            khsx = glazingPlans.filter(p => p.modelId === planNorm.appliedModel && (p.plannedStartTime || p.createdAt) >= startMs && (p.plannedStartTime || p.createdAt) <= endMs).reduce((s, p) => s + p.targetQuantity, 0);
+          }
+        }
+
+        const conLai = khsx - thucHien;
+        const khsx_qd = khsx * hsqd;
+
+        sumKHSX += khsx;
+        sumTH += thucHien;
+        sumKHSX_QD += khsx_qd;
+
+        const r = [
           partName, 
           khsx > 0 ? khsx : '', 
           thucHien > 0 ? thucHien : '',
@@ -4759,166 +4801,159 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
           khsx > 0 ? (thucHien/khsx) : '',
           hsqd > 0 ? Number(hsqd.toFixed(2)) : '',
           '' // KHSX sau QD de trong for parts
-       ];
-       
-       const slotsArr = partSlots.get(partId) || Array(timeSlots.length).fill(0);
-       slotsArr.forEach((v, i) => {
-           r.push(v > 0 ? v : '');
-           sumSlots[i] += v;
-           sumSlots_QD[i] += (v * hsqd);
-       });
-       totalQD += (thucHien * hsqd);
-       
-       r.push(thucHien > 0 ? thucHien : '');
-       sheetData.push(r);
-    });
-    
-    // Total row
-    const totalRow: any[] = ['Tổng số lượng chưa quy đổi', sumKHSX > 0 ? sumKHSX : '', sumTH > 0 ? sumTH : '', sumKHSX - sumTH !== 0 ? sumKHSX - sumTH : '', sumKHSX > 0 ? (sumTH/sumKHSX) : '', '', sumKHSX_QD > 0 ? sumKHSX_QD : ''];
-    sumSlots.forEach(s => totalRow.push(s > 0 ? s : ''));
-    totalRow.push(sumTH > 0 ? sumTH : '');
-    sheetData.push(totalRow);
-    
-    // San pham quy doi
-    const qdRow: any[] = ['Sản phẩm quy đổi', '', '', '', '', '', ''];
-    sumSlots_QD.forEach(s => qdRow.push(Math.round(s)));
-    qdRow.push(Math.round(totalQD));
-    sheetData.push(qdRow);
-    
-    // Năng suất lao động
-    const getWorkerCount = (stageId: string, sLabel: string) => {
-       if (stageId === 'LASER') return hourlyPeopleLaser[sLabel] !== undefined ? hourlyPeopleLaser[sLabel] : 0;
-       if (stageId === 'PAINTING') return hourlyPeoplePainting[sLabel] || 8;
-       if (stageId === 'GLAZING') return hourlyPeopleGlazing[sLabel] || 8;
-       if (stageId === 'BENDING') return hourlyPeopleBending[sLabel] || 8;
-       if (stageId === 'WELDING') return hourlyPeopleWelding[sLabel] || 8;
-       return 8;
-    };
+        ];
 
-    const targetQDs = timeSlots.map(s => {
-       const workerCount = getWorkerCount(stageInfo.id, s.label);
-       const factor = (s.label === '19h-20h') ? 0.125 : 0.25;
-       if (stageInfo.id === 'LASER') {
-           return Math.round(workerCount * 250 * factor * 10) / 10;
-       }
-       if (stageInfo.id === 'BENDING') {
-           return Math.round(workerCount * 132.7 * factor * 10) / 10;
-       }
-       if (stageInfo.id === 'WELDING') {
-           return Math.round(workerCount * 77.2 * factor * 10) / 10;
-       }
-       if (stageInfo.id === 'PAINTING') {
-           return Math.round(workerCount * 127.5 * factor * 10) / 10;
-       }
-       if (stageInfo.id === 'GLAZING') {
-           return Math.round(workerCount * 242 * factor * 10) / 10;
-       }
-       return Math.round(workerCount * 64 * factor * 10) / 10;
-    });
-    const totalTarget = targetQDs.reduce((a,b) => a+b, 0);
+        const slotsArr = partSlots.get(partId) || Array(timeSlots.length).fill(0);
+        slotsArr.forEach((v, i) => {
+          r.push(v > 0 ? v : '');
+          sumSlots[i] += v;
+          sumSlots_QD[i] += (v * hsqd);
+        });
+        totalQD += (thucHien * hsqd);
 
-    const tlRow: any[] = ['Năng suất lao động', '', '', '', '', '', ''];
-    let validProductivities: number[] = [];
-    sumSlots_QD.forEach((s, i) => {
+        r.push(thucHien > 0 ? thucHien : '');
+        sheetData.push(r);
+      });
+
+      // Total row
+      const totalRow: any[] = ['Tổng số lượng chưa quy đổi', sumKHSX > 0 ? sumKHSX : '', sumTH > 0 ? sumTH : '', sumKHSX - sumTH !== 0 ? sumKHSX - sumTH : '', sumKHSX > 0 ? (sumTH/sumKHSX) : '', '', sumKHSX_QD > 0 ? sumKHSX_QD : ''];
+      sumSlots.forEach(s => totalRow.push(s > 0 ? s : ''));
+      totalRow.push(sumTH > 0 ? sumTH : '');
+      sheetData.push(totalRow);
+
+      // San pham quy doi
+      const qdRow: any[] = ['Sản phẩm quy đổi', '', '', '', '', '', ''];
+      sumSlots_QD.forEach(s => qdRow.push(Math.round(s)));
+      qdRow.push(Math.round(totalQD));
+      sheetData.push(qdRow);
+
+      // Target calculations for shift
+      const targetQDs = timeSlots.map(s => {
+        const workerCount = getWorkerCount(stageInfo.id, s.label);
+        const factor = (s.label === '19h-20h') ? 0.125 : 0.25;
+        if (stageInfo.id === 'LASER') {
+          return Math.round(workerCount * 250 * factor * 10) / 10;
+        }
+        if (stageInfo.id === 'BENDING') {
+          return Math.round(workerCount * 132.7 * factor * 10) / 10;
+        }
+        if (stageInfo.id === 'WELDING') {
+          return Math.round(workerCount * 77.2 * factor * 10) / 10;
+        }
+        if (stageInfo.id === 'PAINTING') {
+          return Math.round(workerCount * 127.5 * factor * 10) / 10;
+        }
+        if (stageInfo.id === 'GLAZING') {
+          return Math.round(workerCount * 242 * factor * 10) / 10;
+        }
+        return Math.round(workerCount * 64 * factor * 10) / 10;
+      });
+      const totalTarget = targetQDs.reduce((a, b) => a + b, 0);
+
+      // Năng suất lao động
+      const tlRow: any[] = ['Năng suất lao động', '', '', '', '', '', ''];
+      let validProductivities: number[] = [];
+      sumSlots_QD.forEach((s, i) => {
         const tgt = targetQDs[i];
-        const prod = tgt > 0 ? (s/tgt) : 0;
+        const prod = tgt > 0 ? (s / tgt) : 0;
         tlRow.push(prod);
         if (prod > 0) {
-            validProductivities.push(prod);
+          validProductivities.push(prod);
         }
-    });
-    const avgProductivity = validProductivities.length > 0 ? validProductivities.reduce((a,b) => a+b, 0) / validProductivities.length : 0;
-    tlRow.push(avgProductivity);
-    sheetData.push(tlRow);
-    
-    // Nhân sự mỗi giờ
-    const nhanSuRow: any[] = ['Nhân sự mỗi giờ', '', '', '', '', '', ''];
-    timeSlots.forEach(s => {
-       nhanSuRow.push(getWorkerCount(stageInfo.id, s.label));
-    });
-    nhanSuRow.push(''); 
-    sheetData.push(nhanSuRow);
-    
-    // Số lượng sản phẩm quy đổi cần đạt được
-    const tgtRow: any[] = ['Số lượng sản phẩm quy đổi cần đạt được', '', '', '', '', '', ''];
-    targetQDs.forEach(t => tgtRow.push(t));
-    tgtRow.push(totalTarget);
-    sheetData.push(tgtRow);
-    
-    const ws = XLSX.utils.aoa_to_sheet(sheetData);
-    
-    // Formatting
-    const mergeArr = [
-      { s: {r:0, c:0}, e: {r:0, c:7 + timeSlots.length} }, // Title ROW
-      { s: {r:1, c:0}, e: {r:2, c:0} },
-      { s: {r:1, c:1}, e: {r:2, c:1} },
-      { s: {r:1, c:2}, e: {r:2, c:2} },
-      { s: {r:1, c:3}, e: {r:2, c:3} },
-      { s: {r:1, c:4}, e: {r:2, c:4} },
-      { s: {r:1, c:5}, e: {r:2, c:5} },
-      { s: {r:1, c:6}, e: {r:2, c:6} },
-      { s: {r:1, c:7}, e: {r:1, c:6 + timeSlots.length} }, // Sản lượng theo múi giờ
-      { s: {r:1, c:7 + timeSlots.length}, e: {r:2, c:7 + timeSlots.length} }, // Tổng sản lượng
-    ];
-    
-    // footer merges
-    const frOffset = sheetData.length - 5;
-    [1, 2, 3, 4].forEach(i => {
-       mergeArr.push({ s: {r: frOffset + i, c: 0}, e: {r: frOffset + i, c: 6}});
-    });
-    
-    ws['!merges'] = mergeArr;
-    
-    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
-    for (let R = 0; R <= range.e.r; ++R) {
+      });
+      const avgProductivity = validProductivities.length > 0 ? validProductivities.reduce((a, b) => a + b, 0) / validProductivities.length : 0;
+      tlRow.push(avgProductivity);
+      sheetData.push(tlRow);
+
+      // Nhân sự mỗi giờ
+      const nhanSuRow: any[] = ['Nhân sự mỗi giờ', '', '', '', '', '', ''];
+      timeSlots.forEach(s => {
+        nhanSuRow.push(getWorkerCount(stageInfo.id, s.label));
+      });
+      nhanSuRow.push('');
+      sheetData.push(nhanSuRow);
+
+      // Số lượng sản phẩm quy đổi cần đạt được
+      const tgtRow: any[] = ['Số lượng sản phẩm quy đổi cần đạt được', '', '', '', '', '', ''];
+      targetQDs.forEach(t => tgtRow.push(t));
+      tgtRow.push(totalTarget);
+      sheetData.push(tgtRow);
+
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+      // Formatting
+      const mergeArr = [
+        { s: {r:0, c:0}, e: {r:0, c:7 + timeSlots.length} }, // Title ROW
+        { s: {r:1, c:0}, e: {r:2, c:0} },
+        { s: {r:1, c:1}, e: {r:2, c:1} },
+        { s: {r:1, c:2}, e: {r:2, c:2} },
+        { s: {r:1, c:3}, e: {r:2, c:3} },
+        { s: {r:1, c:4}, e: {r:2, c:4} },
+        { s: {r:1, c:5}, e: {r:2, c:5} },
+        { s: {r:1, c:6}, e: {r:2, c:6} },
+        { s: {r:1, c:7}, e: {r:1, c:6 + timeSlots.length} }, // Sản lượng theo múi giờ
+        { s: {r:1, c:7 + timeSlots.length}, e: {r:2, c:7 + timeSlots.length} }, // Tổng sản lượng
+      ];
+
+      // footer merges
+      const frOffset = sheetData.length - 5;
+      [1, 2, 3, 4].forEach(i => {
+        mergeArr.push({ s: {r: frOffset + i, c: 0}, e: {r: frOffset + i, c: 6}});
+      });
+
+      ws['!merges'] = mergeArr;
+
+      const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+      for (let R = 0; R <= range.e.r; ++R) {
         for (let C = 0; C <= range.e.c; ++C) {
-            const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
-            if (!ws[cellAddress]) ws[cellAddress] = {t: 's', v: ''};
-            
-            if (R === 0) {
-                ws[cellAddress].s = titleStyle;
-                // Merge rows require the title to be bold across the merged area if we want the rest blank or it handles it nicely as A1 is where the text is.
-            } else if (R === 1 || R === 2) {
-                ws[cellAddress].s = headerStyle;
-            } else {
-                let rowStyle = { ...dataStyle };
-                
-                if (R === frOffset) {
-                    rowStyle = { ...dataStyle, font: { ...dataStyle.font, bold: true, color: { rgb: "0000FF" } } } as any;
-                } else if (R >= frOffset + 1 && R <= frOffset + 4) {
-                    rowStyle = { ...dataStyle, font: { ...dataStyle.font, bold: true, color: { rgb: "0000FF" } } } as any;
-                    if (R === frOffset + 4) {
-                        rowStyle = { ...dataStyle, font: { ...dataStyle.font, bold: true } } as any;
-                    }
-                    if (R === frOffset + 3) {
-                        rowStyle = { ...dataStyle, font: { ...dataStyle.font, bold: true }, fill: { fgColor: { rgb: "92D050" } } } as any;
-                    }
-                }
-                
-                ws[cellAddress].s = rowStyle;
-                
-                if (typeof ws[cellAddress].v === 'number') {
-                    if (C === 4 && R <= frOffset) {
-                        ws[cellAddress].z = '0%';
-                    }
-                    if (C >= 7 && R === frOffset + 2) {
-                        ws[cellAddress].z = '0%';
-                    }
-                }
+          const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+          if (!ws[cellAddress]) ws[cellAddress] = {t: 's', v: ''};
+
+          if (R === 0) {
+            ws[cellAddress].s = titleStyle;
+          } else if (R === 1 || R === 2) {
+            ws[cellAddress].s = headerStyle;
+          } else {
+            let rowStyle = { ...dataStyle };
+
+            if (R === frOffset) {
+              rowStyle = { ...dataStyle, font: { ...dataStyle.font, bold: true, color: { rgb: "0000FF" } } } as any;
+            } else if (R >= frOffset + 1 && R <= frOffset + 4) {
+              rowStyle = { ...dataStyle, font: { ...dataStyle.font, bold: true, color: { rgb: "0000FF" } } } as any;
+              if (R === frOffset + 4) {
+                rowStyle = { ...dataStyle, font: { ...dataStyle.font, bold: true } } as any;
+              }
+              if (R === frOffset + 3) {
+                rowStyle = { ...dataStyle, font: { ...dataStyle.font, bold: true }, fill: { fgColor: { rgb: "92D050" } } } as any;
+              }
             }
+
+            ws[cellAddress].s = rowStyle;
+
+            if (typeof ws[cellAddress].v === 'number') {
+              if (C === 4 && R <= frOffset) {
+                ws[cellAddress].z = '0%';
+              }
+              if (C >= 7 && R === frOffset + 2) {
+                ws[cellAddress].z = '0%';
+              }
+            }
+          }
         }
-    }
-    
-    const cols = [{wch: 35}, {wch: 10}, {wch: 10}, {wch: 10}, {wch: 10}, {wch: 10}, {wch: 12}];
-    timeSlots.forEach(()=>cols.push({wch: 10}));
-    cols.push({wch: 10});
-    ws['!cols'] = cols;
-    
-    XLSX.utils.book_append_sheet(wb, ws, stageInfo.name);
+      }
+
+      const cols = [{wch: 35}, {wch: 10}, {wch: 10}, {wch: 10}, {wch: 10}, {wch: 10}, {wch: 12}];
+      timeSlots.forEach(() => cols.push({wch: 10}));
+      cols.push({wch: 12});
+      ws['!cols'] = cols;
+
+      const sheetName = `${stageInfo.name} - ${shift.name}`;
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    });
   });
-  
+
   if (wb.SheetNames.length > 0) {
-      XLSX.writeFile(wb, `BaoCao_NangLuc_${format(start, 'yyyyMMdd')}.xlsx`);
+    XLSX.writeFile(wb, `BaoCao_NangLuc_${format(start, 'yyyyMMdd')}.xlsx`);
   }
 };
 
