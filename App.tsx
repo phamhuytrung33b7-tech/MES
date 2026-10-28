@@ -59,7 +59,10 @@ import {
   ShieldCheck,
   UserCheck,
   Filter,
-  Camera
+  Camera,
+  Scissors,
+  Scale,
+  Percent
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -6105,6 +6108,348 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     );
   }, [inventory, parts]);
 
+  const [laserYieldPoFilter, setLaserYieldPoFilter] = useState<string>('ALL');
+  const [showLaserYieldDetails, setShowLaserYieldDetails] = useState<boolean>(false);
+
+  // Tính toán Tỷ lệ cắt tôn & Tỷ lệ phế liệu (Yield & Scrap Calculation) - Lịch sử 35 ngày qua
+  const laserYieldReport = useMemo(() => {
+    const bom = storageService.getBOM();
+    const productionOrders = storageService.getProductionOrders().filter(po => po.stageId === 'LASER');
+    
+    // Khoảng thời gian thống kê: 35 ngày qua (tương đồng lịch sử xuất nhập)
+    const thirtyFiveDaysAgoMs = Date.now() - (35 * 24 * 60 * 60 * 1000);
+    const thirtyFiveDaysAgoStr = getPastDateStr(35);
+    const todayStr = getPastDateStr(0);
+    const dateRangeStr = `${thirtyFiveDaysAgoStr} đến ${todayStr} (35 ngày)`;
+
+    // Lọc giao dịch trong 35 ngày qua
+    const recent35DaysTxs = transactions.filter(t => t.timestamp >= thirtyFiveDaysAgoMs);
+
+    // Helper tìm BOM theo mã linh kiện
+    const findBOMForPart = (pId: string) => {
+      const clean = (pId || '')
+        .trim()
+        .toUpperCase()
+        .replace(/^LSR-OUT-/i, '')
+        .replace(/\s*-\s*CẮT LASER$/i, '')
+        .split(' - ')[0]
+        .trim();
+      const partObj = parts.find(p => p.id === pId || p.name === pId);
+      const cleanObjId = partObj ? partObj.id.trim().toUpperCase() : '';
+      const cleanObjName = partObj ? partObj.name.trim().toUpperCase() : '';
+
+      return bom.find(b => {
+        const child = (b.childPartId || '').trim().toUpperCase();
+        return child === clean || child === pId.trim().toUpperCase() || child === cleanObjId || child === cleanObjName;
+      });
+    };
+
+    // Helper kiểm tra mã phế liệu
+    const isScrap = (pId: string) => {
+      const pObj = parts.find(p => p.id === pId || p.name === pId);
+      return isLaserScrapItem(pId, pObj?.name);
+    };
+
+    // 1. TẬP HỢP TẤT CẢ CÁC LINH KIỆN ĐÃ TỪNG XUẤT HIỆN TẠI KHO OUT CẮT LASER TRONG 35 NGÀY QUA:
+    // - Giao dịch hoàn thành sản xuất vào kho OUT: (type STAGE_OUT && location IN) hoặc (type STAGE_IN && location OUT)
+    // - Giao dịch xuất kho từ OUT chuyển công đoạn: (stageId LASER && type STAGE_OUT && location OUT) hoặc (sourceStageId LASER)
+    // - Tồn kho thực tế hiện tại tại kho OUT Cắt Laser
+    // - Lệnh sản xuất Cắt Laser đã có sản lượng đạt (producedQuantity / completedQuantity) trong 35 ngày
+    const partStatsMap = new Map<string, {
+      producedTxsQty: number;
+      exportedTxsQty: number;
+      currentStockQty: number;
+      poProducedQty: number;
+      originalPartId?: string;
+    }>();
+
+    const getOrInitStats = (pId: string, origId?: string) => {
+      if (!partStatsMap.has(pId)) {
+        partStatsMap.set(pId, {
+          producedTxsQty: 0,
+          exportedTxsQty: 0,
+          currentStockQty: 0,
+          poProducedQty: 0,
+          originalPartId: origId
+        });
+      }
+      const s = partStatsMap.get(pId)!;
+      if (origId && !s.originalPartId) s.originalPartId = origId;
+      return s;
+    };
+
+    // Quét giao dịch 35 ngày qua
+    recent35DaysTxs.forEach(t => {
+      if (isScrap(t.partId)) return;
+
+      // Hàng được cắt và đưa vào kho OUT tại Cắt Laser
+      const isProducedAtLaser = t.stageId === 'LASER' && (
+        (t.type === 'STAGE_OUT' && t.location === 'IN') ||
+        (t.type === 'STAGE_IN' && t.location === 'OUT')
+      );
+
+      if (isProducedAtLaser) {
+        const stats = getOrInitStats(t.partId, t.originalPartId);
+        stats.producedTxsQty += (t.quantity || 0);
+      }
+
+      // Hàng từ kho OUT Cắt Laser được chuyển/xuất sang công đoạn tiếp theo
+      const isExportedFromLaserOut = (
+        (t.stageId === 'LASER' && t.type === 'STAGE_OUT' && t.location === 'OUT') ||
+        (t.sourceStageId === 'LASER' && t.type === 'STAGE_IN')
+      );
+
+      if (isExportedFromLaserOut) {
+        const stats = getOrInitStats(t.partId, t.originalPartId);
+        stats.exportedTxsQty += (t.quantity || 0);
+      }
+    });
+
+    // Quét tồn kho hiện tại tại kho OUT Cắt Laser
+    inventory.forEach(item => {
+      if (item.stageId === 'LASER' && item.location === 'OUT' && item.quantity > 0 && !isScrap(item.partId)) {
+        const stats = getOrInitStats(item.partId, item.originalPartId);
+        stats.currentStockQty += item.quantity;
+      }
+    });
+
+    // Quét các Lệnh sản xuất Cắt Laser
+    productionOrders.forEach(po => {
+      if (po.partId && !isScrap(po.partId)) {
+        const poProduced = po.producedQuantity || 0;
+        if (poProduced > 0) {
+          const stats = getOrInitStats(po.partId);
+          stats.poProducedQty = Math.max(stats.poProducedQty, poProduced);
+        }
+      }
+    });
+
+    // Bóc tách chi tiết từng linh kiện đã từng xuất hiện ở kho OUT Cắt Laser
+    const outDetails = Array.from(partStatsMap.entries()).map(([partId, stats]) => {
+      const partObj = parts.find(p => p.id === partId || p.name === partId);
+      const bomDef = findBOMForPart(partId);
+      const compWeightPerUnit = bomDef?.componentWeight || 0;
+      const scrapWeightPerUnit = bomDef?.scrapWeight || 0;
+      const parentSheetId = bomDef?.parentPartId || '';
+      const parentPart = parts.find(p => p.id === parentSheetId);
+
+      // Số lượng tích lũy đạt trong 35 ngày:
+      // Kết hợp số lượng ghi nhận sản xuất, số lượng đã xuất kho + còn tồn, và số lượng PO
+      const historicalThroughput = Math.max(
+        stats.producedTxsQty,
+        stats.exportedTxsQty + stats.currentStockQty,
+        stats.poProducedQty,
+        stats.currentStockQty
+      );
+
+      const effectiveQty = historicalThroughput;
+      const itemGoodWeight = effectiveQty * compWeightPerUnit;
+      const itemBomScrapWeight = effectiveQty * scrapWeightPerUnit;
+      const itemTheoreticalTotal = itemGoodWeight + itemBomScrapWeight;
+      const itemBomYield = itemTheoreticalTotal > 0 ? (itemGoodWeight / itemTheoreticalTotal) * 100 : 0;
+
+      return {
+        partId,
+        partName: partObj?.name || partId,
+        originalPartId: stats.originalPartId,
+        quantity: effectiveQty, // Tổng SL đã từng xuất hiện / sản xuất trong 35 ngày
+        producedTxsQty: stats.producedTxsQty,
+        exportedTxsQty: stats.exportedTxsQty,
+        currentStockQty: stats.currentStockQty,
+        unit: partObj?.unit || 'Bộ',
+        parentSheetId,
+        parentSheetName: parentPart?.name || parentSheetId,
+        compWeightPerUnit,
+        scrapWeightPerUnit,
+        itemGoodWeight,
+        itemBomScrapWeight,
+        itemTheoreticalTotal,
+        itemBomYield,
+        hasBOM: !!bomDef,
+      };
+    }).filter(d => d.quantity > 0);
+
+    // 2. TẬP HỢP HÀNG LỖI / PHẾ NG CẮT LASER (Đồng bộ chuẩn xác với KHO_NG Cắt Laser):
+    // Ưu tiên trực tiếp dữ liệu từ KHO_NG (tồn kho DEFECT hiện tại tại LASER) để khớp 100% với giao diện KHO_NG (Ảnh 3)
+    const currentLaserDefectItems = inventory.filter(item => item.stageId === 'LASER' && item.location === 'DEFECT' && item.quantity > 0);
+    const defectMap = new Map<string, { quantity: number; originalPartId?: string }>();
+
+    if (currentLaserDefectItems.length > 0) {
+      currentLaserDefectItems.forEach(item => {
+        defectMap.set(item.partId, { quantity: item.quantity, originalPartId: item.originalPartId });
+      });
+    } else {
+      // Nếu KHO_NG tạm thời trống, quét từ lịch sử báo lỗi trong 35 ngày qua
+      recent35DaysTxs.forEach(t => {
+        if (t.stageId === 'LASER' && t.type === 'DEFECT') {
+          const cur = defectMap.get(t.partId) || { quantity: 0, originalPartId: t.originalPartId };
+          cur.quantity += (t.quantity || 0);
+          defectMap.set(t.partId, cur);
+        }
+      });
+    }
+
+    const defectDetails = Array.from(defectMap.entries()).map(([partId, info]) => {
+      const partObj = parts.find(p => p.id === partId || p.name === partId);
+      const isRawSheet = (partObj?.level === 3) || 
+                         (partId.startsWith('NVL-TT')) || 
+                         (partObj?.unit?.toUpperCase() === 'KG') ||
+                         (partObj?.name?.toLowerCase().includes('tôn tấm'));
+      
+      let itemWeight = 0;
+      let bomDef: BOMDefinition | undefined = undefined;
+
+      if (isRawSheet) {
+        itemWeight = info.quantity;
+      } else {
+        bomDef = findBOMForPart(partId);
+        if (bomDef) {
+          itemWeight = info.quantity * (bomDef.componentWeight + bomDef.scrapWeight);
+        } else {
+          itemWeight = info.quantity;
+        }
+      }
+
+      return {
+        partId,
+        partName: partObj?.name || partId,
+        quantity: info.quantity,
+        unit: partObj?.unit || (isRawSheet ? 'KG' : 'Bộ'),
+        isRawSheet,
+        weightKg: itemWeight,
+        originalPartId: info.originalPartId,
+      };
+    }).filter(d => d.quantity > 0);
+
+    // Tổng phế liệu tồn kho tại Cắt Laser (PL-TON-SX) từ Khu vực thu hồi phế liệu tôn
+    const scrapInStock = laserScrapItems.reduce((sum, item) => sum + item.quantity, 0);
+
+    // Lọc theo Lệnh sản xuất nếu người dùng chọn
+    let filteredOutDetails = outDetails;
+    let filteredDefectDetails = defectDetails;
+
+    if (laserYieldPoFilter !== 'ALL') {
+      const targetPO = productionOrders.find(po => po.id === laserYieldPoFilter);
+      if (targetPO) {
+        const targetClean = (targetPO.partId || '').trim().toUpperCase();
+        filteredOutDetails = outDetails.filter(d => {
+          const dClean = (d.partId || '').trim().toUpperCase();
+          return dClean.includes(targetClean) || targetClean.includes(dClean);
+        });
+
+        filteredDefectDetails = defectDetails.filter(d => {
+          const dClean = (d.partId || '').trim().toUpperCase();
+          return dClean.includes(targetClean) || targetClean.includes(dClean);
+        });
+      }
+    }
+
+    // 1. Tổng khối lượng linh kiện tốt (W_good) = SL sản phẩm đạt * KL Linh kiện (Kg)
+    const W_good = filteredOutDetails.reduce((sum, d) => sum + d.itemGoodWeight, 0);
+
+    // 2. Tổng khối lượng phế định mức (W_bom_scrap)
+    // ĐỒNG BỘ 100% với Khu vực thu hồi phế liệu tôn (SX) PL-TON-SX (Ảnh 1) khi xem toàn bộ kho
+    const calculatedBomScrap = filteredOutDetails.reduce((sum, d) => sum + d.itemBomScrapWeight, 0);
+    const W_bom_scrap = (laserYieldPoFilter === 'ALL')
+      ? (scrapInStock > 0 ? scrapInStock : calculatedBomScrap)
+      : calculatedBomScrap;
+
+    // 3. Khối lượng phế NG / lỗi thực tế (W_ng) lấy từ dữ liệu KHO_NG Cắt Laser (Đồng bộ 100% với Ảnh 3)
+    const W_ng = filteredDefectDetails.reduce((sum, d) => sum + d.weightKg, 0);
+
+    // 4. Tổng tôn cấp phát đầu vào (W_total_input) = W_good + W_bom_scrap + W_ng
+    const W_total_input = W_good + W_bom_scrap + W_ng;
+
+    // 5. Các chỉ số KPI
+    // Tỷ lệ cắt tôn chuẩn (BOM Yield %) = [W_good / (W_good + W_bom_scrap)] * 100%
+    const theoreticalSum = W_good + W_bom_scrap;
+    const bomYield = theoreticalSum > 0 ? (W_good / theoreticalSum) * 100 : 0;
+
+    // Tỷ lệ cắt tôn thực tế (Actual Yield %) = [W_good / W_total_input] * 100%
+    const actualYield = W_total_input > 0 ? (W_good / W_total_input) * 100 : 0;
+
+    // Tỷ lệ hao hụt lỗi (NG Rate %) = [W_ng / W_total_input] * 100%
+    const ngRate = W_total_input > 0 ? (W_ng / W_total_input) * 100 : 0;
+
+    // Tỷ lệ phế liệu định mức (% so với tổng cấp phát)
+    const bomScrapRate = W_total_input > 0 ? (W_bom_scrap / W_total_input) * 100 : 0;
+
+    return {
+      W_good,
+      W_bom_scrap,
+      W_ng,
+      W_total_input,
+      bomYield,
+      actualYield,
+      ngRate,
+      bomScrapRate,
+      scrapInStock,
+      dateRangeStr,
+      thirtyFiveDaysAgoStr,
+      todayStr,
+      outDetails: filteredOutDetails,
+      defectDetails: filteredDefectDetails,
+      productionOrders,
+      totalOutQty: filteredOutDetails.reduce((sum, d) => sum + d.quantity, 0),
+      totalDefectQty: filteredDefectDetails.reduce((sum, d) => sum + d.quantity, 0),
+    };
+  }, [inventory, parts, laserScrapItems, laserYieldPoFilter, transactions]);
+
+  const exportLaserYieldReportExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const title = `BÁO CÁO HIỆU SUẤT CẮT TÔN & TỶ LỆ PHẾ LIỆU (YIELD & SCRAP) - 35 NGÀY`;
+    const dateStrFormatted = format(new Date(), 'dd/MM/yyyy HH:mm');
+    
+    const summaryRows = [
+      [title],
+      [`Thời gian xuất: ${dateStrFormatted}`],
+      [`Khoảng thời gian thống kê: ${laserYieldReport.dateRangeStr}`],
+      [`Cơ chế tính toán: Dựa vào toàn bộ lịch sử linh kiện đã từng xuất hiện / xuất nhập tại kho OUT Cắt Laser trong 35 ngày qua`],
+      [`Phạm vi lọc: ${laserYieldPoFilter === 'ALL' ? 'Tất cả (Tổng công đoạn Cắt Laser)' : `Lệnh sản xuất ${laserYieldPoFilter}`}`],
+      [''],
+      ['CHỈ SỐ KPI CHÍNH', 'GIÁ TRỊ', 'ĐƠN VỊ', 'CÔNG THỨC / Ý NGHĨA'],
+      ['1. Tổng khối lượng linh kiện tốt (W_good)', laserYieldReport.W_good.toFixed(4), 'KG', 'Tổng KL sản phẩm đạt theo định mức linh kiện (Kg) trong 35 ngày'],
+      ['2. Tổng khối lượng phế định mức (W_bom_scrap)', laserYieldReport.W_bom_scrap.toFixed(4), 'KG', 'Tổng KL phế liệu sinh ra theo định mức (PL-TON-SX) trong 35 ngày'],
+      ['3. Khối lượng phế NG / lỗi thực tế (W_ng)', laserYieldReport.W_ng.toFixed(4), 'KG', 'Tổng KL lỗi ghi nhận từ KHO_NG và Báo lỗi nhanh trong 35 ngày'],
+      ['4. Tổng tôn cấp phát đầu vào (W_total_input)', laserYieldReport.W_total_input.toFixed(4), 'KG', 'W_good + W_bom_scrap + W_ng'],
+      ['5. Tỷ lệ cắt tôn chuẩn (BOM Yield %)', `${laserYieldReport.bomYield.toFixed(2)}%`, '%', '[W_good / (W_good + W_bom_scrap)] * 100% (Thu hồi lý thuyết định mức)'],
+      ['6. Tỷ lệ cắt tôn thực tế (Actual Yield %)', `${laserYieldReport.actualYield.toFixed(2)}%`, '%', '[W_good / W_total_input] * 100% (Thu hồi thực tế sau lỗi)'],
+      ['7. Tỷ lệ hao hụt lỗi (NG Rate %)', `${laserYieldReport.ngRate.toFixed(2)}%`, '%', '[W_ng / W_total_input] * 100% (Tỷ lệ hàng lỗi phế phẩm)'],
+      ['8. Tỷ lệ phế liệu định mức (% BOM Scrap)', `${laserYieldReport.bomScrapRate.toFixed(2)}%`, '%', '[W_bom_scrap / W_total_input] * 100%'],
+      [''],
+      ['CHI TIẾT LINH KIỆN ĐÃ SẢN XUẤT TẠI KHO OUT CẮT LASER (35 NGÀY QUA)'],
+      ['Mã linh kiện', 'Tên linh kiện', 'Mã tôn tấm (BOM)', 'SL Tích lũy (35 ngày)', 'Đã xuất kho', 'Tồn OUT hiện tại', 'Đơn vị', 'KL Linh kiện (kg/cái)', 'KL Phế (kg/cái)', 'W_good (kg)', 'W_bom_scrap (kg)', 'Tỷ lệ thu hồi BOM (%)'],
+      ...laserYieldReport.outDetails.map(d => [
+        d.partId,
+        d.partName,
+        d.parentSheetId || '(Chưa có BOM)',
+        d.quantity,
+        d.exportedTxsQty || 0,
+        d.currentStockQty || 0,
+        d.unit,
+        d.compWeightPerUnit.toFixed(4),
+        d.scrapWeightPerUnit.toFixed(4),
+        d.itemGoodWeight.toFixed(4),
+        d.itemBomScrapWeight.toFixed(4),
+        `${d.itemBomYield.toFixed(2)}%`
+      ]),
+      [''],
+      ['CHI TIẾT HÀNG LỖI KHO_NG CẮT LASER (35 NGÀY QUA)'],
+      ['Mã linh kiện lỗi', 'Tên linh kiện / Tôn tấm', 'Số lượng lỗi', 'Đơn vị', 'Khối lượng lỗi W_ng (KG)'],
+      ...laserYieldReport.defectDetails.map(d => [
+        d.partId,
+        d.partName,
+        d.quantity,
+        d.unit,
+        d.weightKg.toFixed(4)
+      ])
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(summaryRows);
+    XLSX.utils.book_append_sheet(wb, ws, "HieuSuat_CatTon_35Ngay");
+    XLSX.writeFile(wb, `BaoCao_Yield_CatTon_35Ngay_${format(new Date(), 'yyyyMMdd_HHmm')}.xlsx`);
+  };
+
   const stageSummaries = useMemo(() => {
     return STAGES.map(stage => {
       const stageItems = inventory.filter(item => item.stageId === stage.id);
@@ -6360,7 +6705,373 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
               )}
 
               {selectedStageDetail === 'LASER' && (
-                <div className="mb-4 sm:mb-8 p-4 sm:p-6 bg-gradient-to-r from-amber-50/90 via-amber-50/40 to-orange-50/60 border-2 border-amber-300 rounded-xl sm:rounded-2xl shadow-sm">
+                <>
+                  {/* WIDGET: HIỆU SUẤT CẮT TÔN & TỶ LỆ PHẾ LIỆU (YIELD & SCRAP) */}
+                  <div 
+                    style={{ fontFamily: '"Times New Roman", Times, Georgia, serif' }}
+                    className="mb-4 sm:mb-6 p-4 sm:p-6 bg-gradient-to-br from-white via-indigo-50/25 to-blue-50/35 border-2 border-indigo-300 rounded-xl sm:rounded-2xl shadow-sm text-gray-900"
+                  >
+                    {/* Header */}
+                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3 sm:gap-4 pb-4 border-b border-indigo-200">
+                      <div className="flex items-center gap-3">
+                        <div className="p-3 bg-gradient-to-br from-indigo-700 to-blue-700 text-white rounded-xl shadow-xs shrink-0">
+                          <Scissors size={24} className="sm:w-6 sm:h-6" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2.5 flex-wrap">
+                            <h3 className="text-lg sm:text-2xl md:text-3xl font-black uppercase text-gray-950 tracking-normal">
+                              Hiệu Suất Cắt Tôn & Tỷ Lệ Phế Liệu
+                            </h3>
+                            <span className="px-3 py-1 bg-indigo-100 text-indigo-900 text-xs sm:text-sm font-black rounded-lg uppercase tracking-wide border border-indigo-200">
+                              Yield & Scrap KPI
+                            </span>
+                            <span className="px-3 py-1 bg-amber-100 text-amber-950 text-xs sm:text-sm font-black rounded-lg uppercase tracking-wide border border-amber-300 flex items-center gap-1">
+                              📅 35 ngày: {laserYieldReport.thirtyFiveDaysAgoStr} ➔ {laserYieldReport.todayStr}
+                            </span>
+                          </div>
+                          <p className="text-xs sm:text-sm text-gray-700 font-bold mt-1.5 leading-relaxed">
+                            Thống kê dựa trên toàn bộ linh kiện đã từng xuất hiện / xuất nhập tại kho OUT Cắt Laser trong 35 ngày qua (W_good đạt tích lũy, W_bom_scrap phế định mức đồng bộ Kho phế, W_ng lỗi KHO_NG)
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Controls */}
+                      <div className="flex items-center gap-2 sm:gap-3 w-full lg:w-auto flex-wrap justify-between lg:justify-end">
+                        <div className="flex items-center gap-1.5 bg-white border-2 border-indigo-200 rounded-xl px-3 py-2 shadow-2xs">
+                          <Filter size={15} className="text-indigo-700 shrink-0" />
+                          <span className="text-xs sm:text-sm font-black text-gray-800 shrink-0">Lệnh SX:</span>
+                          <select
+                            value={laserYieldPoFilter}
+                            onChange={(e) => setLaserYieldPoFilter(e.target.value)}
+                            className="bg-transparent text-xs sm:text-sm font-black text-indigo-950 outline-none cursor-pointer pr-1 max-w-[170px] sm:max-w-[220px] truncate"
+                          >
+                            <option value="ALL">-- Tất cả (Tổng kho Cắt Laser 35 ngày) --</option>
+                            {laserYieldReport.productionOrders.map(po => {
+                              const pName = parts.find(p => p.id === po.partId || p.name === po.partId)?.name || po.partId;
+                              return (
+                                <option key={po.id} value={po.id}>
+                                  {po.id} - {pName} ({po.producedQuantity || 0}/{po.targetQuantity} cái)
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+
+                        <button
+                          onClick={exportLaserYieldReportExcel}
+                          className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border-2 border-emerald-300 rounded-xl text-xs sm:text-sm font-black transition-all shadow-2xs active:scale-95 cursor-pointer shrink-0"
+                          title="Xuất file Excel báo cáo chi tiết tỷ lệ cắt tôn & phế liệu (35 ngày qua)"
+                        >
+                          <FileSpreadsheet size={16} className="text-emerald-700" />
+                          <span>Xuất Excel</span>
+                        </button>
+
+                        <button
+                          onClick={() => setShowLaserYieldDetails(!showLaserYieldDetails)}
+                          className="flex items-center gap-1 px-3 py-2 bg-white hover:bg-gray-100 border-2 border-gray-300 rounded-xl text-xs sm:text-sm font-black text-gray-800 transition-all shadow-2xs active:scale-95 cursor-pointer shrink-0"
+                        >
+                          <span>{showLaserYieldDetails ? 'Thu gọn' : 'Bóc tách chi tiết'}</span>
+                          <ChevronDown size={16} className={cn("transition-transform", showLaserYieldDetails && "rotate-180")} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 4 KPI Cards */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mt-4">
+                      {/* Card 1: BOM Yield */}
+                      <div className="bg-white p-4 sm:p-5 rounded-xl border-2 border-blue-200 shadow-2xs flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-blue-900">1. Tỷ lệ cắt chuẩn (BOM Yield)</span>
+                            <span className="px-2 py-0.5 bg-blue-100 text-blue-900 text-[11px] sm:text-xs font-black rounded border border-blue-300">Định mức</span>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-3xl sm:text-4xl font-black text-blue-700">
+                              {laserYieldReport.bomYield.toFixed(2)}%
+                            </span>
+                            <span className="text-xs sm:text-sm text-gray-600 font-bold">lý thuyết</span>
+                          </div>
+                        </div>
+                        <div className="mt-3.5">
+                          <div className="w-full bg-blue-100 h-2.5 rounded-full overflow-hidden">
+                            <div 
+                              className="bg-blue-600 h-full rounded-full transition-all duration-500" 
+                              style={{ width: `${Math.min(100, Math.max(0, laserYieldReport.bomYield))}%` }}
+                            />
+                          </div>
+                          <div className="text-xs sm:text-sm text-gray-700 font-bold mt-2 flex justify-between">
+                            <span>LK tốt (35N): <b className="text-blue-900 font-black">{laserYieldReport.W_good.toFixed(1)} kg</b></span>
+                            <span>Phế: <b className="text-amber-800 font-black">{laserYieldReport.W_bom_scrap.toFixed(1)} kg</b></span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card 2: Actual Yield */}
+                      <div className="bg-white p-4 sm:p-5 rounded-xl border-2 border-emerald-200 shadow-2xs flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-emerald-900">2. Tỷ lệ cắt thực tế (Actual Yield)</span>
+                            <span className="px-2 py-0.5 bg-emerald-100 text-emerald-900 text-[11px] sm:text-xs font-black rounded border border-emerald-300">Thực tế</span>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-3xl sm:text-4xl font-black text-emerald-700">
+                              {laserYieldReport.actualYield.toFixed(2)}%
+                            </span>
+                            {laserYieldReport.bomYield > 0 && (
+                              <span className={cn(
+                                "text-xs font-black px-1.5 py-0.5 rounded",
+                                laserYieldReport.actualYield >= laserYieldReport.bomYield ? "bg-emerald-100 text-emerald-900" : "bg-rose-100 text-rose-900"
+                              )}>
+                                {laserYieldReport.actualYield >= laserYieldReport.bomYield ? '+' : ''}{(laserYieldReport.actualYield - laserYieldReport.bomYield).toFixed(2)}%
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="mt-3.5">
+                          <div className="w-full bg-emerald-100 h-2.5 rounded-full overflow-hidden">
+                            <div 
+                              className="bg-emerald-500 h-full rounded-full transition-all duration-500" 
+                              style={{ width: `${Math.min(100, Math.max(0, laserYieldReport.actualYield))}%` }}
+                            />
+                          </div>
+                          <div className="text-xs sm:text-sm text-gray-700 font-bold mt-2 flex justify-between">
+                            <span>W_good / W_total_input</span>
+                            <span className="text-emerald-900 font-black">{laserYieldReport.W_good.toFixed(1)} kg</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card 3: NG Rate */}
+                      <div className="bg-white p-4 sm:p-5 rounded-xl border-2 border-rose-200 shadow-2xs flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-rose-900">3. Tỷ lệ hao hụt lỗi (NG Rate)</span>
+                            <span className="px-2 py-0.5 bg-rose-100 text-rose-900 text-[11px] sm:text-xs font-black rounded border border-rose-300">KHO_NG</span>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-3xl sm:text-4xl font-black text-rose-700">
+                              {laserYieldReport.ngRate.toFixed(2)}%
+                            </span>
+                            <span className="text-xs sm:text-sm text-gray-600 font-bold">{laserYieldReport.defectDetails.length} mã lỗi</span>
+                          </div>
+                        </div>
+                        <div className="mt-3.5">
+                          <div className="w-full bg-rose-100 h-2.5 rounded-full overflow-hidden">
+                            <div 
+                              className="bg-rose-500 h-full rounded-full transition-all duration-500" 
+                              style={{ width: `${Math.min(100, Math.max(0, laserYieldReport.ngRate))}%` }}
+                            />
+                          </div>
+                          <div className="text-xs sm:text-sm text-gray-700 font-bold mt-2 flex justify-between">
+                            <span>Khối lượng lỗi W_ng (KHO_NG)</span>
+                            <span className="text-rose-900 font-black">{laserYieldReport.W_ng.toFixed(2)} kg</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card 4: Total Input */}
+                      <div className="bg-white p-4 sm:p-5 rounded-xl border-2 border-indigo-200 shadow-2xs flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-indigo-900">4. Tổng tôn cấp phát (W_input)</span>
+                            <span className="px-2 py-0.5 bg-indigo-100 text-indigo-900 text-[11px] sm:text-xs font-black rounded border border-indigo-300">Đầu vào</span>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-3xl sm:text-4xl font-black text-indigo-950">
+                              {laserYieldReport.W_total_input.toFixed(2)}
+                            </span>
+                            <span className="text-sm font-black text-indigo-700 uppercase">KG</span>
+                          </div>
+                        </div>
+                        <div className="mt-3.5">
+                          <div className="text-xs sm:text-sm text-gray-700 font-bold flex items-center justify-between border-t border-gray-200 pt-2">
+                            <span>LK: <b className="text-blue-900 font-black">{laserYieldReport.W_good.toFixed(1)}</b></span>
+                            <span>Phế: <b className="text-amber-800 font-black">{laserYieldReport.W_bom_scrap.toFixed(1)}</b></span>
+                            <span>NG: <b className="text-rose-800 font-black">{laserYieldReport.W_ng.toFixed(1)}</b></span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Stacked Progress Bar (100% Distribution) */}
+                    <div className="mt-5 pt-3.5 border-t border-indigo-200">
+                      <div className="flex items-center justify-between text-xs sm:text-sm font-black text-gray-800 mb-2">
+                        <span className="flex items-center gap-1.5">
+                          <Scale size={16} className="text-indigo-700" />
+                          <span>Phân bổ 100% Khối lượng Tôn cấp phát đầu vào:</span>
+                        </span>
+                        <span className="text-indigo-950 font-black text-sm">
+                          {laserYieldReport.W_total_input > 0 ? `${laserYieldReport.W_total_input.toFixed(2)} KG (100%)` : 'Chưa có phát sinh trong 35 ngày'}
+                        </span>
+                      </div>
+
+                      <div className="w-full bg-gray-100 h-5 rounded-full overflow-hidden flex border-2 border-gray-300 p-0.5">
+                        <div 
+                          className="bg-emerald-500 h-full rounded-l-full transition-all duration-500 relative cursor-pointer" 
+                          style={{ width: `${Math.min(100, Math.max(0, laserYieldReport.actualYield))}%` }}
+                          title={`Linh kiện đạt: ${laserYieldReport.W_good.toFixed(2)} kg (${laserYieldReport.actualYield.toFixed(2)}%)`}
+                        />
+                        <div 
+                          className="bg-amber-400 h-full transition-all duration-500 relative cursor-pointer" 
+                          style={{ width: `${Math.min(100, Math.max(0, laserYieldReport.bomScrapRate))}%` }}
+                          title={`Phế liệu định mức: ${laserYieldReport.W_bom_scrap.toFixed(2)} kg (${laserYieldReport.bomScrapRate.toFixed(2)}%)`}
+                        />
+                        <div 
+                          className="bg-rose-500 h-full rounded-r-full transition-all duration-500 relative cursor-pointer" 
+                          style={{ width: `${Math.min(100, Math.max(0, laserYieldReport.ngRate))}%` }}
+                          title={`Hao hụt lỗi NG: ${laserYieldReport.W_ng.toFixed(2)} kg (${laserYieldReport.ngRate.toFixed(2)}%)`}
+                        />
+                      </div>
+
+                      {/* Legend */}
+                      <div className="flex flex-wrap items-center gap-4 sm:gap-8 mt-2.5 text-xs sm:text-sm font-bold text-gray-700">
+                        <div className="flex items-center gap-2">
+                          <div className="w-3.5 h-3.5 rounded-full bg-emerald-500 shrink-0" />
+                          <span>Linh kiện đạt (W_good):</span>
+                          <span className="font-black text-emerald-800">{laserYieldReport.W_good.toFixed(2)} kg ({laserYieldReport.actualYield.toFixed(2)}%)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-3.5 h-3.5 rounded-full bg-amber-400 shrink-0" />
+                          <span>Phế liệu thu hồi (W_bom_scrap):</span>
+                          <span className="font-black text-amber-800">{laserYieldReport.W_bom_scrap.toFixed(2)} kg ({laserYieldReport.bomScrapRate.toFixed(2)}%)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-3.5 h-3.5 rounded-full bg-rose-500 shrink-0" />
+                          <span>Hàng lỗi / phế NG (W_ng):</span>
+                          <span className="font-black text-rose-800">{laserYieldReport.W_ng.toFixed(2)} kg ({laserYieldReport.ngRate.toFixed(2)}%)</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Expandable Breakdown Tables */}
+                    {showLaserYieldDetails && (
+                      <div className="mt-5 pt-4 border-t-2 border-indigo-200 space-y-5">
+                        {/* Table 1: Sản phẩm đạt tại kho OUT */}
+                        <div>
+                          <div className="flex items-center justify-between mb-2.5 flex-wrap gap-2">
+                            <h4 className="text-xs sm:text-sm font-black uppercase tracking-wider text-gray-900 flex items-center gap-1.5">
+                              <CheckCircle2 size={16} className="text-emerald-700" />
+                              <span>Chi tiết Linh kiện đã xuất hiện tại kho OUT Cắt Laser ({laserYieldReport.outDetails.length} linh kiện - Lịch sử 35 ngày)</span>
+                            </h4>
+                            <span className="text-xs sm:text-sm text-gray-700 font-bold">
+                              Tổng SL đạt tích lũy: <b className="font-black text-gray-950">{laserYieldReport.totalOutQty}</b> cái | Tổng W_good: <b className="text-emerald-800 font-black">{laserYieldReport.W_good.toFixed(2)} kg</b>
+                            </span>
+                          </div>
+
+                          <div className="bg-white rounded-xl border-2 border-gray-200 overflow-x-auto shadow-2xs">
+                            <table className="w-full text-left text-xs sm:text-sm border-collapse">
+                              <thead>
+                                <tr className="bg-gray-100 border-b-2 border-gray-300 uppercase text-gray-800 text-[11px] sm:text-xs font-black">
+                                  <th className="p-3 pl-3.5">Mã linh kiện</th>
+                                  <th className="p-3">Tên linh kiện</th>
+                                  <th className="p-3">Tôn tấm (BOM)</th>
+                                  <th className="p-3 text-right">SL Tích lũy (35N)</th>
+                                  <th className="p-3 text-right">Định mức LK</th>
+                                  <th className="p-3 text-right">Định mức Phế</th>
+                                  <th className="p-3 text-right text-emerald-800">W_good (kg)</th>
+                                  <th className="p-3 text-right text-amber-800">W_phế (kg)</th>
+                                  <th className="p-3 pr-3.5 text-right text-blue-800">BOM Yield</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 font-bold">
+                                {laserYieldReport.outDetails.length > 0 ? (
+                                  laserYieldReport.outDetails.map((d, idx) => (
+                                    <tr key={idx} className="hover:bg-blue-50/40 transition-colors">
+                                      <td className="p-3 pl-3.5 font-black text-gray-950">{d.partId}</td>
+                                      <td className="p-3 text-gray-800 max-w-[220px] truncate">{d.partName}</td>
+                                      <td className="p-3 text-gray-600">
+                                        {d.parentSheetId || <span className="text-amber-700 italic">Chưa có BOM</span>}
+                                      </td>
+                                      <td className="p-3 text-right">
+                                        <span className="font-black text-gray-950">{d.quantity} {d.unit}</span>
+                                        {(d.exportedTxsQty > 0 || d.currentStockQty > 0) && (
+                                          <span className="block text-[10px] sm:text-xs text-gray-500 font-medium">
+                                            (Đã xuất: {d.exportedTxsQty || 0} | Tồn OUT: {d.currentStockQty || 0})
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="p-3 text-right text-gray-700">{d.compWeightPerUnit.toFixed(4)} kg</td>
+                                      <td className="p-3 text-right text-gray-700">{d.scrapWeightPerUnit.toFixed(4)} kg</td>
+                                      <td className="p-3 text-right font-black text-emerald-800">{d.itemGoodWeight.toFixed(4)}</td>
+                                      <td className="p-3 text-right font-black text-amber-800">{d.itemBomScrapWeight.toFixed(4)}</td>
+                                      <td className="p-3 pr-3.5 text-right font-black text-blue-800">
+                                        {d.hasBOM ? `${d.itemBomYield.toFixed(2)}%` : '-'}
+                                      </td>
+                                    </tr>
+                                  ))
+                                ) : (
+                                  <tr>
+                                    <td colSpan={9} className="p-5 text-center text-gray-500 font-bold italic">
+                                      Không có linh kiện nào phát sinh tại kho OUT Cắt Laser trong 35 ngày qua.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Table 2: Chi tiết phế phẩm lỗi KHO_NG */}
+                        <div>
+                          <div className="flex items-center justify-between mb-2.5 flex-wrap gap-2">
+                            <h4 className="text-xs sm:text-sm font-black uppercase tracking-wider text-gray-900 flex items-center gap-1.5">
+                              <AlertCircle size={16} className="text-rose-700" />
+                              <span>Chi tiết Hàng lỗi / Phế NG tại KHO_NG Cắt Laser ({laserYieldReport.defectDetails.length} mục)</span>
+                            </h4>
+                            <span className="text-xs sm:text-sm text-gray-700 font-bold">
+                              Tổng khối lượng lỗi W_ng (KHO_NG): <b className="text-rose-800 font-black">{laserYieldReport.W_ng.toFixed(4)} kg</b>
+                            </span>
+                          </div>
+
+                          <div className="bg-white rounded-xl border-2 border-gray-200 overflow-x-auto shadow-2xs">
+                            <table className="w-full text-left text-xs sm:text-sm border-collapse">
+                              <thead>
+                                <tr className="bg-gray-100 border-b-2 border-gray-300 uppercase text-gray-800 text-[11px] sm:text-xs font-black">
+                                  <th className="p-3 pl-3.5">Mã linh kiện lỗi</th>
+                                  <th className="p-3">Tên linh kiện / Tôn tấm</th>
+                                  <th className="p-3">Phân loại</th>
+                                  <th className="p-3 text-right">Số lượng lỗi</th>
+                                  <th className="p-3 pr-3.5 text-right text-rose-800">Khối lượng lỗi W_ng (KG)</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 font-bold">
+                                {laserYieldReport.defectDetails.length > 0 ? (
+                                  laserYieldReport.defectDetails.map((d, idx) => (
+                                    <tr key={idx} className="hover:bg-rose-50/40 transition-colors">
+                                      <td className="p-3 pl-3.5 font-black text-gray-950">{d.partId}</td>
+                                      <td className="p-3 text-gray-800">{d.partName}</td>
+                                      <td className="p-3">
+                                        <span className={cn(
+                                          "px-2 py-0.5 rounded text-[11px] font-black",
+                                          d.isRawSheet ? "bg-amber-100 text-amber-900 border border-amber-300" : "bg-blue-100 text-blue-900 border border-blue-300"
+                                        )}>
+                                          {d.isRawSheet ? 'Tôn tấm phôi' : 'Linh kiện dập/cắt'}
+                                        </span>
+                                      </td>
+                                      <td className="p-3 text-right font-black text-gray-950">
+                                        {d.quantity} {d.unit}
+                                      </td>
+                                      <td className="p-3 pr-3.5 text-right font-black text-rose-800">
+                                        {d.weightKg.toFixed(4)}
+                                      </td>
+                                    </tr>
+                                  ))
+                                ) : (
+                                  <tr>
+                                    <td colSpan={5} className="p-5 text-center text-gray-500 font-bold italic">
+                                      Không có hàng lỗi ghi nhận tại KHO_NG Cắt Laser.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mb-4 sm:mb-8 p-4 sm:p-6 bg-gradient-to-r from-amber-50/90 via-amber-50/40 to-orange-50/60 border-2 border-amber-300 rounded-xl sm:rounded-2xl shadow-sm">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div className="flex items-center gap-3.5">
                       <div className="p-3 bg-amber-500 text-white rounded-xl shadow-sm shrink-0">
@@ -6474,7 +7185,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                     )}
                   </div>
                 </div>
-              )}
+              </>
+            )}
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-8">
                 {/* KHO_IN Detail */}
