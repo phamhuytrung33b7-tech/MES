@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, UserAccount, View } from './types';
+import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, UserAccount, View, DeletedPOBackup, POSnapshot } from './types';
 import { format, addMilliseconds, setHours, setMinutes, setSeconds, getHours, getMinutes, isBefore, isAfter, startOfDay, addDays } from 'date-fns';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
@@ -39,6 +39,9 @@ const STORAGE_KEYS = {
   PAINTING_HSQD: 'wip_painting_hsqd',
   STAGE_PLANNED_WORKERS: 'wip_stage_planned_workers',
   USERS: 'wip_users',
+  ADMIN_ACTION_PASSWORD: 'wip_admin_action_password',
+  DELETED_PO_BACKUPS: 'wip_deleted_po_backups',
+  PO_SNAPSHOTS: 'wip_po_snapshots',
   DATA_RESET_VERSION: 'data_reset_version',
 };
 
@@ -389,6 +392,10 @@ function clearCache(key?: string) {
 let lastRemoteInitTime = 0;
 const REMOTE_INIT_COOLDOWN_MS = 60000; // 60s cooldown between full Supabase table queries
 
+export const HOURLY_DAY_SLOTS = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h'];
+export const HOURLY_NIGHT_SLOTS = ['19h-21h', '21h-23h', '23h-0h', '1h-3h', '3h-5h', '5h-6h'];
+export const ALL_HOURLY_TIME_SLOTS = [...HOURLY_DAY_SLOTS, ...HOURLY_NIGHT_SLOTS];
+
 export const storageService = {
   normalize(s: string): string {
     if (!s) return '';
@@ -621,6 +628,61 @@ export const storageService = {
     localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
     cache[STORAGE_KEYS.USERS] = users;
     queueConfigPersist(STORAGE_KEYS.USERS, users);
+  },
+
+  getAdminActionPassword(): string {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.ADMIN_ACTION_PASSWORD);
+      if (saved && saved.trim()) return saved.trim();
+    } catch {}
+    return 'admin123';
+  },
+
+  setAdminActionPassword(newPassword: string): void {
+    const trimmed = (newPassword || '').trim();
+    if (!trimmed) throw new Error('Mật khẩu quản trị không được để trống!');
+    localStorage.setItem(STORAGE_KEYS.ADMIN_ACTION_PASSWORD, trimmed);
+    cache[STORAGE_KEYS.ADMIN_ACTION_PASSWORD] = trimmed;
+    queueConfigPersist(STORAGE_KEYS.ADMIN_ACTION_PASSWORD, trimmed);
+
+    // Đồng bộ mật khẩu cho tài khoản admin mặc định nếu có
+    try {
+      const users = this.getUsers();
+      const adminUser = users.find(u => u.username === 'admin');
+      if (adminUser) {
+        adminUser.password = trimmed;
+        this.saveUsers(users);
+      }
+    } catch {}
+  },
+
+  verifyAdminPassword(input: string | null | undefined, currentUser?: UserAccount | null): boolean {
+    if (!input) return false;
+    const trimmed = input.trim();
+    if (!trimmed) return false;
+
+    // 1. Khớp mật khẩu thao tác hiện hành
+    const configuredPwd = this.getAdminActionPassword();
+    if (trimmed === configuredPwd) return true;
+
+    // 2. Fallback mật khẩu mặc định admin123
+    if (trimmed === 'admin123') return true;
+
+    // 3. Khớp mật khẩu của tài khoản Admin hiện đang đăng nhập
+    if (currentUser && currentUser.role === 'ADMIN' && currentUser.password && trimmed === currentUser.password) {
+      return true;
+    }
+
+    // 4. Khớp với bất kỳ tài khoản ADMIN nào trong hệ thống
+    try {
+      const users = this.getUsers();
+      const adminAccounts = users.filter(u => u.role === 'ADMIN' && u.isActive !== false);
+      if (adminAccounts.some(a => a.password && a.password === trimmed)) {
+        return true;
+      }
+    } catch {}
+
+    return false;
   },
 
   getCurrentUser(): UserAccount | null {
@@ -889,19 +951,27 @@ export const storageService = {
   },
 
   _resolveHourlyData(rawData: Record<string, number>, date?: string): Record<string, number> {
-    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
     if (!date) {
       return {};
     }
 
     // Mỗi ngày bắt điền mới, không tự động lưu/kế thừa người của ngày trước
     const explicit: Record<string, number> = {};
-    timeSlots.forEach(slot => {
+    ALL_HOURLY_TIME_SLOTS.forEach(slot => {
       const key = `${date}_${slot}`;
       if (rawData[key] !== undefined) {
         explicit[slot] = rawData[key];
       }
     });
+
+    // Tương thích ngược nếu trước đó đã lưu khung giờ ca đêm cũ
+    if (explicit['19h-21h'] === undefined && rawData[`${date}_19h-20h`] !== undefined) explicit['19h-21h'] = rawData[`${date}_19h-20h`];
+    if (explicit['21h-23h'] === undefined && rawData[`${date}_20h-22h`] !== undefined) explicit['21h-23h'] = rawData[`${date}_20h-22h`];
+    if (explicit['23h-0h'] === undefined && rawData[`${date}_22h-0h`] !== undefined) explicit['23h-0h'] = rawData[`${date}_22h-0h`];
+    if (explicit['1h-3h'] === undefined && rawData[`${date}_0h-2h`] !== undefined) explicit['1h-3h'] = rawData[`${date}_0h-2h`];
+    if (explicit['3h-5h'] === undefined && rawData[`${date}_2h-4h`] !== undefined) explicit['3h-5h'] = rawData[`${date}_2h-4h`];
+    if (explicit['5h-6h'] === undefined && rawData[`${date}_4h-6h`] !== undefined) explicit['5h-6h'] = rawData[`${date}_4h-6h`];
+
     return explicit;
   },
 
@@ -919,7 +989,7 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
-    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
+    const timeSlots = ALL_HOURLY_TIME_SLOTS;
     if (date) {
       timeSlots.forEach(slot => {
         const val = record[slot];
@@ -951,7 +1021,7 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
-    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
+    const timeSlots = ALL_HOURLY_TIME_SLOTS;
     if (date) {
       timeSlots.forEach(slot => {
         const val = record[slot];
@@ -983,7 +1053,7 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
-    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
+    const timeSlots = ALL_HOURLY_TIME_SLOTS;
     if (date) {
       timeSlots.forEach(slot => {
         const val = record[slot];
@@ -1015,7 +1085,7 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
-    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
+    const timeSlots = ALL_HOURLY_TIME_SLOTS;
     if (date) {
       timeSlots.forEach(slot => {
         const val = record[slot];
@@ -1047,7 +1117,7 @@ export const storageService = {
       return data ? JSON.parse(data) : {};
     });
     const updated = { ...rawData };
-    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
+    const timeSlots = ALL_HOURLY_TIME_SLOTS;
     if (date) {
       timeSlots.forEach(slot => {
         const val = record[slot];
@@ -1071,7 +1141,7 @@ export const storageService = {
     const welding = this.getHourlyPeopleWelding(date);
     const painting = this.getHourlyPeoplePainting(date);
     const glazing = this.getHourlyPeopleGlazing(date);
-    const timeSlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
+    const timeSlots = ALL_HOURLY_TIME_SLOTS;
     let totalPeople = 0;
     let validSlots = 0;
     timeSlots.forEach(slot => {
@@ -1102,9 +1172,9 @@ export const storageService = {
     else if (stageId === 'GLAZING') hourly = this.getHourlyPeopleGlazing(date);
 
     // Khung giờ 6h sáng đến 19h tối (ca ngày)
-    const daySlots = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h'];
+    const daySlots = HOURLY_DAY_SLOTS;
     // Khung giờ 19h tối đến 6h sáng (ca đêm)
-    const nightSlots = ['19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'];
+    const nightSlots = HOURLY_NIGHT_SLOTS;
 
     let dayTotal = 0;
     let dayCount = 0;
@@ -1200,12 +1270,12 @@ export const storageService = {
       { slot: '13h-15h', hours: 2 },
       { slot: '15h-17h', hours: 2 },
       { slot: '17h-19h', hours: 2 },
-      { slot: '19h-20h', hours: 1 },
-      { slot: '20h-22h', hours: 2 },
-      { slot: '22h-0h', hours: 2 },
-      { slot: '0h-2h', hours: 2 },
-      { slot: '2h-4h', hours: 2 },
-      { slot: '4h-6h', hours: 2 }
+      { slot: '19h-21h', hours: 2 },
+      { slot: '21h-23h', hours: 2 },
+      { slot: '23h-0h', hours: 1 },
+      { slot: '1h-3h', hours: 2 },
+      { slot: '3h-5h', hours: 2 },
+      { slot: '5h-6h', hours: 1 }
     ];
 
     let totalMandays = 0;
@@ -1429,11 +1499,62 @@ export const storageService = {
   },
 
   getInventory(): InventoryItem[] {
-    const data = getCached(STORAGE_KEYS.INVENTORY, () => {
+    const rawData = getCached(STORAGE_KEYS.INVENTORY, () => {
       const data = localStorage.getItem(STORAGE_KEYS.INVENTORY);
       return data ? JSON.parse(data) : [];
     });
-    return [...data];
+
+    // Auto-heal / repair inventory items where partId was incorrectly recorded as a PO ID
+    let hasRepaired = false;
+    const cleanInventory: InventoryItem[] = [];
+    const pos = this.getProductionOrders();
+    const parts = this.getParts();
+
+    for (const item of rawData) {
+      if (!item) continue;
+      let targetPartId = item.partId;
+
+      if (targetPartId && (targetPartId.startsWith('PO-') || targetPartId.startsWith('REPAIR-'))) {
+        hasRepaired = true;
+        const cleanPoSearch = targetPartId.replace(/\s*-\s*(CD|H|S|C|GLZ|OUT|IN)$/i, '').trim();
+        const foundPo = pos.find(p => p.id === cleanPoSearch || p.id.startsWith(cleanPoSearch) || cleanPoSearch.startsWith(p.id));
+        if (foundPo && foundPo.partId) {
+          targetPartId = foundPo.partId;
+        } else {
+          // If PO not found, check if part catalog has a match or partId has part code
+          const matchedCatalog = parts.find(p => cleanPoSearch.includes(p.id) || cleanPoSearch.includes(p.name));
+          if (matchedCatalog) {
+            targetPartId = matchedCatalog.id;
+          }
+        }
+      }
+
+      // Merge duplicate entries
+      const existing = cleanInventory.find(i => 
+        i.partId.toUpperCase().trim() === targetPartId.toUpperCase().trim() && 
+        i.stageId === item.stageId && 
+        i.location === item.location && 
+        (i.originalPartId || '').toUpperCase().trim() === (item.originalPartId || '').toUpperCase().trim()
+      );
+
+      if (existing) {
+        existing.quantity += item.quantity;
+        existing.quantity = Math.round(existing.quantity * 10000) / 10000;
+      } else {
+        cleanInventory.push({ 
+          ...item, 
+          partId: targetPartId 
+        });
+      }
+    }
+
+    if (hasRepaired) {
+      localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify(cleanInventory));
+      cache[STORAGE_KEYS.INVENTORY] = cleanInventory;
+      return cleanInventory;
+    }
+
+    return [...cleanInventory];
   },
 
   getTransactions(): Transaction[] {
@@ -1787,6 +1908,16 @@ export const storageService = {
   },
 
   updateInventory(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', delta: number, originalPartId?: string) {
+    // Guard: Prevent saving PO IDs as inventory part IDs
+    if (partId && (partId.startsWith('PO-') || partId.startsWith('REPAIR-'))) {
+      const pos = this.getProductionOrders();
+      const cleanPoSearch = partId.replace(/\s*-\s*(CD|H|S|C|GLZ|OUT|IN)$/i, '').trim();
+      const poObj = pos.find(p => p.id === cleanPoSearch || p.id.startsWith(cleanPoSearch) || cleanPoSearch.startsWith(p.id));
+      if (poObj && poObj.partId) {
+        partId = poObj.partId;
+      }
+    }
+
     const inventory = this.getInventory();
     const parts = this.getParts();
     
@@ -2299,8 +2430,8 @@ export const storageService = {
       throw new Error('Định dạng mã QR không hợp lệ hoặc không phải mã xuất kho OUT.');
     }
     
-    // Format: poIdOrPartId|quantity|sourceStageId|timestamp|txId|targetStageId
-    const [idOrPo, quantityStr, sourceStageId, , sourceTxId, targetStageId] = parts;
+    // Format: poIdOrPartId|quantity|sourceStageId|timestamp|txId|targetStageId|effectiveId|masterPoId...
+    const [idOrPo, quantityStr, sourceStageId, , sourceTxId, targetStageId, rawEffectiveId] = parts;
 
     if (idOrPo === 'DISPOSAL') {
       throw new Error('Lỗi: Đây là mã QR XUẤT HỦY. Hàng này không thể nhập lại vào kho sản xuất!');
@@ -2308,18 +2439,66 @@ export const storageService = {
 
     const quantity = parseFloat(quantityStr);
 
-    let partId = idOrPo.startsWith('GLZ-OUT-') ? idOrPo : idOrPo.split(' - ')[0];
     let linkedPoId: string | undefined;
+    let explicitPartId: string | undefined;
 
     // Recognize PO IDs (PO- or REPAIR-)
     if (idOrPo.startsWith('PO-') || idOrPo.startsWith('REPAIR-')) {
-      linkedPoId = idOrPo;
-      const pos = this.getProductionOrders();
-      const po = pos.find(p => p.id === idOrPo);
-      if (po) {
-        partId = po.partId;
+      linkedPoId = idOrPo.replace(/\s*-\s*(CD|H|S|C|GLZ|OUT|IN)$/i, '').trim();
+    }
+
+    // 1. Try explicit rawEffectiveId from field 6 of QR data if available and not a PO ID
+    if (rawEffectiveId && !rawEffectiveId.startsWith('PO-') && !rawEffectiveId.startsWith('REPAIR-')) {
+      explicitPartId = rawEffectiveId.startsWith('GLZ-OUT-') ? rawEffectiveId.trim() : rawEffectiveId.split(' - ')[0].trim();
+    }
+
+    // 2. Try looking up the source transaction by sourceTxId (field 4) in transaction history
+    const allTxs = this.getTransactions();
+    const sourceTx = sourceTxId ? allTxs.find(t => t.id === sourceTxId) : undefined;
+    if (sourceTx && sourceTx.partId && !sourceTx.partId.startsWith('PO-') && !sourceTx.partId.startsWith('REPAIR-')) {
+      explicitPartId = sourceTx.partId.startsWith('GLZ-OUT-') ? sourceTx.partId.trim() : sourceTx.partId.split(' - ')[0].trim();
+      if (!linkedPoId && sourceTx.poId) {
+        linkedPoId = sourceTx.poId;
       }
     }
+
+    // 3. Try finding PO in Production Orders catalog
+    const pos = this.getProductionOrders();
+    let foundPo = linkedPoId ? pos.find(p => p.id === linkedPoId) : undefined;
+    if (!foundPo && (idOrPo.startsWith('PO-') || idOrPo.startsWith('REPAIR-'))) {
+      const cleanPoSearch = idOrPo.replace(/\s*-\s*(CD|H|S|C|GLZ|OUT|IN)$/i, '').trim();
+      foundPo = pos.find(p => p.id === cleanPoSearch || p.id.startsWith(cleanPoSearch) || cleanPoSearch.startsWith(p.id));
+    }
+
+    if (foundPo) {
+      linkedPoId = foundPo.id;
+      if (!explicitPartId) {
+        explicitPartId = foundPo.partId;
+      }
+    }
+
+    // 4. Fallback: if explicitPartId still not set and idOrPo is a real part ID
+    if (!explicitPartId) {
+      if (!idOrPo.startsWith('PO-') && !idOrPo.startsWith('REPAIR-')) {
+        explicitPartId = idOrPo.startsWith('GLZ-OUT-') ? idOrPo.trim() : idOrPo.split(' - ')[0].trim();
+      }
+    }
+
+    // 5. Final Catalog Lookup Guard
+    if (explicitPartId) {
+      const partsCatalog = this.getParts();
+      const matchCatalog = partsCatalog.find(p => p.id.toUpperCase() === explicitPartId!.toUpperCase() || p.name.toUpperCase().trim() === explicitPartId!.toUpperCase());
+      if (matchCatalog) {
+        explicitPartId = matchCatalog.id;
+      }
+    }
+
+    // 6. Absolute Guard: Fail if explicitPartId is still a PO ID or missing
+    if (!explicitPartId || explicitPartId.startsWith('PO-') || explicitPartId.startsWith('REPAIR-')) {
+      throw new Error(`Lỗi: Không tìm thấy mã linh kiện thực tế ứng với Lệnh Sản Xuất [${idOrPo}]. Vui lòng kiểm tra lại Lệnh Sản Xuất!`);
+    }
+
+    let partId = explicitPartId;
 
     // 1. Check if this QR (Transaction ID) has already been scanned
     const transactions = this.getTransactions();
@@ -3700,12 +3879,178 @@ export const storageService = {
     return { success: true };
   },
 
-  deletePO(id: string) {
+  getDeletedPOBackups(): DeletedPOBackup[] {
+    return getCached(STORAGE_KEYS.DELETED_PO_BACKUPS, () => {
+      try {
+        const data = localStorage.getItem(STORAGE_KEYS.DELETED_PO_BACKUPS);
+        if (data) return JSON.parse(data);
+      } catch {}
+      return [];
+    });
+  },
+
+  saveDeletedPOBackups(backups: DeletedPOBackup[]): void {
+    localStorage.setItem(STORAGE_KEYS.DELETED_PO_BACKUPS, JSON.stringify(backups));
+    cache[STORAGE_KEYS.DELETED_PO_BACKUPS] = backups;
+    queueConfigPersist(STORAGE_KEYS.DELETED_PO_BACKUPS, backups);
+  },
+
+  addDeletedPOBackup(backup: DeletedPOBackup): void {
+    const list = this.getDeletedPOBackups();
+    const updated = [backup, ...list.filter(b => b.id !== backup.id)].slice(0, 100);
+    this.saveDeletedPOBackups(updated);
+  },
+
+  deletePO(id: string, deletedBy?: string): { success: boolean; backedUp: boolean } {
     const pos = this.getProductionOrders();
-    // If it's a master PO, delete all its children too
+    const target = pos.find(p => p.id === id);
+    if (!target) return { success: false, backedUp: false };
+
+    // Tìm tất cả các PO con thuộc master PO này (nếu có)
+    const children = pos.filter(p => p.masterPoId === id);
+
+    // 1. NON-DESTRUCTIVE BACKUP: Tự động sao lưu toàn bộ thông tin PO trước khi xóa để hỗ trợ Rollback
+    try {
+      const backup: DeletedPOBackup = {
+        id: 'del_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+        timestamp: Date.now(),
+        deletedAtStr: format(new Date(), 'HH:mm:ss dd/MM/yyyy'),
+        deletedBy: deletedBy || 'Admin',
+        masterPo: { ...target },
+        childPos: children.map(c => ({ ...c })),
+        isOddPO: !!target.isOddPO
+      };
+      this.addDeletedPOBackup(backup);
+    } catch (err) {
+      console.error('[PO Rollback] Lỗi khi tạo backup PO trước khi xóa:', err);
+    }
+
+    // 2. Xóa khỏi danh sách PO hoạt động
     const filtered = pos.filter(p => p.id !== id && p.masterPoId !== id);
     this.saveProductionOrders(filtered);
     deletePOFromSupabase(id);
+
+    return { success: true, backedUp: true };
+  },
+
+  restoreDeletedPO(backupId: string): { success: boolean; restoredCount: number; message: string } {
+    const backups = this.getDeletedPOBackups();
+    const bIndex = backups.findIndex(b => b.id === backupId);
+    if (bIndex === -1) {
+      return { success: false, restoredCount: 0, message: 'Không tìm thấy bản sao lưu PO này trong thùng rác!' };
+    }
+
+    const backup = backups[bIndex];
+    const pos = this.getProductionOrders();
+    const ordersToRestore: ProductionOrder[] = [backup.masterPo, ...(backup.childPos || [])];
+
+    const existingIds = new Set(pos.map(p => p.id));
+    const newOrdersToAdd: ProductionOrder[] = [];
+
+    for (const order of ordersToRestore) {
+      if (!existingIds.has(order.id)) {
+        newOrdersToAdd.push(order);
+        existingIds.add(order.id);
+      }
+    }
+
+    const newPos = [...pos, ...newOrdersToAdd];
+    this.saveProductionOrders(newPos);
+    persistProductionOrdersToSupabase(newOrdersToAdd);
+
+    // Xóa khỏi danh sách sao lưu sau khi đã khôi phục thành công
+    backups.splice(bIndex, 1);
+    this.saveDeletedPOBackups(backups);
+
+    return {
+      success: true,
+      restoredCount: newOrdersToAdd.length,
+      message: `Đã khôi phục thành công PO ${backup.masterPo.id} và ${backup.childPos?.length || 0} công đoạn con!`
+    };
+  },
+
+  restoreAllDeletedPOs(): { success: boolean; restoredCount: number; message: string } {
+    const backups = this.getDeletedPOBackups();
+    if (backups.length === 0) {
+      return { success: false, restoredCount: 0, message: 'Thùng rác trống, không có PO nào cần khôi phục!' };
+    }
+
+    const pos = this.getProductionOrders();
+    const existingIds = new Set(pos.map(p => p.id));
+    const newOrdersToAdd: ProductionOrder[] = [];
+
+    for (const backup of backups) {
+      const ordersToRestore: ProductionOrder[] = [backup.masterPo, ...(backup.childPos || [])];
+      for (const order of ordersToRestore) {
+        if (!existingIds.has(order.id)) {
+          newOrdersToAdd.push(order);
+          existingIds.add(order.id);
+        }
+      }
+    }
+
+    const newPos = [...pos, ...newOrdersToAdd];
+    this.saveProductionOrders(newPos);
+    persistProductionOrdersToSupabase(newOrdersToAdd);
+
+    // Làm sạch thùng rác
+    this.saveDeletedPOBackups([]);
+
+    return {
+      success: true,
+      restoredCount: newOrdersToAdd.length,
+      message: `Đã khôi phục toàn bộ ${backups.length} lệnh sản xuất từ thùng rác (${newOrdersToAdd.length} PO con/tổng)!`
+    };
+  },
+
+  clearDeletedPOBackups(): void {
+    this.saveDeletedPOBackups([]);
+  },
+
+  getPOSnapshots(): POSnapshot[] {
+    return getCached(STORAGE_KEYS.PO_SNAPSHOTS, () => {
+      try {
+        const data = localStorage.getItem(STORAGE_KEYS.PO_SNAPSHOTS);
+        if (data) return JSON.parse(data);
+      } catch {}
+      return [];
+    });
+  },
+
+  savePOSnapshots(snapshots: POSnapshot[]): void {
+    localStorage.setItem(STORAGE_KEYS.PO_SNAPSHOTS, JSON.stringify(snapshots));
+    cache[STORAGE_KEYS.PO_SNAPSHOTS] = snapshots;
+    queueConfigPersist(STORAGE_KEYS.PO_SNAPSHOTS, snapshots);
+  },
+
+  takePOSnapshot(label?: string, creator?: string): POSnapshot {
+    const pos = this.getProductionOrders();
+    const snapshot: POSnapshot = {
+      id: 'snap_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      timestamp: Date.now(),
+      createdAtStr: format(new Date(), 'HH:mm:ss dd/MM/yyyy'),
+      label: label || `Bản chụp ${pos.length} lệnh sản xuất`,
+      creator: creator || 'Hệ thống',
+      poCount: pos.length,
+      orders: JSON.parse(JSON.stringify(pos))
+    };
+    const list = this.getPOSnapshots();
+    const updated = [snapshot, ...list].slice(0, 20);
+    this.savePOSnapshots(updated);
+    return snapshot;
+  },
+
+  rollbackPOSnapshot(snapshotId: string): { success: boolean; message: string } {
+    const snapshots = this.getPOSnapshots();
+    const snap = snapshots.find(s => s.id === snapshotId);
+    if (!snap) return { success: false, message: 'Không tìm thấy bản chụp dữ liệu này!' };
+
+    // Tự động chụp trạng thái hiện tại trước khi khôi phục
+    this.takePOSnapshot(`Tự động lưu trước khi Rollback về [${snap.label}]`);
+
+    this.saveProductionOrders(snap.orders);
+    persistProductionOrdersToSupabase(snap.orders);
+    return { success: true, message: `Đã rollback về bản chụp "${snap.label}" (${snap.poCount} PO) thành công!` };
   },
 
   clearStageInventory(stageId: StageId, location: 'IN' | 'OUT') {

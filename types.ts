@@ -287,3 +287,24 @@ export const AVAILABLE_TABS: TabPermissionConfig[] = [
   { key: 'odd_po', label: 'PO dư lẻ', description: 'Quản lý các lệnh sản xuất dư thừa, lẻ theo công đoạn', category: 'planning' },
   { key: 'settings', label: 'Cài đặt & Sao lưu dữ liệu', description: 'Quản lý BOM, danh mục vật tư, sao lưu và đồng bộ Cloud', category: 'system' },
 ];
+
+export interface DeletedPOBackup {
+  id: string;
+  timestamp: number;
+  deletedAtStr: string;
+  deletedBy?: string;
+  masterPo: ProductionOrder;
+  childPos: ProductionOrder[];
+  isOddPO?: boolean;
+}
+
+export interface POSnapshot {
+  id: string;
+  timestamp: number;
+  createdAtStr: string;
+  label: string;
+  creator?: string;
+  poCount: number;
+  orders: ProductionOrder[];
+}
+

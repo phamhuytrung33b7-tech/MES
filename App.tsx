@@ -84,8 +84,8 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import { STAGES, INITIAL_PARTS, StageId, Part, InventoryItem, Transaction, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, DEFECT_REASONS, StagePlannedWorkers, UserAccount, View, getUserDefaultStage } from './types';
-import { storageService } from './storage';
+import { STAGES, INITIAL_PARTS, StageId, Part, InventoryItem, Transaction, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, DEFECT_REASONS, StagePlannedWorkers, UserAccount, View, getUserDefaultStage, DeletedPOBackup, POSnapshot } from './types';
+import { storageService, HOURLY_DAY_SLOTS, HOURLY_NIGHT_SLOTS, ALL_HOURLY_TIME_SLOTS } from './storage';
 import { supabase, SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection, isSupabaseConfigured } from './supabaseClient';
 import { exportPreparationReport } from './exportPreparationReport';
 import { exportDetailedProductionPlan } from './exportDetailedPlan';
@@ -93,7 +93,7 @@ import { importExcelToPO, downloadSamplePOExcelTemplate, MissingBomModelInfo } f
 import { downloadNormTemplate } from './downloadNormTemplate';
 import { MobileQRScannerModal } from './MobileQRScanner';
 import { importExcelToGlazingPlan, MissingNormModelInfo } from './importExcelToGlazingPlan';
-import { UserManagementView, LoginModal, ChangePasswordModal } from './UserManagement';
+import { UserManagementView, LoginModal, ChangePasswordModal, AdminActionPasswordModal } from './UserManagement';
 import { smartFuzzySearch, normalizeVietnamese, buildSearchIndex, searchIndexedItems } from './search';
 
 // Utility for tailwind classes
@@ -2190,7 +2190,400 @@ interface DashboardProps {
   key?: string;
 }
 
-function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOddPO }: { parts: Part[], onUpdate: () => void, productionOrders: ProductionOrder[], onNavigateToOddPO?: () => void }) {
+// ==============================================================================
+// MODAL: KHÔI PHỤC & ROLLBACK LỆNH SẢN XUẤT (PO RECYCLE BIN & SNAPSHOTS)
+// ==============================================================================
+interface PORollbackModalProps {
+  parts: Part[];
+  currentUser?: UserAccount | null;
+  onClose: () => void;
+  onRestored: () => void;
+}
+
+function PORollbackModal({ parts, currentUser, onClose, onRestored }: PORollbackModalProps) {
+  const [activeTab, setActiveTab] = useState<'TRASH' | 'SNAPSHOTS'>('TRASH');
+  const [backups, setBackups] = useState<DeletedPOBackup[]>(() => storageService.getDeletedPOBackups());
+  const [snapshots, setSnapshots] = useState<POSnapshot[]>(() => storageService.getPOSnapshots());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [newSnapshotLabel, setNewSnapshotLabel] = useState('');
+  const [showCreateSnapshot, setShowCreateSnapshot] = useState(false);
+
+  const reloadData = () => {
+    setBackups(storageService.getDeletedPOBackups());
+    setSnapshots(storageService.getPOSnapshots());
+  };
+
+  const handleRestoreOne = async (backup: DeletedPOBackup) => {
+    const pwd = await customPrompt(`Nhập mật khẩu Admin để khôi phục PO ${backup.masterPo.id}:`, '', true);
+    if (!storageService.verifyAdminPassword(pwd, currentUser)) {
+      if (pwd !== null) await customAlert('Mật khẩu quản trị không chính xác!');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = storageService.restoreDeletedPO(backup.id);
+      if (res.success) {
+        await customAlert(res.message);
+        reloadData();
+        onRestored();
+      } else {
+        await customAlert(res.message);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRestoreAll = async () => {
+    if (backups.length === 0) return;
+    const pwd = await customPrompt(`BẠN ĐANG CHỌN KHÔI PHỤC TẤT CẢ ${backups.length} PO TỪ THÙNG RÁC.\nNhập mật khẩu quản trị để tiếp tục:`, '', true);
+    if (!storageService.verifyAdminPassword(pwd, currentUser)) {
+      if (pwd !== null) await customAlert('Mật khẩu quản trị không chính xác!');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = storageService.restoreAllDeletedPOs();
+      await customAlert(res.message);
+      reloadData();
+      onRestored();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleClearTrash = async () => {
+    if (backups.length === 0) return;
+    const pwd = await customPrompt('CẢNH BÁO: Dọn sạch thùng rác sẽ xóa vĩnh viễn các bản ghi sao lưu!\nNhập mật khẩu Admin để xóa vĩnh viễn:', '', true);
+    if (!storageService.verifyAdminPassword(pwd, currentUser)) {
+      if (pwd !== null) await customAlert('Mật khẩu quản trị không chính xác!');
+      return;
+    }
+    storageService.clearDeletedPOBackups();
+    reloadData();
+    await customAlert('Đã làm sạch thùng rác sao lưu PO!');
+  };
+
+  const handleCreateSnapshot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSnapshotLabel.trim()) return;
+    const creator = currentUser?.fullName || currentUser?.username || 'Quản trị viên';
+    storageService.takePOSnapshot(newSnapshotLabel.trim(), creator);
+    setNewSnapshotLabel('');
+    setShowCreateSnapshot(false);
+    reloadData();
+    await customAlert('Đã tạo điểm chụp an toàn (Snapshot) cho các lệnh sản xuất hiện tại thành công!');
+  };
+
+  const handleRollbackSnapshot = async (snap: POSnapshot) => {
+    const pwd = await customPrompt(`BẠN ĐANG CHỌN ROLLBACK HỆ THỐNG VỀ BẢN CHỤP: "${snap.label}".\nTất cả PO hiện tại sẽ được thay thế bằng danh sách trong bản chụp này (${snap.poCount} PO).\nNhập mật khẩu quản trị để xác nhận:`, '', true);
+    if (!storageService.verifyAdminPassword(pwd, currentUser)) {
+      if (pwd !== null) await customAlert('Mật khẩu quản trị không chính xác!');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const res = storageService.rollbackPOSnapshot(snap.id);
+      if (res.success) {
+        await customAlert(res.message);
+        reloadData();
+        onRestored();
+      } else {
+        await customAlert(res.message);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const filteredBackups = useMemo(() => {
+    return backups.filter(b => {
+      const query = searchTerm.toLowerCase();
+      const pName = (parts.find(p => p.id === b.masterPo.partId)?.name || '').toLowerCase();
+      return b.masterPo.id.toLowerCase().includes(query) ||
+             b.masterPo.partId.toLowerCase().includes(query) ||
+             pName.includes(query) ||
+             (b.deletedBy && b.deletedBy.toLowerCase().includes(query));
+    });
+  }, [backups, searchTerm, parts]);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[100] flex items-center justify-center p-3 sm:p-6">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white rounded-3xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-gray-100 overflow-hidden"
+      >
+        {/* Header */}
+        <div className="p-6 bg-gradient-to-r from-gray-900 via-rose-950 to-gray-900 text-white flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/20 border border-rose-500/40 text-rose-400 flex items-center justify-center">
+              <RotateCcw size={24} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-black">Khôi Phục & Rollback Lệnh Sản Xuất (PO)</h2>
+                <span className="bg-rose-500/30 text-rose-300 text-xs font-bold px-2.5 py-0.5 rounded-full border border-rose-400/30">
+                  An toàn chống xóa nhầm
+                </span>
+              </div>
+              <p className="text-xs text-gray-300 mt-1">
+                Tự động lưu trữ các PO đã xóa. Khi cần có thể Rollback hoặc khôi phục 1 chạm về hệ thống.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2.5 text-gray-400 hover:text-white rounded-xl hover:bg-white/10 transition-colors cursor-pointer"
+          >
+            <X size={22} />
+          </button>
+        </div>
+
+        {/* Tab switcher */}
+        <div className="bg-gray-50 px-6 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setActiveTab('TRASH')}
+              className={cn(
+                "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer",
+                activeTab === 'TRASH' ? "bg-rose-600 text-white shadow-sm" : "bg-white text-gray-700 hover:bg-gray-100 border border-gray-200"
+              )}
+            >
+              <Trash2 size={15} />
+              <span>Thùng rác PO đã xóa ({backups.length})</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('SNAPSHOTS')}
+              className={cn(
+                "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer",
+                activeTab === 'SNAPSHOTS' ? "bg-blue-600 text-white shadow-sm" : "bg-white text-gray-700 hover:bg-gray-100 border border-gray-200"
+              )}
+            >
+              <Database size={15} />
+              <span>Bản chụp an toàn (Snapshots) ({snapshots.length})</span>
+            </button>
+          </div>
+
+          {activeTab === 'TRASH' && backups.length > 0 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleRestoreAll}
+                disabled={isProcessing}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <RotateCcw size={14} />
+                <span>Khôi phục tất cả ({backups.length})</span>
+              </button>
+              <button
+                onClick={handleClearTrash}
+                disabled={isProcessing}
+                className="px-3 py-2 bg-gray-200 hover:bg-rose-100 hover:text-rose-700 text-gray-700 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Xóa vĩnh viễn thùng rác"
+              >
+                <Trash2 size={14} />
+                <span>Dọn sạch</span>
+              </button>
+            </div>
+          )}
+
+          {activeTab === 'SNAPSHOTS' && (
+            <button
+              onClick={() => setShowCreateSnapshot(!showCreateSnapshot)}
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus size={14} />
+              <span>Tạo bản chụp mới</span>
+            </button>
+          )}
+        </div>
+
+        {/* Content body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {activeTab === 'TRASH' ? (
+            <>
+              {backups.length > 0 && (
+                <div className="relative">
+                  <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Tìm theo mã PO, tên model hoặc người xóa..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                  />
+                </div>
+              )}
+
+              {filteredBackups.length === 0 ? (
+                <div className="py-16 text-center text-gray-400">
+                  <Trash2 size={48} className="mx-auto mb-3 opacity-30 text-rose-500" />
+                  <p className="font-bold text-gray-600">Thùng rác PO hiện đang trống</p>
+                  <p className="text-xs text-gray-400 mt-1">Khi bạn xóa bất kỳ PO tổng hoặc PO lẻ nào, hệ thống sẽ lưu vào đây để bảo toàn dữ liệu.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filteredBackups.map(backup => {
+                    const master = backup.masterPo;
+                    const partName = parts.find(p => p.id === master.partId)?.name || master.partId;
+                    const childCount = backup.childPos?.length || 0;
+
+                    return (
+                      <div
+                        key={backup.id}
+                        className="p-4 bg-white border border-gray-200 hover:border-rose-300 rounded-2xl shadow-xs transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
+                      >
+                        <div className="space-y-1 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono font-bold text-sm text-gray-900 bg-gray-100 px-2.5 py-1 rounded-lg">
+                              {master.id}
+                            </span>
+                            {backup.isOddPO ? (
+                              <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase">
+                                PO Dư Lẻ
+                              </span>
+                            ) : (
+                              <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded uppercase">
+                                PO Kế Hoạch Tổng
+                              </span>
+                            )}
+                            <span className="text-xs text-gray-500 flex items-center gap-1">
+                              <Clock size={13} className="text-gray-400" />
+                              <span>Xóa lúc: <b>{backup.deletedAtStr}</b></span>
+                            </span>
+                            {backup.deletedBy && (
+                              <span className="text-xs text-gray-500">
+                                bởi <b>{backup.deletedBy}</b>
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="text-sm font-bold text-gray-800">
+                            {master.partId} - <span className="font-normal text-gray-600">{partName}</span>
+                          </div>
+
+                          <div className="flex items-center gap-4 text-xs text-gray-500">
+                            <span>Số lượng yêu cầu: <b className="text-gray-900 font-mono">{master.targetQuantity}</b></span>
+                            <span>Đã sản xuất: <b className="text-blue-600 font-mono">{master.producedQuantity || 0}</b></span>
+                            <span>Công đoạn con đi kèm: <b className="text-orange-600 font-mono">{childCount}</b> PO con</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                          <button
+                            onClick={() => handleRestoreOne(backup)}
+                            disabled={isProcessing}
+                            className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50 active:scale-95"
+                          >
+                            <RotateCcw size={14} />
+                            <span>Khôi phục PO này</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {showCreateSnapshot && (
+                <form onSubmit={handleCreateSnapshot} className="p-4 bg-blue-50 border border-blue-200 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-blue-900 uppercase tracking-wider">Tạo bản chụp an toàn (Snapshot PO)</h4>
+                    <button type="button" onClick={() => setShowCreateSnapshot(false)} className="text-blue-500 hover:text-blue-800">
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ghi chú bản chụp (Ví dụ: Trước khi chốt kế hoạch tuần 44...)"
+                    value={newSnapshotLabel}
+                    onChange={e => setNewSnapshotLabel(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-white border border-blue-200 rounded-xl text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCreateSnapshot(false)}
+                      className="px-3 py-1.5 bg-white border border-gray-200 text-xs font-bold rounded-lg text-gray-600"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-sm hover:bg-blue-700"
+                    >
+                      Lưu bản chụp
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {snapshots.length === 0 ? (
+                <div className="py-16 text-center text-gray-400">
+                  <Database size={48} className="mx-auto mb-3 opacity-30 text-blue-500" />
+                  <p className="font-bold text-gray-600">Chưa có bản chụp an toàn nào</p>
+                  <p className="text-xs text-gray-400 mt-1">Bạn có thể tạo bản chụp để lưu toàn bộ trạng thái danh sách PO tại một thời điểm.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {snapshots.map(snap => (
+                    <div
+                      key={snap.id}
+                      className="p-4 bg-white border border-gray-200 hover:border-blue-300 rounded-2xl shadow-xs transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm text-gray-900">{snap.label}</span>
+                          <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono">
+                            {snap.poCount} PO
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-500 flex items-center gap-2">
+                          <span>Thời gian: <b>{snap.createdAtStr}</b></span>
+                          <span>•</span>
+                          <span>Tạo bởi: <b>{snap.creator || 'Hệ thống'}</b></span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleRollbackSnapshot(snap)}
+                        disabled={isProcessing}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:opacity-50 self-end sm:self-auto"
+                      >
+                        <RotateCcw size={14} />
+                        <span>Rollback về bản này</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end shrink-0">
+          <button
+            onClick={onClose}
+            className="px-5 py-2.5 bg-gray-900 hover:bg-gray-800 text-white text-xs font-bold rounded-xl transition-all shadow-sm cursor-pointer"
+          >
+            Đóng
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOddPO, currentUser }: { parts: Part[], onUpdate: () => void, productionOrders: ProductionOrder[], onNavigateToOddPO?: () => void, currentUser?: UserAccount | null }) {
   const [orders, setOrders] = useState<ProductionOrder[]>(productionOrders);
   const [activeTab, setActiveTab] = useState<'STANDARD' | 'ODD' | 'REPAIR'>('STANDARD');
   const [selectedPart, setSelectedPart] = useState("");
@@ -2202,6 +2595,8 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState<{ id: string, qty: number } | null>(null);
   const [showEditTimeModal, setShowEditTimeModal] = useState<{ id: string, timeStr: string } | null>(null);
+  const [showRollbackModal, setShowRollbackModal] = useState(false);
+  const [deletedBackupsCount, setDeletedBackupsCount] = useState<number>(() => storageService.getDeletedPOBackups().length);
   const [password, setPassword] = useState("");
   const [expandedMasterPos, setExpandedMasterPos] = useState<Set<string>>(new Set());
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
@@ -2352,7 +2747,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
   };
 
   const handleUpdateSubPoQty = () => {
-    if (password === 'admin123') {
+    if (storageService.verifyAdminPassword(password, currentUser)) {
       if (showEditModal) {
         storageService.updateSubPoQty(showEditModal.id, showEditModal.qty);
         onUpdate();
@@ -2360,12 +2755,12 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
         setPassword("");
       }
     } else {
-      alert('Mật khẩu không chính xác!');
+      alert('Mật khẩu quản trị không chính xác!');
     }
   };
 
   const handleUpdateSubPoTime = () => {
-    if (password === 'admin123') {
+    if (storageService.verifyAdminPassword(password, currentUser)) {
       if (showEditTimeModal && showEditTimeModal.timeStr) {
         storageService.updateSubPoTime(showEditTimeModal.id, new Date(showEditTimeModal.timeStr).getTime());
         onUpdate();
@@ -2373,7 +2768,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
         setPassword("");
       }
     } else {
-      alert('Mật khẩu không chính xác!');
+      alert('Mật khẩu quản trị không chính xác!');
     }
   };
 
@@ -2399,15 +2794,18 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
   };
 
   const handleDeletePO = () => {
-    if (password === 'admin123') {
+    if (storageService.verifyAdminPassword(password, currentUser)) {
       if (showDeleteModal) {
-        storageService.deletePO(showDeleteModal);
+        const deletedBy = currentUser?.fullName || currentUser?.username || 'Admin';
+        storageService.deletePO(showDeleteModal, deletedBy);
+        setDeletedBackupsCount(storageService.getDeletedPOBackups().length);
         onUpdate();
         setShowDeleteModal(null);
         setPassword("");
+        alert('Đã xóa PO thành công! Lệnh sản xuất đã được tự động sao lưu vào Thùng rác (bạn có thể Khôi phục / Rollback bất cứ lúc nào nếu cần).');
       }
     } else {
-      alert('Mật khẩu không chính xác!');
+      alert('Mật khẩu quản trị không chính xác!');
     }
   };
 
@@ -2517,6 +2915,24 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
                 <span>Tạo PO Dư Lẻ</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setDeletedBackupsCount(storageService.getDeletedPOBackups().length);
+                setShowRollbackModal(true);
+              }}
+              className="flex items-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-4 py-3 rounded-2xl font-bold text-sm cursor-pointer transition-all active:scale-95 relative"
+              title="Khôi phục hoặc rollback lại các PO bị xóa nhầm"
+            >
+              <RotateCcw size={18} />
+              <span>Khôi Phục PO (Rollback)</span>
+              {deletedBackupsCount > 0 && (
+                <span className="bg-rose-600 text-white text-[11px] font-black px-2 py-0.5 rounded-full shadow-xs">
+                  {deletedBackupsCount}
+                </span>
+              )}
+            </button>
 
             <button
               type="button"
@@ -2855,7 +3271,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
                           onClick={async (e) => {
                             e.stopPropagation();
                             const pwd = await customPrompt("Nhập mật khẩu để hoàn thành PO tổng này:", "", true);
-                            if (pwd === "admin123") {
+                            if (storageService.verifyAdminPassword(pwd, currentUser)) {
                               if (await customConfirm("Bạn có muốn hoàn thành kế hoạch này không?")) {
                                 handleCompleteMasterPO(master.id);
                               }
@@ -3469,6 +3885,21 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
           </div>
         )}
       </AnimatePresence>
+
+      {/* PO Rollback & Recycle Bin Modal */}
+      <AnimatePresence>
+        {showRollbackModal && (
+          <PORollbackModal
+            parts={parts}
+            currentUser={currentUser}
+            onClose={() => setShowRollbackModal(false)}
+            onRestored={() => {
+              setDeletedBackupsCount(storageService.getDeletedPOBackups().length);
+              onUpdate();
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -3598,7 +4029,7 @@ function LabelHistoryView({
 
   const handleRollback = async () => {
     const isAdmin = currentUser?.role === 'ADMIN';
-    if (isAdmin || password === 'admin123') {
+    if (isAdmin || storageService.verifyAdminPassword(password, currentUser)) {
       if (showDeleteModal) {
         setIsDeleting(true);
         try {
@@ -3637,7 +4068,8 @@ function LabelHistoryView({
   };
 
   const handleManualInbound = () => {
-    if (password === 'admin123') {
+    const isAdmin = currentUser?.role === 'ADMIN';
+    if (isAdmin || storageService.verifyAdminPassword(password, currentUser)) {
       if (showInboundModal) {
         const label = labels.find(l => l.id === showInboundModal);
         if (label) {
@@ -4648,21 +5080,21 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   
 
   const daySlots = [
-    { label: '6h-8h', start: 6, end: 8 },
-    { label: '8h-10h', start: 8, end: 10 },
-    { label: '10h-12h', start: 10, end: 12 },
-    { label: '13h-15h', start: 13, end: 15 },
-    { label: '15h-17h', start: 15, end: 17 },
-    { label: '17h-19h', start: 17, end: 19 },
+    { label: '6h-8h', start: 6, end: 8, factor: 0.25 },
+    { label: '8h-10h', start: 8, end: 10, factor: 0.25 },
+    { label: '10h-12h', start: 10, end: 12, factor: 0.25 },
+    { label: '13h-15h', start: 13, end: 15, factor: 0.25 },
+    { label: '15h-17h', start: 15, end: 17, factor: 0.25 },
+    { label: '17h-19h', start: 17, end: 19, factor: 0.25 },
   ];
 
   const nightSlots = [
-    { label: '19h-20h', start: 19, end: 20 },
-    { label: '20h-22h', start: 20, end: 22 },
-    { label: '22h-0h', start: 22, end: 24 },
-    { label: '0h-2h', start: 0, end: 2 },
-    { label: '2h-4h', start: 2, end: 4 },
-    { label: '4h-6h', start: 4, end: 6 },
+    { label: '19h-21h', start: 19, end: 21, factor: 0.25 },
+    { label: '21h-23h', start: 21, end: 23, factor: 0.25 },
+    { label: '23h-0h', start: 23, end: 24, factor: 0.125 },
+    { label: '1h-3h', start: 1, end: 3, factor: 0.25 },
+    { label: '3h-5h', start: 3, end: 5, factor: 0.25 },
+    { label: '5h-6h', start: 5, end: 6, factor: 0.125 },
   ];
 
   const shifts = [
@@ -4715,12 +5147,12 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
           else if (H >= 15 && H < 17) slotIndex = 4;
           else if (H >= 17 && H < 19) slotIndex = 5;
         } else {
-          if (H >= 19 && H < 20) slotIndex = 0;
-          else if (H >= 20 && H < 22) slotIndex = 1;
-          else if (H >= 22 && H < 24) slotIndex = 2;
-          else if (H >= 0 && H < 2) slotIndex = 3;
-          else if (H >= 2 && H < 4) slotIndex = 4;
-          else if (H >= 4 && H < 6) slotIndex = 5;
+          if (H >= 19 && H < 21) slotIndex = 0;
+          else if (H >= 21 && H < 23) slotIndex = 1;
+          else if (H >= 23 || H === 0) slotIndex = 2; // 23h-0h và giờ nghỉ đêm 0h-1h gộp vào 23h-0h
+          else if (H >= 1 && H < 3) slotIndex = 3;
+          else if (H >= 3 && H < 5) slotIndex = 4;
+          else if (H >= 5 && H < 6) slotIndex = 5;
         }
 
         if (slotIndex !== -1) {
@@ -4833,7 +5265,7 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
       // Target calculations for shift
       const targetQDs = timeSlots.map(s => {
         const workerCount = getWorkerCount(stageInfo.id, s.label);
-        const factor = (s.label === '19h-20h') ? 0.125 : 0.25;
+        const factor = s.factor;
         if (stageInfo.id === 'LASER') {
           return Math.round(workerCount * 250 * factor * 10) / 10;
         }
@@ -4853,18 +5285,25 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
       });
       const totalTarget = targetQDs.reduce((a, b) => a + b, 0);
 
-      // Năng suất lao động
+      // Năng suất lao động:
+      // Cơ chế mới: Nếu khung giờ đó có ghi người nhưng không tạo ra sản phẩm quy đổi (s == 0)
+      // thì tính NSLĐ khung giờ đó bằng 0 (0%).
+      // Năng suất lao động của cả ca công đoạn sẽ tính bằng cách trung bình cộng của các khung giờ có ghi người
+      // (bao gồm cả các khung giờ 0% nếu có ghi số người).
       const tlRow: any[] = ['Năng suất lao động', '', '', '', '', '', ''];
-      let validProductivities: number[] = [];
+      const validProductivities: number[] = [];
       sumSlots_QD.forEach((s, i) => {
+        const workerCount = getWorkerCount(stageInfo.id, timeSlots[i].label);
         const tgt = targetQDs[i];
-        const prod = tgt > 0 ? (s / tgt) : 0;
-        tlRow.push(prod);
-        if (prod > 0) {
+        if (workerCount > 0) {
+          const prod = tgt > 0 ? (s / tgt) : 0;
+          tlRow.push(prod);
           validProductivities.push(prod);
+        } else {
+          tlRow.push('');
         }
       });
-      const avgProductivity = validProductivities.length > 0 ? validProductivities.reduce((a, b) => a + b, 0) / validProductivities.length : 0;
+      const avgProductivity = validProductivities.length > 0 ? (validProductivities.reduce((a, b) => a + b, 0) / validProductivities.length) : 0;
       tlRow.push(avgProductivity);
       sheetData.push(tlRow);
 
@@ -5551,6 +5990,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   const [showExportPreparationModal, setShowExportPreparationModal] = useState(false);
   const [showExportHourlyModal, setShowExportHourlyModal] = useState(false);
   const [activeChartTab, setActiveChartTab] = useState<'MECHANICAL' | 'LASER' | 'BENDING' | 'WELDING' | 'PAINTING' | 'GLAZING'>('MECHANICAL');
+  const [activeChartShift, setActiveChartShift] = useState<'DAY' | 'NIGHT'>('DAY');
   const [chartDimensions, setChartDimensions] = useState<{ width: number; height: number } | null>(null);
   const chartWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -5818,20 +6258,25 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   };
 
   const productionChartData = useMemo(() => {
-    const timeSlots = [
-      { label: '6h-8h', start: 6, end: 8 },
-      { label: '8h-10h', start: 8, end: 10 },
-      { label: '10h-12h', start: 10, end: 12 },
-      { label: '13h-15h', start: 13, end: 15 },
-      { label: '15h-17h', start: 15, end: 17 },
-      { label: '17h-19h', start: 17, end: 19 },
-      { label: '19h-20h', start: 19, end: 20 },
-      { label: '20h-22h', start: 20, end: 22 },
-      { label: '22h-0h', start: 22, end: 24 },
-      { label: '0h-2h', start: 0, end: 2 },
-      { label: '2h-4h', start: 2, end: 4 },
-      { label: '4h-6h', start: 4, end: 6 },
+    const dayTimeSlots = [
+      { label: '6h-8h', start: 6, end: 8, factor: 0.25 },
+      { label: '8h-10h', start: 8, end: 10, factor: 0.25 },
+      { label: '10h-12h', start: 10, end: 12, factor: 0.25 },
+      { label: '13h-15h', start: 13, end: 15, factor: 0.25 },
+      { label: '15h-17h', start: 15, end: 17, factor: 0.25 },
+      { label: '17h-19h', start: 17, end: 19, factor: 0.25 },
     ];
+
+    const nightTimeSlots = [
+      { label: '19h-21h', start: 19, end: 21, factor: 0.25 },
+      { label: '21h-23h', start: 21, end: 23, factor: 0.25 },
+      { label: '23h-0h', start: 23, end: 24, factor: 0.125 },
+      { label: '1h-3h', start: 1, end: 3, factor: 0.25 },
+      { label: '3h-5h', start: 3, end: 5, factor: 0.25 },
+      { label: '5h-6h', start: 5, end: 6, factor: 0.125 },
+    ];
+
+    const timeSlots = activeChartShift === 'DAY' ? dayTimeSlots : nightTimeSlots;
 
     const targetStages = ['LASER', 'BENDING', 'WELDING', 'PAINTING', 'GLAZING'];
     
@@ -5926,11 +6371,15 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
       const slotTxs = productionTransactions.filter(t => {
         const hour = new Date(t.timestamp).getHours();
+        if (slot.label === '10h-12h') return hour >= 10 && hour <= 12; // Nghỉ trưa gộp vào 10h-12h
+        if (slot.label === '23h-0h') return hour === 23 || hour === 0; // Nghỉ đêm gộp vào 23h-0h
         return hour >= slot.start && hour < slot.end;
       });
       
       const slotGlazingLabels = glazingLabels.filter(t => {
         const hour = new Date(t.timestamp).getHours();
+        if (slot.label === '10h-12h') return hour >= 10 && hour <= 12;
+        if (slot.label === '23h-0h') return hour === 23 || hour === 0;
         return hour >= slot.start && hour < slot.end;
       });
 
@@ -6040,7 +6489,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       // Hàn: 77.2 SPQĐ / người / ca 8h
       // Sơn: 127.5 SPQĐ / người / ca 8h
       // Dán Kính: 242 SPQĐ / người / ca 8h
-      const hourFactor = (slot.label === '19h-20h') ? 0.125 : 0.25;
+      const hourFactor = slot.factor !== undefined ? slot.factor : ((slot.label === '23h-0h' || slot.label === '5h-6h') ? 0.125 : 0.25);
 
       const workerCountLaser = hourlyPeopleLaser[slot.label] !== undefined ? hourlyPeopleLaser[slot.label] : 0;
       const targetQDLaser = workerCountLaser * 250 * hourFactor;
@@ -6098,7 +6547,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
       return slotData;
     });
-  }, [transactions, labels, chartDate, hourlyPeopleLaser, hourlyPeoplePainting, hourlyPeopleGlazing, hourlyPeopleBending, hourlyPeopleWelding]);
+  }, [transactions, labels, chartDate, activeChartShift, hourlyPeopleLaser, hourlyPeoplePainting, hourlyPeopleGlazing, hourlyPeopleBending, hourlyPeopleWelding]);
 
   const laserScrapItems = useMemo(() => {
     return inventory.filter(item => 
@@ -6486,7 +6935,20 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       const totalConv = productionChartData.reduce((acc, d) => acc + (d.totalConvertedMechanical || 0), 0);
       const totalMandays = productionChartData.reduce((acc, d) => acc + (d.slotMandays || 0), 0);
       const totalTarget = totalMandays * 28.3;
-      const avgNsld = totalTarget > 0 ? (totalConv / totalTarget) : 0;
+      
+      // Trung bình cộng NSLĐ của các khung giờ có ghi nhận người (dù sản phẩm = 0 vẫn tính 0% vào trung bình)
+      const validSlotPercentages: number[] = [];
+      productionChartData.forEach(d => {
+        if ((d.totalWorkersMechanical || 0) > 0) {
+          const slotTarget = (d.slotMandays || 0) * 28.3;
+          const slotNsld = slotTarget > 0 ? ((d.totalConvertedMechanical || 0) / slotTarget) : 0;
+          validSlotPercentages.push(slotNsld);
+        }
+      });
+      const avgNsld = validSlotPercentages.length > 0 
+        ? (validSlotPercentages.reduce((a, b) => a + b, 0) / validSlotPercentages.length)
+        : (totalTarget > 0 ? (totalConv / totalTarget) : 0);
+
       return {
         totalConv: totalConv.toFixed(1),
         totalTarget: totalTarget.toFixed(1),
@@ -6499,7 +6961,21 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     const totalActual = productionChartData.reduce((acc, d) => acc + (d[cfg.barKey] || 0), 0);
     const totalConv = productionChartData.reduce((acc, d) => acc + (d[cfg.convertedKey] || 0), 0);
     const totalTarget = productionChartData.reduce((acc, d) => acc + (d[cfg.targetKey] || 0), 0);
-    const avgNsld = totalTarget > 0 ? (totalConv / totalTarget) : 0;
+    
+    // Trung bình cộng NSLĐ của các khung giờ có ghi nhận người (dù sản phẩm = 0 vẫn tính 0% vào trung bình)
+    const validSlotPercentages: number[] = [];
+    productionChartData.forEach(d => {
+      if ((d[cfg.targetKey] || 0) > 0) {
+        const slotTarget = d[cfg.targetKey] || 0;
+        const slotConv = d[cfg.convertedKey] || 0;
+        const slotNsld = slotTarget > 0 ? (slotConv / slotTarget) : 0;
+        validSlotPercentages.push(slotNsld);
+      }
+    });
+    const avgNsld = validSlotPercentages.length > 0 
+      ? (validSlotPercentages.reduce((a, b) => a + b, 0) / validSlotPercentages.length)
+      : (totalTarget > 0 ? (totalConv / totalTarget) : 0);
+
     return {
       totalActual: Math.round(totalActual),
       totalConv: Math.round(totalConv * 10) / 10,
@@ -7715,13 +8191,51 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
           </div>
         </div>
 
+        {/* Sub-header: Shift Switcher (Ca Ngày / Ca Đêm) */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3 sm:mb-4 bg-gray-50/90 border border-gray-200 p-2 sm:p-2.5 rounded-xl">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold uppercase text-gray-500 pl-1">Ca làm việc:</span>
+            <div className="flex items-center p-1 bg-white rounded-lg border border-gray-200 shadow-2xs">
+              <button
+                onClick={() => setActiveChartShift('DAY')}
+                className={`px-3 py-1.5 rounded-md text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                  activeChartShift === 'DAY'
+                    ? 'bg-amber-500 text-white shadow-xs font-black'
+                    : 'text-gray-600 hover:text-amber-800 font-bold'
+                }`}
+              >
+                <span>☀️</span>
+                <span>Ca Ngày (6h - 19h)</span>
+              </button>
+              <button
+                onClick={() => setActiveChartShift('NIGHT')}
+                className={`px-3 py-1.5 rounded-md text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                  activeChartShift === 'NIGHT'
+                    ? 'bg-indigo-900 text-white shadow-xs font-black'
+                    : 'text-gray-600 hover:text-indigo-950 font-bold'
+                }`}
+              >
+                <span>🌙</span>
+                <span>Ca Đêm (19h - 6h)</span>
+              </button>
+            </div>
+          </div>
+          <div className="text-[11px] text-gray-500 font-medium pr-1">
+            {activeChartShift === 'DAY' 
+              ? 'Khung giờ: 6h-8h • 8h-10h • 10h-12h • 13h-15h • 15h-17h • 17h-19h'
+              : 'Khung giờ: 19h-21h • 21h-23h • 23h-0h • 1h-3h • 3h-5h • 5h-6h'}
+          </div>
+        </div>
+
         {/* Stage KPI Summary Banner */}
         {activeChartTab === 'MECHANICAL' ? (
           <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100/80 pb-2 mb-2.5">
               <div className="flex items-center gap-2 flex-wrap">
                 <div className="w-3 h-3 rounded-full bg-[#4F46E5]" />
-                <span className="font-extrabold uppercase text-xs sm:text-sm text-indigo-950">Biểu đồ Năng suất Lao động Toàn Xưởng Cơ Khí</span>
+                <span className="font-extrabold uppercase text-xs sm:text-sm text-indigo-950">
+                  Biểu đồ Năng suất Lao động Toàn Xưởng Cơ Khí - {activeChartShift === 'DAY' ? 'Ca Ngày' : 'Ca Đêm'}
+                </span>
                 <span className="text-[11px] font-bold text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200">Định mức chuẩn: 28.3 SPQĐ / công 8h</span>
               </div>
               <div className="text-[11px] text-gray-500">
@@ -7742,7 +8256,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                 <div className="font-mono font-black text-sm sm:text-base text-gray-800">{stageDaySummary?.totalTarget} SPQĐ</div>
               </div>
               <div className="bg-white rounded-lg p-2.5 border border-indigo-100 shadow-2xs">
-                <div className="text-gray-400 text-[10px] font-bold uppercase">NSLĐ trung bình ngày</div>
+                <div className="text-gray-400 text-[10px] font-bold uppercase">NSLĐ trung bình {activeChartShift === 'DAY' ? 'ca ngày' : 'ca đêm'}</div>
                 <div className={`font-mono font-black text-sm sm:text-base ${Number(stageDaySummary?.avgNsld || 0) >= 100 ? 'text-emerald-600' : Number(stageDaySummary?.avgNsld || 0) >= 80 ? 'text-amber-600' : 'text-red-600'}`}>
                   {stageDaySummary?.avgNsld}%
                 </div>
@@ -7756,7 +8270,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                 <div className="flex items-center gap-2 flex-wrap">
                   <div className="w-3 h-3 rounded-full" style={{ backgroundColor: activeStageConfig.color }} />
                   <span className="font-extrabold uppercase text-xs sm:text-sm text-gray-900">
-                    Năng suất Công đoạn {activeStageConfig.name}
+                    Năng suất Công đoạn {activeStageConfig.name} - {activeChartShift === 'DAY' ? 'Ca Ngày' : 'Ca Đêm'}
                   </span>
                   <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-800">
                     Định mức chuẩn: <span className="font-black" style={{ color: activeStageConfig.lineColor }}>{activeStageConfig.normText}</span>
@@ -7780,7 +8294,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   <div className="font-mono font-black text-sm sm:text-base text-gray-800">{stageDaySummary?.totalTarget} SPQĐ</div>
                 </div>
                 <div className="bg-white rounded-lg p-2.5 border border-gray-200 shadow-2xs">
-                  <div className="text-gray-400 text-[10px] font-bold uppercase">NSLĐ trung bình ngày</div>
+                  <div className="text-gray-400 text-[10px] font-bold uppercase">NSLĐ trung bình {activeChartShift === 'DAY' ? 'ca ngày' : 'ca đêm'}</div>
                   <div className={`font-mono font-black text-sm sm:text-base ${Number(stageDaySummary?.avgNsld || 0) >= 100 ? 'text-emerald-600' : Number(stageDaySummary?.avgNsld || 0) >= 80 ? 'text-amber-600' : 'text-red-600'}`}>
                     {stageDaySummary?.avgNsld}%
                   </div>
@@ -8665,9 +9179,22 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                 <div>
                   <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Nhân sự mỗi giờ <span className="text-[10px] text-gray-400 normal-case">(CẮT LASER / CHẤN/DẬP / HÀN / SƠN / DÁN KÍNH - Ca ngày & Ca đêm)</span></label>
                   <div className="max-h-[400px] overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                    {['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h', '19h-20h', '20h-22h', '22h-0h', '0h-2h', '2h-4h', '4h-6h'].map((slotLabel) => (
-                      <div key={slotLabel} className="flex gap-2 items-center bg-gray-50 border border-gray-200 p-2 rounded-lg">
-                        <span className="text-xs font-bold w-16 text-gray-600 shrink-0">{slotLabel}</span>
+                    {ALL_HOURLY_TIME_SLOTS.map((slotLabel, sIdx) => (
+                      <React.Fragment key={slotLabel}>
+                        {sIdx === 0 && (
+                          <div className="px-2 py-1 bg-amber-100/80 rounded-md text-[11px] font-black uppercase text-amber-800 flex items-center gap-1.5 mt-1">
+                            <span>☀️</span>
+                            <span>Ca Ngày (06:00 - 19:00)</span>
+                          </div>
+                        )}
+                        {sIdx === 6 && (
+                          <div className="px-2 py-1 bg-indigo-100/80 rounded-md text-[11px] font-black uppercase text-indigo-900 flex items-center gap-1.5 mt-3">
+                            <span>🌙</span>
+                            <span>Ca Đêm (19:00 - 06:00)</span>
+                          </div>
+                        )}
+                        <div className="flex gap-2 items-center bg-gray-50 border border-gray-200 p-2 rounded-lg">
+                          <span className="text-xs font-bold w-16 text-gray-600 shrink-0">{slotLabel}</span>
                         <div className="flex-1">
                           <label className="text-[10px] font-bold text-gray-400 uppercase leading-none block mb-1">Cắt Laser</label>
                           <input 
@@ -8744,7 +9271,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                           />
                         </div>
                       </div>
-                    ))}
+                    </React.Fragment>
+                  ))}
                   </div>
                 </div>
 

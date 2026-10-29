@@ -72,6 +72,7 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingUser, setEditingUser] = useState<UserAccount | null>(null);
   const [deletingUser, setDeletingUser] = useState<UserAccount | null>(null);
+  const [showAdminPasswordModal, setShowAdminPasswordModal] = useState(false);
   const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -166,13 +167,25 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
             </p>
           </div>
           
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 bg-white text-orange-600 hover:bg-orange-50 px-5 py-3 rounded-xl font-black text-sm transition-all shadow-md active:scale-95 whitespace-nowrap self-start md:self-auto"
-          >
-            <UserPlus size={18} />
-            <span>Thêm tài khoản mới</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+            {currentUser?.role === 'ADMIN' && (
+              <button
+                onClick={() => setShowAdminPasswordModal(true)}
+                className="flex items-center gap-2 bg-black/30 hover:bg-black/50 text-white border border-white/30 px-4 py-3 rounded-xl font-bold text-sm transition-all shadow-sm active:scale-95 whitespace-nowrap"
+                title="Thay đổi mật khẩu xác nhận quyền Admin khi xóa/sửa tồn kho, xóa PO..."
+              >
+                <Key size={17} />
+                <span>Đổi mật khẩu thao tác Admin</span>
+              </button>
+            )}
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 bg-white text-orange-600 hover:bg-orange-50 px-5 py-3 rounded-xl font-black text-sm transition-all shadow-md active:scale-95 whitespace-nowrap"
+            >
+              <UserPlus size={18} />
+              <span>Thêm tài khoản mới</span>
+            </button>
+          </div>
         </div>
 
         {/* Quick Stats Grid */}
@@ -521,6 +534,19 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
               </div>
             </motion.div>
           </div>
+        )}
+
+        {/* Admin Action Master Password Modal */}
+        {showAdminPasswordModal && (
+          <AdminActionPasswordModal
+            currentUser={currentUser}
+            onClose={() => setShowAdminPasswordModal(false)}
+            onSuccess={() => {
+              setShowAdminPasswordModal(false);
+              showToast('Đã đổi mật khẩu thao tác Admin thành công!');
+              reloadUsers();
+            }}
+          />
         )}
       </AnimatePresence>
     </div>
@@ -1224,3 +1250,173 @@ export function ChangePasswordModal({ currentUser, onClose, onSuccess }: ChangeP
     </div>
   );
 }
+
+// ==============================================================================
+// MODAL: THAY ĐỔI MẬT KHẨU THAO TÁC QUẢN TRỊ (XÓA / SỬA TỒN KHO, XÓA PO...)
+// ==============================================================================
+interface AdminActionPasswordModalProps {
+  currentUser: UserAccount | null;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+export function AdminActionPasswordModal({ currentUser, onClose, onSuccess }: AdminActionPasswordModalProps) {
+  const [currentActionPassword, setCurrentActionPassword] = useState('');
+  const [newActionPassword, setNewActionPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+
+    // Kiểm tra mật khẩu hiện tại
+    const isCurrentValid = storageService.verifyAdminPassword(currentActionPassword, currentUser);
+    if (!isCurrentValid) {
+      setErrorMsg('Mật khẩu quản trị hiện tại không chính xác!');
+      return;
+    }
+
+    if (!newActionPassword.trim()) {
+      setErrorMsg('Mật khẩu mới không được để trống!');
+      return;
+    }
+
+    if (newActionPassword.length < 4) {
+      setErrorMsg('Mật khẩu mới phải có ít nhất 4 ký tự!');
+      return;
+    }
+
+    if (newActionPassword !== confirmPassword) {
+      setErrorMsg('Xác nhận mật khẩu mới không trùng khớp!');
+      return;
+    }
+
+    try {
+      storageService.setAdminActionPassword(newActionPassword);
+      onSuccess();
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Có lỗi khi cập nhật mật khẩu');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-100"
+      >
+        <div className="flex items-center justify-between pb-4 border-b border-gray-100 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center">
+              <Key size={20} />
+            </div>
+            <div>
+              <h2 className="text-lg font-black text-gray-900">Mật khẩu Thao tác Quản trị</h2>
+              <p className="text-xs text-gray-500">Áp dụng cho xóa/sửa tồn kho, xóa PO, nhập thủ công</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 text-gray-400 hover:text-gray-600 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-3 mb-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs">
+          <div className="font-bold flex items-center gap-1.5 mb-1">
+            <ShieldCheck size={14} className="text-amber-700" />
+            <span>Mật khẩu mặc định hệ thống: <code className="bg-amber-100 px-1 py-0.5 rounded font-mono font-bold">admin123</code></span>
+          </div>
+          <p className="text-amber-800">
+            Khi thay đổi mật khẩu này, các thao tác nhạy cảm (như xóa PO kế hoạch, sửa số lượng tồn, xóa tồn kho công đoạn) sẽ yêu cầu mật khẩu mới.
+          </p>
+        </div>
+
+        {errorMsg && (
+          <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-bold flex items-center gap-2">
+            <AlertCircle size={16} />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+              Mật khẩu Quản trị Hiện tại
+            </label>
+            <input
+              type={showPwd ? 'text' : 'password'}
+              required
+              value={currentActionPassword}
+              onChange={(e) => setCurrentActionPassword(e.target.value)}
+              placeholder="Nhập mật khẩu hiện tại (mặc định: admin123)..."
+              className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+              Mật khẩu Mới
+            </label>
+            <input
+              type={showPwd ? 'text' : 'password'}
+              required
+              value={newActionPassword}
+              onChange={(e) => setNewActionPassword(e.target.value)}
+              placeholder="Nhập mật khẩu mới muốn đặt..."
+              className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+              Xác nhận Mật khẩu Mới
+            </label>
+            <input
+              type={showPwd ? 'text' : 'password'}
+              required
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Nhập lại mật khẩu mới..."
+              className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500"
+            />
+          </div>
+
+          <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
+            <button
+              type="button"
+              onClick={() => setShowPwd(!showPwd)}
+              className="flex items-center gap-1.5 hover:text-gray-800 cursor-pointer font-medium"
+            >
+              {showPwd ? <EyeOff size={14} /> : <Eye size={14} />}
+              <span>{showPwd ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}</span>
+            </button>
+          </div>
+
+          <div className="flex gap-3 pt-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 py-2.5 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl text-sm transition-colors cursor-pointer"
+            >
+              Hủy bỏ
+            </button>
+            <button
+              type="submit"
+              className="flex-1 py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-sm transition-colors shadow-md shadow-orange-600/20 cursor-pointer"
+            >
+              Lưu mật khẩu mới
+            </button>
+          </div>
+        </form>
+      </motion.div>
+    </div>
+  );
+}
+
