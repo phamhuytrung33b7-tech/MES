@@ -206,6 +206,7 @@ async function deleteInventoryFromSupabase(partId: string, stageId: StageId, loc
   try {
     const rowId = `${partId}_${stageId}_${location}_${originalPartId || ''}`;
     await supabase.from('wip_inventory').delete().eq('id', rowId);
+    await supabase.from('wip_inventory').delete().eq('part_id', partId).eq('stage_id', stageId).eq('location', location);
   } catch (err: any) {
     quietWarn('deleteInventory', 'deleteInventory error:', err);
   }
@@ -877,23 +878,28 @@ export const storageService = {
       const rawLabels = localStorage.getItem('wip_labels');
       if (rawLabels) {
         const labels: Transaction[] = JSON.parse(rawLabels);
-        if (Array.isArray(labels) && labels.length > 0) {
+        if (Array.isArray(labels)) {
           let hasUpdates = false;
           plans.forEach(plan => {
-            const printedMap = { ...(plan.printedQuantities || {}) };
-            let changed = false;
-            const partCounts: Record<string, number> = {};
+            const labelCounts: Record<string, number> = {};
             labels.filter(l => l && l.planId === plan.id && l.partId).forEach(l => {
-              partCounts[l.partId] = (partCounts[l.partId] || 0) + (Number(l.quantity) || 0);
+              labelCounts[l.partId] = (labelCounts[l.partId] || 0) + (Number(l.quantity) || 0);
             });
-            Object.entries(partCounts).forEach(([partId, count]) => {
-              if ((printedMap[partId] || 0) < count) {
-                printedMap[partId] = count;
-                changed = true;
+            
+            const currentMap = plan.printedQuantities || {};
+            const reconciledMap: Record<string, number> = { ...currentMap };
+            let isChanged = false;
+
+            // For all parts present in labelCounts, labelCounts is authoritative
+            Object.entries(labelCounts).forEach(([partId, count]) => {
+              if (reconciledMap[partId] !== count) {
+                reconciledMap[partId] = count;
+                isChanged = true;
               }
             });
-            if (changed) {
-              plan.printedQuantities = printedMap;
+
+            if (isChanged || !plan.printedQuantities) {
+              plan.printedQuantities = reconciledMap;
               hasUpdates = true;
             }
           });
@@ -1491,8 +1497,10 @@ export const storageService = {
     if (planIndex !== -1) {
       const plan = plans[planIndex];
       const printedQuantities = { ...(plan.printedQuantities || {}) };
-      printedQuantities[partId] = (printedQuantities[partId] || 0) + quantity;
-      plans[planIndex] = { ...plan, printedQuantities };
+      if (!printedQuantities[partId]) {
+        printedQuantities[partId] = quantity;
+        plans[planIndex] = { ...plan, printedQuantities };
+      }
       this.saveGlazingPlans(plans);
       persistGlazingPlansToSupabase([plans[planIndex]]);
     }

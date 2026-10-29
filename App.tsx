@@ -11376,6 +11376,14 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
   const [outConfigs, setOutConfigs] = useState<import('./types').GlazingOutConfig[]>([]);
   const [quickPrintParts, setQuickPrintParts] = useState<{id: string, name: string, quantity: number}[]>(() => storageService.getQuickPrintParts());
   
+  const handleDeleteGlazingInventoryItem = async (item: import('./types').InventoryItem) => {
+    const pName = parts.find((p: any) => p.id === item.partId)?.name || item.partId;
+    if (await customConfirm(`Bạn có chắc muốn xóa linh kiện "${pName}" (Mã: ${item.partId}, SL: ${item.quantity}) khỏi Tồn kho IN Dán Kính? Thao tác này sẽ đồng bộ xóa lên Supabase database.`)) {
+      storageService.deleteInventoryItem(item.partId, 'GLAZING', 'IN', item.originalPartId);
+      refreshData();
+    }
+  };
+
   const handleEditInventory = () => {
     if (editPassword === 'admin123') {
       if (showEditInventoryModal) {
@@ -12691,6 +12699,13 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                       title="Chỉnh sửa tồn kho"
                     >
                       <Edit2 size={15} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteGlazingInventoryItem(i)}
+                      className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                      title="Xóa tồn kho"
+                    >
+                      <Trash2 size={15} />
                     </button>
                   </div>
                 </div>
