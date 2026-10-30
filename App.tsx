@@ -2721,7 +2721,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
     }
 
     setIsBatchCreating(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
         const batchItems = excelImportList.map(po => ({
           modelId: po.partId,
@@ -2731,10 +2731,10 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
           excelRequiredDate: po.excelRequiredDate
         }));
 
-        storageService.createBatchMasterPOs(batchItems);
+        await storageService.createBatchMasterPOs(batchItems);
         onUpdate();
         setExcelImportList(null);
-        alert(`Đã nhập và tạo thành công ${batchItems.length} Lệnh Sản Xuất (PO) từ file Excel!`);
+        alert(`Đã nhập và tạo thành công ${batchItems.length} Lệnh Sản Xuất (PO) từ file Excel (Đã đồng bộ lên Supabase)!`);
       } catch (err: any) {
         alert(err?.message || 'Có lỗi xảy ra khi tạo các Lệnh Sản Xuất!');
       } finally {
@@ -2803,17 +2803,17 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
     onUpdate();
   };
 
-  const handleCreatePO = (e: React.FormEvent) => {
+  const handleCreatePO = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPart || quantity <= 0) return;
     
     try {
       const endTs = targetCompletion ? new Date(targetCompletion).getTime() : Date.now();
-      storageService.createMasterPO(selectedPart, quantity, endTs);
+      await storageService.createMasterPO(selectedPart, quantity, endTs);
       onUpdate();
       setSelectedPart("");
       setQuantity(0);
-      alert('Đã tạo lệnh sản xuất PO Tổng và các PO Con thành công!');
+      alert('Đã tạo lệnh sản xuất PO Tổng và các PO Con thành công (Đã đồng bộ lên Supabase)!');
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Lỗi khi tạo PO');
     }

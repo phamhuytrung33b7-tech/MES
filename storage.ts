@@ -146,18 +146,16 @@ async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
       expected_completion_time: toBigIntOrNull(po.expectedCompletionTime),
       note: po.note || null,
       is_odd_po: Boolean(po.isOddPO),
-      excel_required_date: toBigIntOrNull(po.excelRequiredDate),
-      created_by: po.createdBy || null,
-      created_by_name: po.createdByName || null,
-      approved_by: po.approvedBy || null,
-      approved_by_name: po.approvedByName || null,
-      approved_at: toBigIntOrNull(po.approvedAt)
+      excel_required_date: toBigIntOrNull(po.excelRequiredDate)
     }));
     // Batch upsert in chunks of 150 to keep request size optimal
     for (let i = 0; i < dbOrders.length; i += 150) {
       const chunk = dbOrders.slice(i, i + 150);
       const { error } = await supabase.from('production_orders').upsert(chunk, { onConflict: 'id' });
-      if (error) throw error;
+      if (error) {
+        console.error('[Supabase] persistProductionOrders error:', error);
+        throw error;
+      }
     }
   } catch (err: any) {
     quietWarn('persistProductionOrders', 'persistProductionOrders error:', err);
@@ -3189,16 +3187,16 @@ export const storageService = {
     persistProductionOrdersToSupabase([masterPo, ...subPos]);
   },
 
-  createMasterPO(modelId: string, quantity: number, plannedStartTime?: number, customLeadTime?: number, idPrefix: string = "PO", targetStageId?: string, selectedLaserPartIds?: string[], customNote?: string, excelRequiredDate?: number) {
+  async createMasterPO(modelId: string, quantity: number, plannedStartTime?: number, customLeadTime?: number, idPrefix: string = "PO", targetStageId?: string, selectedLaserPartIds?: string[], customNote?: string, excelRequiredDate?: number) {
     const { masterPo, allChildPOs } = this.calculateMasterPOSchedule(modelId, quantity, plannedStartTime, customLeadTime, idPrefix, targetStageId, selectedLaserPartIds, customNote, excelRequiredDate);
     const pos = this.getProductionOrders();
     const updatedPOs = [masterPo, ...allChildPOs, ...pos];
     this.saveProductionOrders(updatedPOs);
-    persistProductionOrdersToSupabase([masterPo, ...allChildPOs]);
+    await persistProductionOrdersToSupabase([masterPo, ...allChildPOs]);
     return masterPo;
   },
 
-  createBatchMasterPOs(orders: {
+  async createBatchMasterPOs(orders: {
     modelId: string;
     quantity: number;
     expectedCompletionTime?: number;
@@ -3243,7 +3241,7 @@ export const storageService = {
 
     const updatedPOs = [...newMasterPOs, ...newChildPOs, ...pos];
     this.saveProductionOrders(updatedPOs);
-    persistProductionOrdersToSupabase([...newMasterPOs, ...newChildPOs]);
+    await persistProductionOrdersToSupabase([...newMasterPOs, ...newChildPOs]);
     return newMasterPOs;
   },
 
