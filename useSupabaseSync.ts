@@ -262,15 +262,56 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
   try {
     setRemoteHydrated(true);
 
-    // 2.1 PULL system_configs
-    const { data: configs, error: cfgErr } = await client
-      .from('system_configs')
-      .select('key, value');
+    // Tải song song tất cả các bảng từ Supabase để tối đa hóa tốc độ đồng bộ
+    const cutoff35d = Date.now() - 35 * 24 * 60 * 60 * 1000;
 
-    if (cfgErr) throw cfgErr;
+    const fetchConfigs = client.from('system_configs').select('key, value');
 
-    if (configs && configs.length > 0) {
-      configs.forEach((item: any) => {
+    const fetchPOs = (async () => {
+      const { count: totalPoCount } = await client
+        .from('production_orders')
+        .select('*', { count: 'exact', head: true });
+
+      const total = totalPoCount || 0;
+      const poPageSize = 1000;
+      const pagePromises = [];
+      for (let from = 0; from < Math.max(total, 1); from += poPageSize) {
+        pagePromises.push(
+          client
+            .from('production_orders')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .range(from, from + poPageSize - 1)
+        );
+      }
+      const pages = await Promise.all(pagePromises);
+      const allRows: any[] = [];
+      pages.forEach(p => {
+        if (!p.error && p.data) allRows.push(...p.data);
+      });
+      return allRows;
+    })();
+
+    const fetchInv = client.from('wip_inventory').select('*');
+    const fetchTxs = client.from('wip_transactions')
+      .select('*')
+      .gte('timestamp', cutoff35d)
+      .order('timestamp', { ascending: false });
+    const fetchPlans = client.from('glazing_plans')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    const [cfgRes, poRows, invRes, txRes, gpRes] = await Promise.all([
+      fetchConfigs,
+      fetchPOs,
+      fetchInv,
+      fetchTxs,
+      fetchPlans
+    ]);
+
+    if (cfgRes.error) throw cfgRes.error;
+    if (cfgRes.data && cfgRes.data.length > 0) {
+      cfgRes.data.forEach((item: any) => {
         if (item && item.key) {
           try {
             const valStr = typeof item.value === 'string' ? item.value : JSON.stringify(item.value);
@@ -280,63 +321,37 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
       });
     }
 
-    // 2.2 PULL production_orders
-    const { data: pos, error: poErr } = await client
-      .from('production_orders')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (poErr) throw poErr;
-    if (pos) {
-      const mappedPos = pos.map(mapDbPoToPo);
+    if (poRows && poRows.length > 0) {
+      const mappedPos = poRows.map(mapDbPoToPo);
       localStorage.setItem('wip_production_orders', JSON.stringify(mappedPos));
     }
 
-    // 2.3 PULL wip_inventory
-    const { data: inv, error: invErr } = await client
-      .from('wip_inventory')
-      .select('*');
-
-    if (invErr) throw invErr;
-    if (inv) {
-      const mappedInv = inv.map(mapDbInvToInv);
+    if (invRes.error) throw invRes.error;
+    if (invRes.data) {
+      const mappedInv = invRes.data.map(mapDbInvToInv);
       localStorage.setItem('wip_inventory', JSON.stringify(mappedInv));
     }
 
-    // 2.4 PULL wip_transactions (giới hạn 35 ngày gần nhất để tiết kiệm RAM & Egress)
-    const cutoff35d = Date.now() - 35 * 24 * 60 * 60 * 1000;
-    const { data: txs, error: txErr } = await client
-      .from('wip_transactions')
-      .select('*')
-      .gte('timestamp', cutoff35d)
-      .order('timestamp', { ascending: false });
-
-    if (txErr) throw txErr;
-    if (txs) {
-      const mappedTxs = txs.map(mapDbTxToTx);
+    if (txRes.error) throw txRes.error;
+    if (txRes.data) {
+      const mappedTxs = txRes.data.map(mapDbTxToTx);
       localStorage.setItem('wip_transactions', JSON.stringify(mappedTxs));
     }
 
-    // 2.5 PULL glazing_plans
-    const { data: plans, error: gpErr } = await client
-      .from('glazing_plans')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (gpErr) throw gpErr;
-    if (plans) {
-      const mappedPlans = plans.map(mapDbPlanToPlan);
+    if (gpRes.error) throw gpRes.error;
+    if (gpRes.data) {
+      const mappedPlans = gpRes.data.map(mapDbPlanToPlan);
       localStorage.setItem('wip_glazing_plans', JSON.stringify(mappedPlans));
     }
 
     return {
       success: true,
       counts: {
-        configs: configs?.length || 0,
-        productionOrders: pos?.length || 0,
-        inventory: inv?.length || 0,
-        transactions: txs?.length || 0,
-        glazingPlans: plans?.length || 0
+        configs: cfgRes.data?.length || 0,
+        productionOrders: poRows?.length || 0,
+        inventory: invRes.data?.length || 0,
+        transactions: txRes.data?.length || 0,
+        glazingPlans: gpRes.data?.length || 0
       }
     };
   } catch (err: any) {

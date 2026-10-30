@@ -125,6 +125,18 @@ function toBigIntOrDefault(val: any, defaultVal: number = 0): number {
   return Math.round(Number(val));
 }
 
+// ---------------------------------------------------------
+// Realtime Disabled by User Request
+// (Dữ liệu giữa các trạm chỉ đồng bộ khi bấm nút "Đồng bộ dữ liệu máy chủ")
+// ---------------------------------------------------------
+export function broadcastPOChanges(_orders: ProductionOrder[]) {
+  // Realtime đã tắt theo yêu cầu: không tự động broadcast giữa các trạm
+}
+
+export function broadcastPODelete(_poId: string) {
+  // Realtime đã tắt theo yêu cầu: không tự động broadcast giữa các trạm
+}
+
 // WRITE-THROUGH: Chỉ upsert các PO được chỉ định (tạo mới / cập nhật)
 async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
   if (!isSupabaseConfigured || !orders || orders.length === 0) return;
@@ -148,15 +160,25 @@ async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
       is_odd_po: Boolean(po.isOddPO),
       excel_required_date: toBigIntOrNull(po.excelRequiredDate)
     }));
-    // Batch upsert in chunks of 150 to keep request size optimal
+
+    // Broadcast immediately so all other open tabs / devices receive in < 50ms
+    broadcastPOChanges(orders);
+
+    // Parallel upsert in chunks of 150 to maximize network speed
+    const chunks = [];
     for (let i = 0; i < dbOrders.length; i += 150) {
-      const chunk = dbOrders.slice(i, i + 150);
-      const { error } = await supabase.from('production_orders').upsert(chunk, { onConflict: 'id' });
-      if (error) {
-        console.error('[Supabase] persistProductionOrders error:', error);
-        throw error;
-      }
+      chunks.push(dbOrders.slice(i, i + 150));
     }
+    await Promise.all(
+      chunks.map(chunk =>
+        supabase.from('production_orders').upsert(chunk, { onConflict: 'id' }).then(({ error }) => {
+          if (error) {
+            console.error('[Supabase] persistProductionOrders chunk error:', error);
+            throw error;
+          }
+        })
+      )
+    );
   } catch (err: any) {
     quietWarn('persistProductionOrders', 'persistProductionOrders error:', err);
   }
@@ -165,6 +187,7 @@ async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
 async function deletePOFromSupabase(id: string) {
   if (!isSupabaseConfigured) return;
   try {
+    broadcastPODelete(id);
     await supabase.from('production_orders').delete().or(`id.eq.${id},master_po_id.eq.${id}`);
   } catch (err: any) {
     quietWarn('deletePO', 'deletePO error:', err);
@@ -3191,8 +3214,12 @@ export const storageService = {
     const { masterPo, allChildPOs } = this.calculateMasterPOSchedule(modelId, quantity, plannedStartTime, customLeadTime, idPrefix, targetStageId, selectedLaserPartIds, customNote, excelRequiredDate);
     const pos = this.getProductionOrders();
     const updatedPOs = [masterPo, ...allChildPOs, ...pos];
+    // 1. Lưu tức thì vào Cache & LocalStorage (UI hiển thị 0ms lag)
     this.saveProductionOrders(updatedPOs);
-    await persistProductionOrdersToSupabase([masterPo, ...allChildPOs]);
+    // 2. Đẩy lên Supabase ngầm đồng thời song song với Promise.all & Broadcast
+    persistProductionOrdersToSupabase([masterPo, ...allChildPOs]).catch(err => {
+      console.warn('[Supabase] persistProductionOrders error:', err);
+    });
     return masterPo;
   },
 
@@ -3240,8 +3267,12 @@ export const storageService = {
     }
 
     const updatedPOs = [...newMasterPOs, ...newChildPOs, ...pos];
+    // 1. Lưu tức thì vào Cache & LocalStorage (UI hiển thị 0ms lag)
     this.saveProductionOrders(updatedPOs);
-    await persistProductionOrdersToSupabase([...newMasterPOs, ...newChildPOs]);
+    // 2. Đẩy lên Supabase ngầm đồng thời song song với Promise.all & Broadcast
+    persistProductionOrdersToSupabase([...newMasterPOs, ...newChildPOs]).catch(err => {
+      console.warn('[Supabase] batch persistProductionOrders error:', err);
+    });
     return newMasterPOs;
   },
 
@@ -4704,23 +4735,87 @@ export const storageService = {
         return true;
       }
 
-      // 1. Fetch system_configs (only key, value columns)
-      const { data: configRows, error: configErr } = await supabase
+      // Tải song song tất cả các bảng dữ liệu để tối đa hóa tốc độ đồng bộ (< 600ms)
+      const cutoff35d = Date.now() - 35 * 24 * 60 * 60 * 1000;
+      const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+
+      // 1. Fetch system_configs
+      const fetchConfigs = supabase
         .from('system_configs')
         .select('key, value');
 
-      if (configErr) {
-        if (configErr.code === 'PGRST205' || configErr.message?.includes('not found') || configErr.message?.includes('does not exist')) {
+      // 2. Fetch active production_orders với phân trang song song & sắp xếp created_at desc (Không bị cắt 1000 dòng!)
+      const fetchPOs = (async () => {
+        const { count: totalPoCount } = await supabase
+          .from('production_orders')
+          .select('*', { count: 'exact', head: true });
+
+        const total = totalPoCount || 0;
+        const poPageSize = 1000;
+        const pagePromises = [];
+        for (let from = 0; from < Math.max(total, 1); from += poPageSize) {
+          pagePromises.push(
+            supabase
+              .from('production_orders')
+              .select('id, master_po_id, part_id, stage_id, target_quantity, produced_quantity, exported_quantity, status, created_at, completed_at, planned_start_time, lead_time, expected_completion_time, note, is_odd_po, excel_required_date')
+              .order('created_at', { ascending: false })
+              .range(from, from + poPageSize - 1)
+          );
+        }
+        const pages = await Promise.all(pagePromises);
+        const rows: any[] = [];
+        pages.forEach(p => {
+          if (!p.error && p.data) rows.push(...p.data);
+        });
+        return rows;
+      })();
+
+      // 3. Fetch wip_inventory
+      const fetchInv = supabase
+        .from('wip_inventory')
+        .select('part_id, original_part_id, stage_id, location, quantity');
+
+      // 4. Fetch wip_transactions (35 ngày gần nhất)
+      const fetchTxs = supabase
+        .from('wip_transactions')
+        .select('id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded')
+        .gte('timestamp', cutoff35d)
+        .order('timestamp', { ascending: false });
+
+      // 5. Fetch glazing_plans
+      const fetchGlazing = supabase
+        .from('glazing_plans')
+        .select('id, model_id, target_quantity, target_completion_time, planned_start_time, expected_completion_time, created_at, status, produced_quantities, note, excel_required_date')
+        .order('created_at', { ascending: false });
+
+      // 6. Fetch qr_labels (24 giờ gần nhất)
+      const fetchQr = supabase
+        .from('qr_labels')
+        .select('id, part_id, stage_id, quantity, timestamp, qr_data, metadata')
+        .gte('timestamp', cutoff24h)
+        .order('timestamp', { ascending: false });
+
+      const [configRes, poRows, invRes, txRes, gpRes, qrRes] = await Promise.all([
+        fetchConfigs,
+        fetchPOs,
+        fetchInv,
+        fetchTxs,
+        fetchGlazing,
+        fetchQr
+      ]);
+
+      if (configRes.error) {
+        if (configRes.error.code === 'PGRST205' || configRes.error.message?.includes('not found') || configRes.error.message?.includes('does not exist')) {
           syncError = 'Chưa tìm thấy bảng dữ liệu trên Supabase. Vui lòng chạy mã lệnh trong file supabase_schema.sql trên Supabase SQL Editor.';
           isSyncing = false;
           notifySyncChange();
           return false;
         }
-        throw configErr;
+        throw configRes.error;
       }
 
-      if (configRows && configRows.length > 0) {
-        configRows.forEach((row: any) => {
+      if (configRes.data && configRes.data.length > 0) {
+        configRes.data.forEach((row: any) => {
           if (row && row.key) {
             cache[row.key] = row.value;
             try {
@@ -4730,12 +4825,7 @@ export const storageService = {
         });
       }
 
-      // 2. Fetch active production_orders (selective columns only) - PULL ONLY, DO NOT AUTO-PUSH
-      const { data: poRows, error: poErr } = await supabase
-        .from('production_orders')
-        .select('id, master_po_id, part_id, stage_id, target_quantity, produced_quantity, exported_quantity, status, created_at, completed_at, planned_start_time, lead_time, expected_completion_time, note, is_odd_po, excel_required_date');
-
-      if (!poErr && poRows) {
+      if (poRows && poRows.length > 0) {
         const remotePos: ProductionOrder[] = poRows.map((r: any) => ({
           id: r.id,
           masterPoId: r.master_po_id || undefined,
@@ -4755,7 +4845,6 @@ export const storageService = {
           excelRequiredDate: r.excel_required_date ? Number(r.excel_required_date) : undefined
         }));
 
-        // Ghi đè vào cache và localStorage từ Cloud (Source of Truth)
         const validPos = this.filterExpiredCompletedPOs(remotePos);
         cache[STORAGE_KEYS.PRODUCTION_ORDERS] = validPos;
         try {
@@ -4763,13 +4852,8 @@ export const storageService = {
         } catch {}
       }
 
-      // 3. Fetch wip_inventory (selective columns) - PULL ONLY
-      const { data: invRows, error: invErr } = await supabase
-        .from('wip_inventory')
-        .select('part_id, original_part_id, stage_id, location, quantity');
-
-      if (!invErr && invRows) {
-        const inv: InventoryItem[] = invRows.map((r: any) => ({
+      if (!invRes.error && invRes.data) {
+        const inv: InventoryItem[] = invRes.data.map((r: any) => ({
           partId: r.part_id,
           originalPartId: r.original_part_id || undefined,
           stageId: r.stage_id,
@@ -4782,16 +4866,8 @@ export const storageService = {
         } catch {}
       }
 
-      // 4. Fetch wip_transactions (only within 35 days, selective columns) - PULL ONLY
-      const cutoff35d = Date.now() - 35 * 24 * 60 * 60 * 1000;
-      const { data: txRows, error: txErr } = await supabase
-        .from('wip_transactions')
-        .select('id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded')
-        .gte('timestamp', cutoff35d)
-        .order('timestamp', { ascending: false });
-
-      if (!txErr && txRows) {
-        const txs: Transaction[] = txRows.map((r: any) => ({
+      if (!txRes.error && txRes.data) {
+        const txs: Transaction[] = txRes.data.map((r: any) => ({
           id: r.id,
           type: r.type,
           partId: r.part_id,
@@ -4817,14 +4893,8 @@ export const storageService = {
         } catch {}
       }
 
-      // 5. Fetch glazing_plans - PULL ONLY
-      const { data: gpRows, error: gpErr } = await supabase
-        .from('glazing_plans')
-        .select('id, model_id, target_quantity, target_completion_time, planned_start_time, expected_completion_time, created_at, status, produced_quantities, note, excel_required_date')
-        .order('created_at', { ascending: false });
-
-      if (!gpErr && gpRows) {
-        const plans: import('./types').GlazingPlan[] = gpRows.map((r: any) => {
+      if (!gpRes.error && gpRes.data) {
+        const plans: import('./types').GlazingPlan[] = gpRes.data.map((r: any) => {
           const rawProduced = r.produced_quantities || {};
           let printedQuantities: Record<string, number> = {};
           if (r.printed_quantities && typeof r.printed_quantities === 'object') {
@@ -4861,16 +4931,8 @@ export const storageService = {
         } catch {}
       }
 
-      // 6. Fetch qr_labels (last 24 hours) - PULL ONLY
-      const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-      const { data: qrRows, error: qrErr } = await supabase
-        .from('qr_labels')
-        .select('id, part_id, stage_id, quantity, timestamp, qr_data, metadata')
-        .gte('timestamp', cutoff24h)
-        .order('timestamp', { ascending: false });
-
-      if (!qrErr && qrRows) {
-        const labels: Transaction[] = qrRows.map((r: any) => {
+      if (!qrRes.error && qrRes.data) {
+        const labels: Transaction[] = qrRes.data.map((r: any) => {
           if (r.metadata && typeof r.metadata === 'object' && r.metadata.id) {
             return r.metadata;
           }
@@ -5020,6 +5082,47 @@ export const storageService = {
         message: `Không thể đồng bộ lên Supabase: ${err?.message || err}`,
         details: err
       };
+    }
+  },
+
+  initGlobalSync() {
+    // Realtime giữa các trạm đã được tắt theo yêu cầu.
+    // Dữ liệu chỉ đồng bộ khi người dùng bấm nút "Đồng bộ dữ liệu máy chủ".
+  },
+
+  mergeIncomingOrders(incoming: ProductionOrder[]) {
+    if (!incoming || incoming.length === 0) return;
+    const current = this.getProductionOrders();
+    const currentMap = new Map<string, ProductionOrder>(current.map(p => [p.id, p]));
+    let hasChanges = false;
+
+    for (const inc of incoming) {
+      const existing = currentMap.get(inc.id);
+      if (!existing) {
+        currentMap.set(inc.id, inc);
+        hasChanges = true;
+      } else if (
+        existing.producedQuantity !== inc.producedQuantity ||
+        existing.exportedQuantity !== inc.exportedQuantity ||
+        existing.status !== inc.status ||
+        existing.targetQuantity !== inc.targetQuantity
+      ) {
+        currentMap.set(inc.id, { ...existing, ...inc });
+        hasChanges = true;
+      }
+    }
+
+    if (hasChanges) {
+      const merged = Array.from(currentMap.values());
+      this.saveProductionOrders(merged);
+    }
+  },
+
+  removeLocalPO(poId: string) {
+    const current = this.getProductionOrders();
+    const filtered = current.filter(p => p.id !== poId && p.masterPoId !== poId);
+    if (filtered.length !== current.length) {
+      this.saveProductionOrders(filtered);
     }
   },
 

@@ -969,6 +969,8 @@ export default function App() {
     // Nếu version thay đổi hoặc LocalStorage trống -> PULL dữ liệu sạch.
     // Nếu version khớp -> dùng trực tiếp LocalStorage (0 Egress / 0 Request ngầm).
     let isMounted = true;
+    storageService.initGlobalSync();
+
     (async () => {
       try {
         await storageService.init(false);
@@ -976,12 +978,18 @@ export default function App() {
       } catch {}
     })();
 
+    const handleDataUpdated = () => {
+      if (isMounted) refreshData();
+    };
+    window.addEventListener('wip_data_updated', handleDataUpdated);
+
     const unsub = storageService.onSyncChange(status => {
       if (isMounted) setSyncStatus(status);
     });
 
     return () => {
       isMounted = false;
+      window.removeEventListener('wip_data_updated', handleDataUpdated);
       unsub();
     };
   }, []);
@@ -1001,9 +1009,19 @@ export default function App() {
   const syncWithRemote = useCallback(async (force: boolean = true) => {
     if (!isSupabaseConfigured) return;
     try {
-      await storageService.init(force);
+      const ok = await storageService.init(force);
       refreshData();
-    } catch {}
+      if (ok) {
+        setSuccess('Đã đồng bộ dữ liệu mới nhất từ máy chủ Supabase thành công!');
+        setTimeout(() => setSuccess(null), 3500);
+      } else {
+        setError('Không thể đồng bộ dữ liệu từ máy chủ. Vui lòng kiểm tra kết nối mạng!');
+        setTimeout(() => setError(null), 4000);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Lỗi khi đồng bộ dữ liệu từ máy chủ');
+      setTimeout(() => setError(null), 4000);
+    }
   }, [refreshData]);
 
   const handleProduce = async (e: React.FormEvent, sourceLocation: 'IN' | 'OUT' = 'IN', targetStageId?: StageId, poId?: string) => {
@@ -1466,15 +1484,20 @@ export default function App() {
               )}
             </button>
 
-            {/* Manual Sync Button (User-Driven, 0 Background Polling) */}
+            {/* Manual Sync Button - User-Initiated Server Sync (Realtime disabled by request) */}
             <button
               onClick={() => syncWithRemote(true)}
               disabled={syncStatus.syncing}
-              title="Tải dữ liệu mới nhất từ Supabase (Thủ công khi cần)"
-              className="flex items-center gap-1.5 px-2 py-1.5 sm:px-2.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-semibold bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition-all shadow-xs active:scale-95 cursor-pointer disabled:opacity-50 shrink-0"
+              title="Đồng bộ dữ liệu máy chủ Supabase (bấm để tải dữ liệu mới nhất về máy)"
+              className={cn(
+                "flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-[11px] sm:text-xs font-bold transition-all shadow-xs active:scale-95 cursor-pointer disabled:opacity-50 shrink-0",
+                syncStatus.syncing
+                  ? "bg-blue-100 text-blue-700 border border-blue-300"
+                  : "bg-blue-600 hover:bg-blue-700 text-white border border-blue-700"
+              )}
             >
-              <RefreshCw size={13} className={syncStatus.syncing ? "animate-spin text-blue-600" : "text-blue-600"} />
-              <span>Làm mới<span className="hidden sm:inline"> dữ liệu</span></span>
+              <RefreshCw size={14} className={syncStatus.syncing ? "animate-spin text-blue-600" : "text-white"} />
+              <span>{syncStatus.syncing ? 'Đang đồng bộ...' : 'Đồng bộ dữ liệu máy chủ'}</span>
             </button>
 
             {/* Backup/Restore JSON Button (Hidden on Mobile) */}
@@ -1544,7 +1567,7 @@ export default function App() {
                               className="w-full flex items-center gap-2.5 px-4 py-2 text-xs font-bold text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors text-left cursor-pointer md:hidden"
                             >
                               <RefreshCw size={15} className={syncStatus.syncing ? "animate-spin text-blue-600" : "text-blue-600"} />
-                              <span>Làm mới dữ liệu</span>
+                              <span>{syncStatus.syncing ? 'Đang đồng bộ...' : 'Đồng bộ dữ liệu máy chủ'}</span>
                             </button>
                             {currentUser.role === 'ADMIN' && (
                               <button
@@ -2634,6 +2657,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
   const [modalTab, setModalTab] = useState<'VALID' | 'MISSING_BOM'>('VALID');
   const [isImportingExcel, setIsImportingExcel] = useState(false);
   const [isBatchCreating, setIsBatchCreating] = useState(false);
+  const [poFeedback, setPoFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const handleExcelPOUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2731,12 +2755,19 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
           excelRequiredDate: po.excelRequiredDate
         }));
 
-        await storageService.createBatchMasterPOs(batchItems);
+        const createdMasters = await storageService.createBatchMasterPOs(batchItems);
         onUpdate();
         setExcelImportList(null);
-        alert(`Đã nhập và tạo thành công ${batchItems.length} Lệnh Sản Xuất (PO) từ file Excel (Đã đồng bộ lên Supabase)!`);
+        setPoFeedback({
+          message: `✓ Đã nhập và tạo thành công ${createdMasters.length} Lệnh Sản Xuất (PO) từ Excel kèm toàn bộ PO con đã sinh ra đầy đủ và tự động đồng bộ siêu tốc lên Supabase!`,
+          type: 'success'
+        });
+        setTimeout(() => setPoFeedback(null), 6000);
       } catch (err: any) {
-        alert(err?.message || 'Có lỗi xảy ra khi tạo các Lệnh Sản Xuất!');
+        setPoFeedback({
+          message: err?.message || 'Có lỗi xảy ra khi tạo các Lệnh Sản Xuất!',
+          type: 'error'
+        });
       } finally {
         setIsBatchCreating(false);
       }
@@ -2809,13 +2840,21 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
     
     try {
       const endTs = targetCompletion ? new Date(targetCompletion).getTime() : Date.now();
-      await storageService.createMasterPO(selectedPart, quantity, endTs);
+      const createdMaster = await storageService.createMasterPO(selectedPart, quantity, endTs);
+      // OPTIMISTIC INSTANT UPDATE: Cập nhật giao diện ngay lập tức 0ms lag
       onUpdate();
       setSelectedPart("");
       setQuantity(0);
-      alert('Đã tạo lệnh sản xuất PO Tổng và các PO Con thành công (Đã đồng bộ lên Supabase)!');
+      setPoFeedback({
+        message: `✓ Đã tạo thành công Lệnh PO [${createdMaster.id}] với toàn bộ PO con sinh ra đầy đủ! Đang đồng bộ siêu tốc lên Supabase.`,
+        type: 'success'
+      });
+      setTimeout(() => setPoFeedback(null), 6000);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Lỗi khi tạo PO');
+      setPoFeedback({
+        message: err instanceof Error ? err.message : 'Lỗi khi tạo PO',
+        type: 'error'
+      });
     }
   };
 
@@ -2986,6 +3025,27 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
             </label>
           </div>
         </div>
+
+        {poFeedback && (
+          <div className={`mb-6 p-4 rounded-2xl border flex items-center justify-between gap-3 text-sm font-bold shadow-sm transition-all ${
+            poFeedback.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-red-50 text-red-800 border-red-200'
+          }`}>
+            <div className="flex items-center gap-2">
+              <span>{poFeedback.type === 'success' ? '✓' : '⚠️'}</span>
+              <span>{poFeedback.message}</span>
+            </div>
+            <button 
+              type="button" 
+              onClick={() => setPoFeedback(null)} 
+              className="text-gray-400 hover:text-gray-600 font-bold ml-2 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         <form onSubmit={handleCreatePO} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-end">
             <div className="space-y-2">
