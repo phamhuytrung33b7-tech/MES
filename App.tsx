@@ -1090,8 +1090,9 @@ export default function App() {
   };
 
   const handlePrint = (label: Transaction) => {
+    if (!label) return;
     setLastTransaction(label);
-    if (label.id && !label.id.startsWith('QUICK-')) {
+    if (label.id) {
       storageService.setTransactionPrinted(label.id, true);
     }
     refreshData();
@@ -1100,8 +1101,9 @@ export default function App() {
   };
 
   const handlePreviewOnly = (label: Transaction) => {
+    if (!label) return;
     setLastTransaction(label);
-    if (label.id && !label.id.startsWith('QUICK-')) {
+    if (label.id) {
       storageService.setTransactionPrinted(label.id, true);
     }
     refreshData();
@@ -4092,7 +4094,7 @@ function LabelHistoryView({
   useEffect(() => {
     const allTransactions = storageService.getTransactions();
     
-    // Identify which labels have been scanned
+    // Identify which labels have been scanned and printed
     const scanned = new Set<string>();
     const printed = new Set<string>();
 
@@ -4103,6 +4105,9 @@ function LabelHistoryView({
           scanned.add(qrParts[4]);
         }
       }
+      if (tx.printed) {
+        printed.add(tx.id);
+      }
     });
 
     labels.forEach(l => {
@@ -4112,6 +4117,16 @@ function LabelHistoryView({
     setScannedIds(scanned);
     setPrintedIds(printed);
   }, [labels]);
+
+  const handlePrintLabel = (labelToPrint: Transaction) => {
+    if (!labelToPrint || !labelToPrint.id) return;
+    setPrintedIds(prev => new Set(prev).add(labelToPrint.id));
+    setLabels(prev => prev.map(l => l.id === labelToPrint.id ? { ...l, printed: true } : l));
+    if (selectedLabel && selectedLabel.id === labelToPrint.id) {
+      setSelectedLabel({ ...selectedLabel, printed: true });
+    }
+    onPrint(labelToPrint);
+  };
 
   const handleRollback = async () => {
     const isAdmin = currentUser?.role === 'ADMIN';
@@ -4331,8 +4346,8 @@ function LabelHistoryView({
                 <span className="text-[9px] font-bold opacity-60 uppercase">Đã nhập kho</span>
               </div>
               <div className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-blue-500" />
-                <span className="text-[9px] font-bold opacity-60 uppercase">Đã in nhãn</span>
+                <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span className="text-[9px] font-bold text-emerald-700 uppercase">Đã in nhãn</span>
               </div>
               <div className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-full bg-amber-500" />
@@ -4587,7 +4602,7 @@ function LabelHistoryView({
             <>
               {displayedLabels.map(label => {
                 const isScanned = scannedIds.has(label.id);
-                const isPrinted = printedIds.has(label.id);
+                const isPrinted = printedIds.has(label.id) || Boolean(label.printed);
                 const isPaintingOut = label.stageId === 'PAINTING' && !label.targetStageId && label.type === 'STAGE_OUT';
                 const targetStage = getLabelTargetStage(label);
                 const originName = getStageLabel(label.stageId);
@@ -4603,7 +4618,7 @@ function LabelHistoryView({
                     className={cn(
                       "p-5 cursor-pointer transition-all hover:bg-gray-50 flex justify-between items-center group relative border-l-4",
                       selectedLabel?.id === label.id && "ring-2 ring-inset ring-blue-600 z-10",
-                      isScanned ? "bg-green-50/50 border-green-500" : isPrinted ? "bg-blue-50/50 border-blue-500" : "bg-white border-transparent"
+                      isScanned ? "bg-green-50/50 border-green-500" : isPrinted ? "bg-emerald-50/60 border-emerald-500" : "bg-white border-transparent"
                     )}
                   >
                     <div className="flex flex-col gap-1">
@@ -4611,7 +4626,7 @@ function LabelHistoryView({
                         {isScanned ? (
                           <CheckCircle2 size={14} className="text-green-600" />
                         ) : isPrinted ? (
-                          <Printer size={14} className="text-blue-600" />
+                          <CheckCircle2 size={14} className="text-emerald-600" />
                         ) : label.type === 'DISPOSAL' ? (
                           <Trash2 size={14} className="text-red-600" />
                         ) : null}
@@ -4662,11 +4677,14 @@ function LabelHistoryView({
                     </div>
                     <div className="flex items-center gap-2">
                       {isScanned ? (
-                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 bg-green-100 text-green-700 rounded whitespace-nowrap">Đã nhập</span>
+                        <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-green-100 text-green-800 border border-green-300 rounded whitespace-nowrap">Đã nhập</span>
                       ) : isPrinted ? (
-                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded whitespace-nowrap">Đã in</span>
+                        <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded whitespace-nowrap flex items-center gap-1 shadow-2xs">
+                          <CheckCircle2 size={11} className="text-emerald-600 inline" />
+                          Đã in nhãn
+                        </span>
                       ) : (
-                        <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded whitespace-nowrap">Chưa in</span>
+                        <span className="text-[9px] font-bold uppercase px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-300 rounded whitespace-nowrap">Chưa in</span>
                       )}
                       <button 
                         onClick={(e) => {
@@ -4709,6 +4727,12 @@ function LabelHistoryView({
                 <div className="flex items-center gap-3">
                   <Printer size={24} className="text-[#F27D26]" />
                   <h3 className="font-mono text-sm uppercase font-bold tracking-widest">Xem lại nhãn QR</h3>
+                  {(printedIds.has(selectedLabel.id) || selectedLabel.printed) && (
+                    <span className="text-[10px] font-black uppercase px-2.5 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-full flex items-center gap-1 shadow-2xs">
+                      <CheckCircle2 size={12} className="text-emerald-600 inline" />
+                      ĐÃ IN NHÃN
+                    </span>
+                  )}
                 </div>
                 <button onClick={() => setSelectedLabel(null)} className="text-gray-400 hover:text-black transition-colors">
                   <X size={32} />
@@ -4719,11 +4743,11 @@ function LabelHistoryView({
 
               <div className="w-full flex flex-col sm:flex-row gap-3 no-print">
                 <button 
-                  onClick={() => onPrint(selectedLabel)}
+                  onClick={() => handlePrintLabel(selectedLabel)}
                   className="flex-1 bg-blue-600 text-white py-4 sm:py-5 rounded-xl flex items-center justify-center gap-2 font-bold text-base uppercase hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 cursor-pointer active:scale-95"
                 >
                   <Printer size={22} />
-                  <span>In nhãn (PDF)</span>
+                  <span>{(printedIds.has(selectedLabel.id) || selectedLabel.printed) ? 'In lại nhãn (PDF)' : 'In nhãn (PDF)'}</span>
                 </button>
                 <button 
                   onClick={() => {

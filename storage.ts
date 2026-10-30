@@ -1678,14 +1678,7 @@ export const storageService = {
   },
 
   markLabelAsPrinted(id: string) {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const labels = this.getLabels()
-      .filter(l => l.timestamp >= cutoff)
-      .map(l => l.id === id ? { ...l, printed: true } : l);
-    localStorage.setItem('wip_labels', JSON.stringify(labels));
-    cache['wip_labels'] = labels;
-    const target = labels.find(l => l.id === id);
-    if (target) queueLabelInsert(target);
+    return this.setTransactionPrinted(id, true);
   },
 
   rollbackTransaction(txId: string) {
@@ -2461,20 +2454,68 @@ export const storageService = {
     return newTransaction;
   },
 
-  setTransactionPrinted(txId: string, printed: boolean) {
+  setTransactionPrinted(txId: string, printed: boolean = true) {
+    if (!txId) return null;
+
+    // 1. Update in labels (wip_labels)
+    const labels: Transaction[] = this.getLabels();
+    const lIdx = labels.findIndex(l => l.id === txId);
+    let targetLabel: Transaction | null = null;
+    if (lIdx !== -1) {
+      labels[lIdx].printed = printed;
+      targetLabel = { ...labels[lIdx] };
+      this.saveLabels(labels);
+    }
+
+    // 2. Update in transactions (wip_transactions)
     const transactions: Transaction[] = this.getTransactions();
     const idx = transactions.findIndex(t => t.id === txId);
     if (idx !== -1) {
       transactions[idx].printed = printed;
-      // Also update in label history
-      const labels: Transaction[] = this.getLabels();
-      const lIdx = labels.findIndex(l => l.id === txId);
-      if (lIdx !== -1) {
-        labels[lIdx].printed = printed;
-        this.saveLabels(labels);
+      if (!targetLabel) {
+        targetLabel = { ...transactions[idx] };
       }
-      this.saveTransactions(transactions);
+      const cutoff = Date.now() - 35 * 24 * 60 * 60 * 1000;
+      const filtered = transactions.filter((t: any) => t && t.timestamp && t.timestamp >= cutoff);
+      localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(filtered));
+      cache[STORAGE_KEYS.TRANSACTIONS] = filtered;
     }
+
+    // 3. Fallback search if not indexed yet
+    if (!targetLabel) {
+      const found = labels.find(l => l.id === txId) || transactions.find(t => t.id === txId);
+      if (found) {
+        targetLabel = { ...found, printed };
+      }
+    }
+
+    // 4. Instant Write-Through to Supabase (qr_labels metadata and wip_transactions)
+    if (isSupabaseConfigured && targetLabel) {
+      const meta = { ...targetLabel, printed };
+      const labelPayload = {
+        id: txId,
+        part_id: targetLabel.partId || null,
+        stage_id: targetLabel.stageId || null,
+        quantity: toBigIntOrDefault(targetLabel.quantity, 0),
+        timestamp: toBigIntOrDefault(targetLabel.timestamp, Date.now()),
+        qr_data: targetLabel.qrData || null,
+        metadata: meta
+      };
+
+      Promise.allSettled([
+        supabase.from('qr_labels').upsert(labelPayload, { onConflict: 'id' }),
+        supabase.from('wip_transactions').update({ printed }).eq('id', txId)
+      ]).then(results => {
+        const rejections = results.filter(r => r.status === 'rejected');
+        if (rejections.length > 0) {
+          console.warn('[Supabase Sync] setTransactionPrinted sync warning:', rejections);
+        }
+      }).catch(err => {
+        console.warn('[Supabase Sync] setTransactionPrinted error:', err);
+      });
+    }
+
+    return targetLabel;
   },
 
   recordStageIn(qrData: string, currentStageId: StageId, targetLocation: 'IN' | 'OUT' = 'IN') {
@@ -4932,19 +4973,37 @@ export const storageService = {
       }
 
       if (!qrRes.error && qrRes.data) {
+        // Collect printed flags from wip_transactions and local memory
+        const printedIds = new Set<string>();
+        if (!txRes.error && txRes.data) {
+          txRes.data.forEach((r: any) => {
+            if (r.printed) printedIds.add(r.id);
+          });
+        }
+        const currentLabels = this.getLabels();
+        currentLabels.forEach(l => {
+          if (l.printed) printedIds.add(l.id);
+        });
+
         const labels: Transaction[] = qrRes.data.map((r: any) => {
+          let item: Transaction;
           if (r.metadata && typeof r.metadata === 'object' && r.metadata.id) {
-            return r.metadata;
+            item = { ...r.metadata };
+          } else {
+            item = {
+              id: r.id,
+              type: 'STAGE_OUT',
+              partId: r.part_id || '',
+              quantity: Number(r.quantity) || 0,
+              stageId: r.stage_id || 'LASER',
+              timestamp: Number(r.timestamp),
+              qrData: r.qr_data || undefined
+            };
           }
-          return {
-            id: r.id,
-            type: 'STAGE_OUT',
-            partId: r.part_id || '',
-            quantity: Number(r.quantity) || 0,
-            stageId: r.stage_id || 'LASER',
-            timestamp: Number(r.timestamp),
-            qrData: r.qr_data || undefined
-          };
+          if (r.metadata?.printed === true || printedIds.has(item.id)) {
+            item.printed = true;
+          }
+          return item;
         });
         cache['wip_labels'] = labels;
         try {
