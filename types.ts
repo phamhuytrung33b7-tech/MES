@@ -23,6 +23,7 @@ export interface InventoryItem {
   stageId: StageId;
   location: 'IN' | 'OUT' | 'DEFECT';
   quantity: number;
+  lastUpdated?: number; // Timestamp when inventory stock was added or updated
 }
 
 export interface Transaction {

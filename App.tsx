@@ -137,6 +137,38 @@ export interface AgeBatch {
   ageInfo: { text: string; colorClass: string };
 }
 
+function cleanPartIdStr(s?: string): string {
+  if (!s) return '';
+  return s.trim().toLowerCase().replace(/\s*-\s*(cd|h)$/i, '');
+}
+
+function matchesInventoryItem(t: Transaction, item: InventoryItem): boolean {
+  if (t.stageId !== item.stageId) return false;
+
+  const tPart = cleanPartIdStr(t.partId);
+  const itemPart = cleanPartIdStr(item.partId);
+  const tOrig = cleanPartIdStr(t.originalPartId);
+  const itemOrig = cleanPartIdStr(item.originalPartId);
+
+  const partMatch = 
+    (tPart && itemPart && tPart === itemPart) ||
+    (tOrig && itemOrig && tOrig === itemOrig) ||
+    (tPart && itemOrig && tPart === itemOrig) ||
+    (tOrig && itemPart && tOrig === itemPart);
+
+  if (!partMatch) return false;
+
+  const tLoc = t.location || 'IN';
+  if (item.location === 'IN') {
+    return (t.type === 'STAGE_IN' && tLoc === 'IN') || t.type === 'STAGE_IN';
+  } else if (item.location === 'OUT') {
+    return (t.type === 'STAGE_OUT' && tLoc === 'IN') || (t.type === 'STAGE_IN' && tLoc === 'OUT') || t.type === 'STAGE_OUT';
+  } else if (item.location === 'DEFECT' || (item.location as any) === 'NG') {
+    return t.type === 'DEFECT';
+  }
+  return true;
+}
+
 function getInventoryBatches(
   item: InventoryItem,
   transactions: Transaction[]
@@ -145,28 +177,22 @@ function getInventoryBatches(
 
   if (targetQty <= 0) return [];
 
-  const additions = transactions.filter(t => {
-    if (t.partId !== item.partId) return false;
-    if (t.originalPartId !== item.originalPartId) return false;
-    if (t.stageId !== item.stageId) return false;
-    
-    const tLoc = t.location || 'IN'; // Fallback for older transactions
-
-    if (item.location === 'IN') {
-      return t.type === 'STAGE_IN' && tLoc === 'IN';
-    } else if (item.location === 'OUT') {
-      return (t.type === 'STAGE_OUT' && tLoc === 'IN') || (t.type === 'STAGE_IN' && tLoc === 'OUT');
-    } else if (item.location === 'DEFECT' || item.location === 'NG' as any) {
-      return t.type === 'DEFECT';
-    }
-    return false;
-  }).sort((a, b) => b.timestamp - a.timestamp);
+  const additions = transactions
+    .filter(t => matchesInventoryItem(t, item))
+    .sort((a, b) => b.timestamp - a.timestamp);
 
   if (additions.length === 0) {
     const anyTx = transactions
-      .filter(t => t.partId === item.partId && t.originalPartId === item.originalPartId)
+      .filter(t => {
+        const tPart = cleanPartIdStr(t.partId);
+        const itemPart = cleanPartIdStr(item.partId);
+        const tOrig = cleanPartIdStr(t.originalPartId);
+        const itemOrig = cleanPartIdStr(item.originalPartId);
+        return (tPart && itemPart && tPart === itemPart) || (tOrig && itemOrig && tOrig === itemOrig);
+      })
       .sort((a, b) => a.timestamp - b.timestamp)[0];
-    const ts = anyTx ? anyTx.timestamp : Date.now();
+
+    const ts = anyTx ? anyTx.timestamp : (item.lastUpdated || Date.now());
     return [{
       quantity: targetQty,
       timestamp: ts,
@@ -188,13 +214,13 @@ function getInventoryBatches(
     });
     accumulated += qtyToTake;
   }
-  
+
   if (accumulated < targetQty) {
-    const lastTx = additions[additions.length - 1];
+    const fallbackTs = item.lastUpdated || additions[additions.length - 1].timestamp;
     batches.push({
       quantity: targetQty - accumulated,
-      timestamp: lastTx.timestamp,
-      ageInfo: formatInventoryAge(lastTx.timestamp)
+      timestamp: fallbackTs,
+      ageInfo: formatInventoryAge(fallbackTs)
     });
   }
 
@@ -8775,10 +8801,10 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
               </h2>
               <div className="space-y-6">
                 <div>
-                  <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Từ Ngày <span className="text-[10px] text-gray-400 normal-case">(Tối đa 35 ngày)</span></label>
+                  <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Từ Ngày <span className="text-[10px] text-gray-400 normal-case">(Tối đa 35 ngày gần nhất)</span></label>
                   <input 
                     type="date"
-                    min={getPastDateStr(60)}
+                    min={getPastDateStr(35)}
                     max={getPastDateStr(0)}
                     value={exportStartDate}
                     onChange={(e) => setExportStartDate(e.target.value)}
@@ -8789,7 +8815,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Đến Ngày <span className="text-[10px] text-gray-400 normal-case">(Đến hiện tại)</span></label>
                   <input 
                     type="date"
-                    min={getPastDateStr(60)}
+                    min={getPastDateStr(35)}
                     max={getPastDateStr(0)}
                     value={exportEndDate}
                     onChange={(e) => setExportEndDate(e.target.value)}
@@ -11339,6 +11365,7 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
                         quantity: numPrint,
                         type: 'STAGE_OUT',
                         stageId: 'GLAZING',
+                        location: 'IN',
                         targetStageId: 'DCLR',
                         timestamp: Date.now(),
                         qrData: formatQR,
@@ -12446,6 +12473,9 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                         }}
                         onPrint={(labelTx: any, printQty: number) => {
                           storageService.saveLabel(labelTx);
+                          // Lưu vào cả transactions (lưu 35 ngày) để Báo cáo sản lượng & Biểu đồ năng suất xem được trọn vẹn 35 ngày
+                          const txList = storageService.getTransactions();
+                          storageService.saveTransactions([labelTx, ...txList]);
                           storageService.updateGlazingPlanPrinted(plan.id, norm.id, printQty);
                           setGlazingPlans(storageService.getGlazingPlans());
                           onPrint(labelTx);

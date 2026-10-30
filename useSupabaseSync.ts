@@ -156,6 +156,96 @@ export async function checkAndHandleSystemReset(client = supabase): Promise<{
   }
 }
 
+import { setRemoteHydrated } from './storage';
+import { ProductionOrder, InventoryItem, Transaction, GlazingPlan } from './types';
+
+function mapDbPoToPo(dbRow: any): ProductionOrder {
+  return {
+    id: dbRow.id,
+    masterPoId: dbRow.master_po_id || dbRow.masterPoId || undefined,
+    partId: dbRow.part_id || dbRow.partId,
+    stageId: dbRow.stage_id || dbRow.stageId || undefined,
+    targetQuantity: Number(dbRow.target_quantity ?? dbRow.targetQuantity ?? 0),
+    producedQuantity: Number(dbRow.produced_quantity ?? dbRow.producedQuantity ?? 0),
+    exportedQuantity: Number(dbRow.exported_quantity ?? dbRow.exportedQuantity ?? 0),
+    status: dbRow.status || 'PENDING',
+    createdAt: Number(dbRow.created_at ?? dbRow.createdAt ?? Date.now()),
+    completedAt: dbRow.completed_at ? Number(dbRow.completed_at) : (dbRow.completedAt ? Number(dbRow.completedAt) : undefined),
+    plannedStartTime: dbRow.planned_start_time ? Number(dbRow.planned_start_time) : (dbRow.plannedStartTime ? Number(dbRow.plannedStartTime) : undefined),
+    leadTime: dbRow.lead_time ? Number(dbRow.lead_time) : (dbRow.leadTime ? Number(dbRow.leadTime) : undefined),
+    expectedCompletionTime: dbRow.expected_completion_time ? Number(dbRow.expected_completion_time) : (dbRow.expectedCompletionTime ? Number(dbRow.expectedCompletionTime) : undefined),
+    note: dbRow.note || undefined,
+    isOddPO: dbRow.is_odd_po ?? dbRow.isOddPO ?? undefined,
+    excelRequiredDate: dbRow.excel_required_date ? Number(dbRow.excel_required_date) : (dbRow.excelRequiredDate ? Number(dbRow.excelRequiredDate) : undefined),
+    createdBy: dbRow.created_by || dbRow.createdBy || undefined,
+    createdByName: dbRow.created_by_name || dbRow.createdByName || undefined,
+    approvedBy: dbRow.approved_by || dbRow.approvedBy || undefined,
+    approvedByName: dbRow.approved_by_name || dbRow.approvedByName || undefined,
+    approvedAt: dbRow.approved_at ? Number(dbRow.approved_at) : (dbRow.approvedAt ? Number(dbRow.approvedAt) : undefined),
+  };
+}
+
+function mapDbInvToInv(dbRow: any): InventoryItem {
+  return {
+    partId: dbRow.part_id || dbRow.partId,
+    originalPartId: dbRow.original_part_id || dbRow.originalPartId || undefined,
+    stageId: dbRow.stage_id || dbRow.stageId,
+    location: dbRow.location,
+    quantity: Number(dbRow.quantity ?? 0),
+    lastUpdated: dbRow.last_updated ? Number(dbRow.last_updated) : (dbRow.lastUpdated ? Number(dbRow.lastUpdated) : undefined)
+  };
+}
+
+function mapDbTxToTx(dbRow: any): Transaction {
+  return {
+    id: dbRow.id,
+    type: dbRow.type,
+    partId: dbRow.part_id || dbRow.partId,
+    partName: dbRow.part_name || dbRow.partName || undefined,
+    originalPartId: dbRow.original_part_id || dbRow.originalPartId || undefined,
+    quantity: Number(dbRow.quantity ?? 0),
+    stageId: dbRow.stage_id || dbRow.stageId,
+    location: dbRow.location || undefined,
+    timestamp: Number(dbRow.timestamp ?? Date.now()),
+    qrData: dbRow.qr_data || dbRow.qrData || undefined,
+    sourceStageId: dbRow.source_stage_id || dbRow.sourceStageId || undefined,
+    targetStageId: dbRow.target_stage_id || dbRow.targetStageId || undefined,
+    poId: dbRow.po_id || dbRow.poId || undefined,
+    planId: dbRow.plan_id || dbRow.planId || undefined,
+    printed: dbRow.printed ?? undefined,
+    defectReason: dbRow.defect_reason || dbRow.defectReason || undefined,
+    defectCategory: dbRow.defect_category || dbRow.defectCategory || undefined,
+    kpiRecorded: dbRow.kpi_recorded || dbRow.kpiRecorded || undefined
+  };
+}
+
+function mapDbPlanToPlan(dbRow: any): GlazingPlan {
+  let printedMap: Record<string, number> | undefined;
+  let producedMap: Record<string, number> = {};
+  if (dbRow.produced_quantities || dbRow.producedQuantities) {
+    const raw = dbRow.produced_quantities || dbRow.producedQuantities;
+    if (typeof raw === 'object' && raw !== null) {
+      const { __printed, ...rest } = raw;
+      producedMap = rest;
+      if (__printed) printedMap = __printed;
+    }
+  }
+  return {
+    id: dbRow.id,
+    modelId: dbRow.model_id || dbRow.modelId,
+    targetQuantity: Number(dbRow.target_quantity ?? dbRow.targetQuantity ?? 0),
+    targetCompletionTime: dbRow.target_completion_time ? Number(dbRow.target_completion_time) : (dbRow.targetCompletionTime ? Number(dbRow.targetCompletionTime) : undefined),
+    plannedStartTime: dbRow.planned_start_time ? Number(dbRow.planned_start_time) : (dbRow.plannedStartTime ? Number(dbRow.plannedStartTime) : undefined),
+    expectedCompletionTime: dbRow.expected_completion_time ? Number(dbRow.expected_completion_time) : (dbRow.expectedCompletionTime ? Number(dbRow.expectedCompletionTime) : undefined),
+    createdAt: Number(dbRow.created_at ?? dbRow.createdAt ?? Date.now()),
+    status: dbRow.status || 'PENDING',
+    producedQuantities: producedMap,
+    printedQuantities: printedMap,
+    note: dbRow.note || undefined,
+    excelRequiredDate: dbRow.excel_required_date ? Number(dbRow.excel_required_date) : (dbRow.excelRequiredDate ? Number(dbRow.excelRequiredDate) : undefined)
+  };
+}
+
 /**
  * 2. Service: PULL dữ liệu sạch từ Supabase về LocalStorage
  * Tuyệt đối KHÔNG đẩy dữ liệu từ client lên Supabase trong hàm này
@@ -170,6 +260,8 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
   }
 
   try {
+    setRemoteHydrated(true);
+
     // 2.1 PULL system_configs
     const { data: configs, error: cfgErr } = await client
       .from('system_configs')
@@ -196,7 +288,8 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
 
     if (poErr) throw poErr;
     if (pos) {
-      localStorage.setItem('wip_production_orders', JSON.stringify(pos));
+      const mappedPos = pos.map(mapDbPoToPo);
+      localStorage.setItem('wip_production_orders', JSON.stringify(mappedPos));
     }
 
     // 2.3 PULL wip_inventory
@@ -206,7 +299,8 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
 
     if (invErr) throw invErr;
     if (inv) {
-      localStorage.setItem('wip_inventory', JSON.stringify(inv));
+      const mappedInv = inv.map(mapDbInvToInv);
+      localStorage.setItem('wip_inventory', JSON.stringify(mappedInv));
     }
 
     // 2.4 PULL wip_transactions (giới hạn 35 ngày gần nhất để tiết kiệm RAM & Egress)
@@ -219,7 +313,8 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
 
     if (txErr) throw txErr;
     if (txs) {
-      localStorage.setItem('wip_transactions', JSON.stringify(txs));
+      const mappedTxs = txs.map(mapDbTxToTx);
+      localStorage.setItem('wip_transactions', JSON.stringify(mappedTxs));
     }
 
     // 2.5 PULL glazing_plans
@@ -230,7 +325,8 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
 
     if (gpErr) throw gpErr;
     if (plans) {
-      localStorage.setItem('wip_glazing_plans', JSON.stringify(plans));
+      const mappedPlans = plans.map(mapDbPlanToPlan);
+      localStorage.setItem('wip_glazing_plans', JSON.stringify(mappedPlans));
     }
 
     return {
@@ -406,6 +502,7 @@ export function useSupabaseSync(onDataReloaded?: () => void) {
         }
       } else {
         // Cờ reset khớp & đã có sẵn LocalStorage: KHÔNG gọi query Supabase nào nữa!
+        setRemoteHydrated(true);
         console.log(`[useSupabaseSync] Cờ data_reset_version khớp ("${resetResult.remoteVersion}"). Sử dụng dữ liệu LocalStorage có sẵn (0 Cloud query ngầm).`);
         setStatus(prev => ({
           ...prev,

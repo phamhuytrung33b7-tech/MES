@@ -54,6 +54,11 @@ let isSyncing = false;
 let lastSyncTime: number | null = null;
 let syncError: string | null = null;
 let isRemoteHydrated = false; // CHẶN ĐẨY DỮ LIỆU CŨ: Tuyệt đối chỉ cho phép write-through sau khi đã PULL thành công từ Cloud
+
+export function setRemoteHydrated(val: boolean = true) {
+  isRemoteHydrated = val;
+}
+
 const syncListeners = new Set<(status: { connected: boolean; syncing: boolean; lastSynced: number | null; error: string | null }) => void>();
 
 function notifySyncChange() {
@@ -88,7 +93,8 @@ const pendingConfigSaves = new Map<string, any>();
 let configSaveTimer: any = null;
 
 function queueConfigPersist(key: string, value: any) {
-  if (!isSupabaseConfigured || !isRemoteHydrated) return;
+  if (!isSupabaseConfigured) return;
+  isRemoteHydrated = true;
   pendingConfigSaves.set(key, value);
   if (!configSaveTimer) {
     configSaveTimer = setTimeout(flushPendingConfigSaves, 400);
@@ -97,7 +103,7 @@ function queueConfigPersist(key: string, value: any) {
 
 async function flushPendingConfigSaves() {
   configSaveTimer = null;
-  if (!isSupabaseConfigured || !isRemoteHydrated || pendingConfigSaves.size === 0) return;
+  if (!isSupabaseConfigured || pendingConfigSaves.size === 0) return;
   const entries = Array.from(pendingConfigSaves.entries());
   pendingConfigSaves.clear();
   try {
@@ -121,7 +127,8 @@ function toBigIntOrDefault(val: any, defaultVal: number = 0): number {
 
 // WRITE-THROUGH: Chỉ upsert các PO được chỉ định (tạo mới / cập nhật)
 async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
-  if (!isSupabaseConfigured || !isRemoteHydrated || !orders || orders.length === 0) return;
+  if (!isSupabaseConfigured || !orders || orders.length === 0) return;
+  isRemoteHydrated = true;
   try {
     const dbOrders = orders.map(po => ({
       id: po.id,
@@ -140,6 +147,11 @@ async function persistProductionOrdersToSupabase(orders: ProductionOrder[]) {
       note: po.note || null,
       is_odd_po: Boolean(po.isOddPO),
       excel_required_date: toBigIntOrNull(po.excelRequiredDate),
+      created_by: po.createdBy || null,
+      created_by_name: po.createdByName || null,
+      approved_by: po.approvedBy || null,
+      approved_by_name: po.approvedByName || null,
+      approved_at: toBigIntOrNull(po.approvedAt)
     }));
     // Batch upsert in chunks of 150 to keep request size optimal
     for (let i = 0; i < dbOrders.length; i += 150) {
@@ -163,7 +175,8 @@ async function deletePOFromSupabase(id: string) {
 
 // WRITE-THROUGH: Cập nhật đúng 1 item tồn kho thay vì đẩy toàn bộ bảng
 async function persistSingleInventoryItemToSupabase(item: InventoryItem) {
-  if (!isSupabaseConfigured || !isRemoteHydrated || !item) return;
+  if (!isSupabaseConfigured || !item) return;
+  isRemoteHydrated = true;
   try {
     const dbRow = {
       id: `${item.partId}_${item.stageId}_${item.location}_${item.originalPartId || ''}`,
@@ -182,6 +195,7 @@ async function persistSingleInventoryItemToSupabase(item: InventoryItem) {
 // Dùng cho trường hợp người dùng bấm nút thủ công "Đẩy dữ liệu lên Supabase"
 async function persistInventoryToSupabase(inventory: InventoryItem[]) {
   if (!isSupabaseConfigured || !inventory) return;
+  isRemoteHydrated = true;
   try {
     const dbRows = inventory.map(item => ({
       id: `${item.partId}_${item.stageId}_${item.location}_${item.originalPartId || ''}`,
@@ -225,7 +239,8 @@ let pendingTxs: Transaction[] = [];
 let txSaveTimer: any = null;
 
 function queueTransactionInsert(tx: Transaction) {
-  if (!isSupabaseConfigured || !isRemoteHydrated || !tx || !tx.id) return;
+  if (!isSupabaseConfigured || !tx || !tx.id) return;
+  isRemoteHydrated = true;
   pendingTxs.push(tx);
   if (!txSaveTimer) {
     txSaveTimer = setTimeout(flushPendingTransactions, 300);
@@ -234,7 +249,7 @@ function queueTransactionInsert(tx: Transaction) {
 
 async function flushPendingTransactions() {
   txSaveTimer = null;
-  if (!isSupabaseConfigured || !isRemoteHydrated || pendingTxs.length === 0) return;
+  if (!isSupabaseConfigured || pendingTxs.length === 0) return;
   const toSave = [...pendingTxs];
   pendingTxs = [];
   await persistTransactionsToSupabase(toSave);
@@ -242,6 +257,7 @@ async function flushPendingTransactions() {
 
 async function persistTransactionsToSupabase(transactions: Transaction[]) {
   if (!isSupabaseConfigured || !transactions || transactions.length === 0) return;
+  isRemoteHydrated = true;
   try {
     const cutoff = Math.round(Date.now() - 35 * 24 * 60 * 60 * 1000);
     const recent = transactions.filter(t => t && t.timestamp && Math.round(Number(t.timestamp)) >= cutoff);
@@ -277,7 +293,8 @@ async function persistTransactionsToSupabase(transactions: Transaction[]) {
 
 // WRITE-THROUGH: Chỉ upsert các kế hoạch dán kính được tạo mới / sửa đổi
 async function persistGlazingPlansToSupabase(plans: import('./types').GlazingPlan[]) {
-  if (!isSupabaseConfigured || !isRemoteHydrated || !plans || plans.length === 0) return;
+  if (!isSupabaseConfigured || !plans || plans.length === 0) return;
+  isRemoteHydrated = true;
   try {
     const dbRows = plans.map(p => {
       const producedPayload: Record<string, any> = { ...(p.producedQuantities || {}) };
@@ -321,7 +338,8 @@ let pendingLabels: Transaction[] = [];
 let labelSaveTimer: any = null;
 
 function queueLabelInsert(label: Transaction) {
-  if (!isSupabaseConfigured || !isRemoteHydrated || !label || !label.id) return;
+  if (!isSupabaseConfigured || !label || !label.id) return;
+  isRemoteHydrated = true;
   pendingLabels.push(label);
   if (!labelSaveTimer) {
     labelSaveTimer = setTimeout(flushPendingLabels, 300);
@@ -330,7 +348,7 @@ function queueLabelInsert(label: Transaction) {
 
 async function flushPendingLabels() {
   labelSaveTimer = null;
-  if (!isSupabaseConfigured || !isRemoteHydrated || pendingLabels.length === 0) return;
+  if (!isSupabaseConfigured || pendingLabels.length === 0) return;
   const toSave = [...pendingLabels];
   pendingLabels = [];
   await persistLabelsToSupabase(toSave);
@@ -1908,7 +1926,8 @@ export const storageService = {
         partId: partInCatalog ? partInCatalog.id : cleanIdUpper,
         stageId,
         location,
-        quantity: newQuantity
+        quantity: newQuantity,
+        lastUpdated: Date.now()
       });
     }
 
@@ -1951,12 +1970,17 @@ export const storageService = {
 
     let itemToSave: InventoryItem | null = null;
     if (index >= 0) {
+      const oldQty = inventory[index].quantity;
       inventory[index].quantity += delta;
       inventory[index].quantity = Math.round(inventory[index].quantity * 10000) / 10000;
       if (inventory[index].quantity < 0) inventory[index].quantity = 0;
-      // Option: update it to the proper case if it was wrong
       inventory[index].partId = targetId; 
       if (targetOrigId) inventory[index].originalPartId = targetOrigId;
+      if (delta > 0 && oldQty <= 0) {
+        inventory[index].lastUpdated = Date.now();
+      } else if (!inventory[index].lastUpdated) {
+        inventory[index].lastUpdated = Date.now();
+      }
       itemToSave = inventory[index];
     } else {
       if (delta > 0) {
@@ -1965,7 +1989,8 @@ export const storageService = {
           originalPartId: targetOrigId || undefined,
           stageId, 
           location, 
-          quantity: Math.max(0, delta) 
+          quantity: Math.max(0, delta),
+          lastUpdated: Date.now()
         };
         inventory.push(itemToSave);
       }
@@ -2006,6 +2031,7 @@ export const storageService = {
       inventory[index].quantity = Math.max(0, quantity);
       inventory[index].partId = targetId;
       if (targetOrigId) inventory[index].originalPartId = targetOrigId;
+      if (!inventory[index].lastUpdated) inventory[index].lastUpdated = Date.now();
       itemToSave = inventory[index];
     } else {
       itemToSave = { 
@@ -2013,7 +2039,8 @@ export const storageService = {
         originalPartId: targetOrigId || undefined,
         stageId, 
         location, 
-        quantity: Math.max(0, quantity) 
+        quantity: Math.max(0, quantity),
+        lastUpdated: Date.now()
       };
       inventory.push(itemToSave);
     }
@@ -3809,6 +3836,7 @@ export const storageService = {
     const pos = this.getProductionOrders();
     const updatedPOs = [masterPo, ...allChildPOs, ...pos];
     this.saveProductionOrders(updatedPOs);
+    persistProductionOrdersToSupabase([masterPo, ...allChildPOs]);
     return masterPo;
   },
 
