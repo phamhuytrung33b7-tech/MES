@@ -1620,6 +1620,260 @@ export const storageService = {
     return [...data];
   },
 
+  /**
+   * 1. BÁO CÁO THEO TỪNG NGÀY TRONG QUÁ KHỨ (Xem chi tiết theo giờ của 1 ngày - Ảnh 1)
+   * Query Supabase lấy dữ liệu từ 00:00:00 đến 23:59:59 của ngày dateStr.
+   * Chọn lọc cột rõ ràng (.select(...), không SELECT *).
+   * Dữ liệu chỉ xử lý và lưu tạm trên RAM / React State, TUYỆT ĐỐI KHÔNG lưu vào localStorage.
+   */
+  async fetchTransactionsForSingleDay(dateStr: string): Promise<{ transactions: Transaction[]; glazingLabels: Transaction[] }> {
+    if (!dateStr) {
+      return { transactions: [], glazingLabels: [] };
+    }
+
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const startMs = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+    const endMs = new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+
+    if (!isSupabaseConfigured) {
+      const localTxs = this.getTransactions().filter(t => t.timestamp >= startMs && t.timestamp <= endMs);
+      const localLabels = this.getLabels().filter(l => l.timestamp >= startMs && l.timestamp <= endMs && l.type === 'STAGE_OUT' && l.stageId === 'GLAZING');
+      return { transactions: localTxs, glazingLabels: localLabels };
+    }
+
+    try {
+      const SELECTED_TX_COLUMNS = 'id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded';
+      const SELECTED_LABEL_COLUMNS = 'id, part_id, stage_id, quantity, timestamp, qr_data, metadata';
+
+      const PAGE_SIZE = 1000;
+      let from = 0;
+      let allTxs: Transaction[] = [];
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('wip_transactions')
+          .select(SELECTED_TX_COLUMNS)
+          .gte('timestamp', startMs)
+          .lte('timestamp', endMs)
+          .order('timestamp', { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
+
+        if (error) throw error;
+        if (data && data.length > 0) {
+          const mapped: Transaction[] = data.map((r: any) => ({
+            id: r.id,
+            type: r.type,
+            partId: r.part_id,
+            partName: r.part_name || undefined,
+            originalPartId: r.original_part_id || undefined,
+            quantity: Number(r.quantity) || 0,
+            stageId: r.stage_id,
+            location: r.location || undefined,
+            timestamp: Number(r.timestamp),
+            qrData: r.qr_data || undefined,
+            sourceStageId: r.source_stage_id || undefined,
+            targetStageId: r.target_stage_id || undefined,
+            poId: r.po_id || undefined,
+            planId: r.plan_id || undefined,
+            printed: Boolean(r.printed),
+            defectReason: r.defect_reason || undefined,
+            defectCategory: r.defect_category || undefined,
+            kpiRecorded: Boolean(r.kpi_recorded)
+          }));
+          allTxs.push(...mapped);
+          if (data.length < PAGE_SIZE) {
+            hasMore = false;
+          } else {
+            from += PAGE_SIZE;
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+
+      // Lấy nhãn dán kính trong ngày từ qr_labels
+      let glazingLabels: Transaction[] = [];
+      try {
+        const { data: labelData, error: labelError } = await supabase
+          .from('qr_labels')
+          .select(SELECTED_LABEL_COLUMNS)
+          .eq('stage_id', 'GLAZING')
+          .gte('timestamp', startMs)
+          .lte('timestamp', endMs)
+          .order('timestamp', { ascending: true });
+
+        if (!labelError && labelData) {
+          glazingLabels = labelData.map((r: any) => {
+            if (r.metadata && typeof r.metadata === 'object' && r.metadata.id) {
+              return r.metadata;
+            }
+            return {
+              id: r.id,
+              type: 'STAGE_OUT',
+              partId: r.part_id || '',
+              quantity: Number(r.quantity) || 0,
+              stageId: 'GLAZING',
+              timestamp: Number(r.timestamp),
+              qrData: r.qr_data || undefined
+            };
+          });
+        }
+      } catch (lErr) {
+        console.warn('[Supabase Report] qr_labels query error:', lErr);
+      }
+
+      return { transactions: allTxs, glazingLabels };
+    } catch (err: any) {
+      console.warn('[Supabase Report] fetchTransactionsForSingleDay fallback to local:', err?.message || err);
+      const localTxs = this.getTransactions().filter(t => t.timestamp >= startMs && t.timestamp <= endMs);
+      const localLabels = this.getLabels().filter(l => l.timestamp >= startMs && l.timestamp <= endMs && l.type === 'STAGE_OUT' && l.stageId === 'GLAZING');
+      return { transactions: localTxs, glazingLabels: localLabels };
+    }
+  },
+
+  /**
+   * 2. BÁO CÁO THEO QUÃNG NGÀY (Tối đa 35 ngày gần nhất - Ảnh 2 & 3)
+   * Validate khoảng cách startDate -> endDate không quá 35 ngày.
+   * Query Supabase với .select(...) có chọn lọc cột rõ ràng, phân trang .range() nếu dữ liệu lớn.
+   * Dữ liệu trả về chỉ lưu tạm trên RAM / React State, TUYỆT ĐỐI KHÔNG lưu vào localStorage.
+   */
+  async fetchTransactionsForDateRange(startDateStr: string, endDateStr: string): Promise<{ transactions: Transaction[]; glazingLabels: Transaction[] }> {
+    if (!startDateStr || !endDateStr) {
+      throw new Error('Vui lòng chọn đầy đủ Từ ngày và Đến ngày!');
+    }
+
+    const [sY, sM, sD] = startDateStr.split('-').map(Number);
+    const start = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
+    const [eY, eM, eD] = endDateStr.split('-').map(Number);
+    const end = new Date(eY, eM - 1, eD, 23, 59, 59, 999);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new Error('Ngày chọn không hợp lệ!');
+    }
+    if (start.getTime() > end.getTime()) {
+      throw new Error('Từ ngày không được lớn hơn Đến ngày!');
+    }
+
+    // Validate khoảng cách tối đa 35 ngày gần nhất
+    const diffDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays > 35) {
+      throw new Error(`Khoảng thời gian đã chọn là ${diffDays} ngày. Hệ thống chỉ cho phép báo cáo tối đa 35 ngày gần nhất!`);
+    }
+
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+
+    if (!isSupabaseConfigured) {
+      const localTxs = this.getTransactions().filter(t => t.timestamp >= startMs && t.timestamp <= endMs);
+      const localLabels = this.getLabels().filter(l => l.timestamp >= startMs && l.timestamp <= endMs && l.type === 'STAGE_OUT' && l.stageId === 'GLAZING');
+      return { transactions: localTxs, glazingLabels: localLabels };
+    }
+
+    try {
+      const SELECTED_TX_COLUMNS = 'id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded';
+      const SELECTED_LABEL_COLUMNS = 'id, part_id, stage_id, quantity, timestamp, qr_data, metadata';
+
+      const PAGE_SIZE = 1000;
+      let from = 0;
+      let allTxs: Transaction[] = [];
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('wip_transactions')
+          .select(SELECTED_TX_COLUMNS)
+          .gte('timestamp', startMs)
+          .lte('timestamp', endMs)
+          .order('timestamp', { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
+
+        if (error) throw error;
+        if (data && data.length > 0) {
+          const mapped: Transaction[] = data.map((r: any) => ({
+            id: r.id,
+            type: r.type,
+            partId: r.part_id,
+            partName: r.part_name || undefined,
+            originalPartId: r.original_part_id || undefined,
+            quantity: Number(r.quantity) || 0,
+            stageId: r.stage_id,
+            location: r.location || undefined,
+            timestamp: Number(r.timestamp),
+            qrData: r.qr_data || undefined,
+            sourceStageId: r.source_stage_id || undefined,
+            targetStageId: r.target_stage_id || undefined,
+            poId: r.po_id || undefined,
+            planId: r.plan_id || undefined,
+            printed: Boolean(r.printed),
+            defectReason: r.defect_reason || undefined,
+            defectCategory: r.defect_category || undefined,
+            kpiRecorded: Boolean(r.kpi_recorded)
+          }));
+          allTxs.push(...mapped);
+          if (data.length < PAGE_SIZE) {
+            hasMore = false;
+          } else {
+            from += PAGE_SIZE;
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+
+      // Lấy nhãn dán kính phân trang
+      let fromLabel = 0;
+      let allLabels: Transaction[] = [];
+      let hasMoreLabels = true;
+      while (hasMoreLabels) {
+        const { data: labelData, error: labelError } = await supabase
+          .from('qr_labels')
+          .select(SELECTED_LABEL_COLUMNS)
+          .eq('stage_id', 'GLAZING')
+          .gte('timestamp', startMs)
+          .lte('timestamp', endMs)
+          .order('timestamp', { ascending: true })
+          .range(fromLabel, fromLabel + PAGE_SIZE - 1);
+
+        if (labelError) {
+          hasMoreLabels = false;
+          break;
+        }
+        if (labelData && labelData.length > 0) {
+          const mappedLabels: Transaction[] = labelData.map((r: any) => {
+            if (r.metadata && typeof r.metadata === 'object' && r.metadata.id) {
+              return r.metadata;
+            }
+            return {
+              id: r.id,
+              type: 'STAGE_OUT',
+              partId: r.part_id || '',
+              quantity: Number(r.quantity) || 0,
+              stageId: 'GLAZING',
+              timestamp: Number(r.timestamp),
+              qrData: r.qr_data || undefined
+            };
+          });
+          allLabels.push(...mappedLabels);
+          if (labelData.length < PAGE_SIZE) {
+            hasMoreLabels = false;
+          } else {
+            fromLabel += PAGE_SIZE;
+          }
+        } else {
+          hasMoreLabels = false;
+        }
+      }
+
+      return { transactions: allTxs, glazingLabels: allLabels };
+    } catch (err: any) {
+      console.warn('[Supabase Report] fetchTransactionsForDateRange fallback to local:', err?.message || err);
+      const localTxs = this.getTransactions().filter(t => t.timestamp >= startMs && t.timestamp <= endMs);
+      const localLabels = this.getLabels().filter(l => l.timestamp >= startMs && l.timestamp <= endMs && l.type === 'STAGE_OUT' && l.stageId === 'GLAZING');
+      return { transactions: localTxs, glazingLabels: localLabels };
+    }
+  },
+
   saveInventory(inventory: InventoryItem[]) {
     localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify(inventory));
     cache[STORAGE_KEYS.INVENTORY] = inventory;

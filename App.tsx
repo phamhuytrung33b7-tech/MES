@@ -62,7 +62,8 @@ import {
   Camera,
   Scissors,
   Scale,
-  Percent
+  Percent,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -5079,7 +5080,7 @@ const exportDailyProductionReport = (transactions: Transaction[], parts: Part[])
   XLSX.writeFile(wb, `BaoCao_SanLuong_${format(new Date(), 'yyyyMMdd')}.xlsx`);
 };
 
-const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[], dateStr: string) => {
+const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[], dateStr: string, glazingLabelsOverride?: Transaction[]) => {
   const dclrNorms = storageService.getNorms().filter(n => n.stageId === 'DCLR');
   const dclrNormsMap = new Map(dclrNorms.map(n => [n.partId, n.secondsPerUnit]));
   const glazingHSQD = (partId: string) => getGlazingHSQD(partId, dclrNormsMap, dclrNorms, parts);
@@ -5146,7 +5147,7 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   end.setHours(23, 59, 59, 999);
   const endMs = end.getTime();
 
-  const labels = storageService.getLabels();
+  const labels = glazingLabelsOverride && glazingLabelsOverride.length > 0 ? glazingLabelsOverride : storageService.getLabels();
 
   const rangeTx = transactions.filter(t => 
     (t.type === 'STAGE_OUT' && t.location === 'IN') ||
@@ -5509,7 +5510,7 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   }
 };
 
-const exportProductionReportRange = (transactions: Transaction[], parts: Part[], startDateStr: string, endDateStr: string, peoplePerDay: Record<string, number> = {}, mandaysPerDay: Record<string, number> = {}, totalMandays: number = 0, weekName?: string) => {
+const exportProductionReportRange = (transactions: Transaction[], parts: Part[], startDateStr: string, endDateStr: string, peoplePerDay: Record<string, number> = {}, mandaysPerDay: Record<string, number> = {}, totalMandays: number = 0, weekName?: string, glazingLabelsOverride?: Transaction[]) => {
   const [sYear, sMonth, sDay] = startDateStr.split('-').map(Number);
   const start = new Date(sYear, sMonth - 1, sDay, 0, 0, 0, 0);
   const startMs = start.getTime();
@@ -5518,7 +5519,7 @@ const exportProductionReportRange = (transactions: Transaction[], parts: Part[],
   const end = new Date(eYear, eMonth - 1, eDay, 23, 59, 59, 999);
   const endMs = end.getTime();
 
-  const labels = storageService.getLabels();
+  const labels = glazingLabelsOverride && glazingLabelsOverride.length > 0 ? glazingLabelsOverride : storageService.getLabels();
 
   const rangeTx = transactions.filter(t => 
     ((t.type === 'STAGE_OUT' && t.location === 'IN') ||
@@ -6173,6 +6174,24 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   };
 
   const [chartDate, setChartDate] = useState(() => getPastDateStr(0));
+  const [dailyData, setDailyData] = useState<{ date: string; transactions: Transaction[]; glazingLabels: Transaction[] } | null>(null);
+  const [isLoadingDailyData, setIsLoadingDailyData] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingDailyData(true);
+    storageService.fetchTransactionsForSingleDay(chartDate).then(res => {
+      if (!cancelled) {
+        setDailyData({ date: chartDate, transactions: res.transactions, glazingLabels: res.glazingLabels });
+        setIsLoadingDailyData(false);
+      }
+    }).catch(err => {
+      console.warn('[Dashboard] fetchTransactionsForSingleDay error:', err);
+      if (!cancelled) setIsLoadingDailyData(false);
+    });
+    return () => { cancelled = true; };
+  }, [chartDate]);
+
   const [hourlyPeopleLaser, setHourlyPeopleLaser] = useState<Record<string, number>>(() => storageService.getHourlyPeopleLaser(getPastDateStr(0)));
   const [hourlyPeoplePainting, setHourlyPeoplePainting] = useState<Record<string, number>>(() => storageService.getHourlyPeoplePainting(getPastDateStr(0)));
   const [hourlyPeopleGlazing, setHourlyPeopleGlazing] = useState<Record<string, number>>(() => storageService.getHourlyPeopleGlazing(getPastDateStr(0)));
@@ -6214,6 +6233,57 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   const [selectedMasterPoIdsForExport, setSelectedMasterPoIdsForExport] = useState<string[]>([]);
   const [exportModelSearchTerm, setExportModelSearchTerm] = useState('');
   const [preparationExpectedDate, setPreparationExpectedDate] = useState(() => getPastDateTimeStr(-2)); // Tương lai 2 ngày (có thể điều chỉnh)
+
+  const [isExportingRange, setIsExportingRange] = useState(false);
+  const [rangeExportError, setRangeExportError] = useState<string | null>(null);
+
+  const rangeValidation = useMemo(() => {
+    if (!exportStartDate || !exportEndDate) {
+      return { isValid: false, diffDays: 0, message: 'Vui lòng chọn đầy đủ Từ ngày và Đến ngày!' };
+    }
+    const [sY, sM, sD] = exportStartDate.split('-').map(Number);
+    const s = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
+    const [eY, eM, eD] = exportEndDate.split('-').map(Number);
+    const e = new Date(eY, eM - 1, eD, 0, 0, 0, 0);
+    if (s.getTime() > e.getTime()) {
+      return { isValid: false, diffDays: 0, message: 'Từ ngày không được lớn hơn Đến ngày!' };
+    }
+    const diffDays = Math.round((e.getTime() - s.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+    if (diffDays > 35) {
+      return { 
+        isValid: false, 
+        diffDays, 
+        message: `Khoảng cách quãng ngày là ${diffDays} ngày, vượt quá giới hạn tối đa 35 ngày theo quy định hệ thống!` 
+      };
+    }
+    return { isValid: true, diffDays, message: '' };
+  }, [exportStartDate, exportEndDate]);
+
+  const handleExecuteRangeExport = async () => {
+    if (!rangeValidation.isValid || isExportingRange) return;
+    setIsExportingRange(true);
+    setRangeExportError(null);
+    try {
+      const { transactions: rangeTxs, glazingLabels: rangeGlazingLabels } = await storageService.fetchTransactionsForDateRange(exportStartDate, exportEndDate);
+      exportProductionReportRange(
+        rangeTxs, 
+        parts, 
+        exportStartDate, 
+        exportEndDate, 
+        peoplePerDay, 
+        mandaysPerDay, 
+        parseFloat(exportTotalMandays) || calculatedTotalMandays, 
+        exportWeekName,
+        rangeGlazingLabels
+      );
+      setShowExportModal(false);
+    } catch (err: any) {
+      console.error('[Dashboard] Error exporting range report:', err);
+      setRangeExportError(err?.message || 'Lỗi khi tải dữ liệu báo cáo từ máy chủ.');
+    } finally {
+      setIsExportingRange(false);
+    }
+  };
 
   const exportDateRange = useMemo(() => {
     if (!exportStartDate || !exportEndDate) return [];
@@ -6410,11 +6480,14 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       return txDate === chartDate;
     };
 
-    const productionTransactions = transactions.filter(txFilterFn);
+    // Use on-demand Supabase daily data in RAM if available for selected chartDate, otherwise fallback to props
+    const effectiveTxs = (dailyData && dailyData.date === chartDate) ? dailyData.transactions : transactions;
+    const productionTransactions = effectiveTxs.filter(txFilterFn);
     
     // Specifically for GLAZING, we might need to also count STAGE_OUT labels
     // similar to how export reports work.
-    const glazingLabels = labels.filter(l => {
+    const effectiveLabels = (dailyData && dailyData.date === chartDate) ? dailyData.glazingLabels : labels;
+    const glazingLabels = effectiveLabels.filter(l => {
        if (l.type !== 'STAGE_OUT' || l.stageId !== 'GLAZING' || (l as any).kpiRecorded) return false;
        const txDateObj = new Date(l.timestamp);
        const offset = txDateObj.getTimezoneOffset();
@@ -6657,7 +6730,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
       return slotData;
     });
-  }, [transactions, labels, chartDate, activeChartShift, hourlyPeopleLaser, hourlyPeoplePainting, hourlyPeopleGlazing, hourlyPeopleBending, hourlyPeopleWelding]);
+  }, [transactions, labels, chartDate, activeChartShift, hourlyPeopleLaser, hourlyPeoplePainting, hourlyPeopleGlazing, hourlyPeopleBending, hourlyPeopleWelding, dailyData]);
 
   const laserScrapItems = useMemo(() => {
     return inventory.filter(item => 
@@ -8294,6 +8367,9 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                 onChange={(e) => setChartDate(e.target.value)}
                 className="bg-transparent border-none outline-none font-bold text-indigo-600 text-xs cursor-pointer"
               />
+              {isLoadingDailyData && (
+                <Loader2 size={13} className="animate-spin text-indigo-600 shrink-0" title="Đang tải dữ liệu từ Supabase..." />
+              )}
               <div className="absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap bg-gray-800 text-white text-[10px] font-bold py-1 px-2.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
                 Chỉ xem báo cáo 35 ngày gần nhất
               </div>
@@ -9012,25 +9088,37 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   </div>
                 </div>
 
+                {!rangeValidation.isValid && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-bold text-red-700 flex items-center gap-2">
+                    <AlertCircle size={16} className="shrink-0 text-red-600" />
+                    <span>{rangeValidation.message}</span>
+                  </div>
+                )}
+
+                {rangeExportError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-bold text-red-700 flex items-center gap-2">
+                    <AlertCircle size={16} className="shrink-0 text-red-600" />
+                    <span>{rangeExportError}</span>
+                  </div>
+                )}
+
                 <div className="pt-2">
                   <button 
-                    onClick={() => {
-                      exportProductionReportRange(
-                        transactions, 
-                        parts, 
-                        exportStartDate, 
-                        exportEndDate, 
-                        peoplePerDay, 
-                        mandaysPerDay, 
-                        parseFloat(exportTotalMandays) || calculatedTotalMandays, 
-                        exportWeekName
-                      );
-                      setShowExportModal(false);
-                    }}
-                    className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg uppercase hover:bg-green-700 active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2"
+                    onClick={handleExecuteRangeExport}
+                    disabled={!rangeValidation.isValid || isExportingRange}
+                    className="w-full py-4 bg-green-600 hover:bg-green-700 text-white rounded-xl font-bold text-lg uppercase active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <FileSpreadsheet size={24} />
-                    Xuất File Excel
+                    {isExportingRange ? (
+                      <>
+                        <Loader2 size={24} className="animate-spin" />
+                        <span>Đang tải dữ liệu từ Supabase...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileSpreadsheet size={24} />
+                        <span>Xuất File Excel</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
@@ -9389,7 +9477,9 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                 <div className="pt-2">
                   <button 
                     onClick={() => {
-                      exportHourlyProductionReport(transactions, parts, chartDate);
+                      const effectiveHourlyTxs = (dailyData && dailyData.date === chartDate) ? dailyData.transactions : transactions;
+                      const effectiveHourlyGlazing = (dailyData && dailyData.date === chartDate) ? dailyData.glazingLabels : undefined;
+                      exportHourlyProductionReport(effectiveHourlyTxs, parts, chartDate, effectiveHourlyGlazing);
                       setShowExportHourlyModal(false);
                     }}
                     className="w-full py-4 bg-green-600 text-white rounded-xl font-bold text-lg uppercase hover:bg-green-700 active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2"
