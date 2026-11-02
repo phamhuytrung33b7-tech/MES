@@ -5208,7 +5208,10 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     { label: '5h-6h', start: 5, end: 6, factor: 0.125 },
   ];
 
+  const allDaySlots = [...daySlots, ...nightSlots];
+
   const shifts = [
+    { id: 'ALL_DAY', name: 'Cả Ngày', timeSlots: allDaySlots, hoursDesc: '24 Giờ (Ca Ngày & Ca Đêm)' },
     { id: 'DAY', name: 'Ca Ngày', timeSlots: daySlots, hoursDesc: '6h - 19h' },
     { id: 'NIGHT', name: 'Ca Đêm', timeSlots: nightSlots, hoursDesc: '19h - 6h' },
   ];
@@ -5233,14 +5236,37 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
 
     const isStandardPOStage = stageInfo.id === 'PAINTING' || stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING' || stageInfo.id === 'LASER';
 
+    // Lấy toàn bộ PO con của công đoạn này có ngày hoàn thành (hoặc ngày dự kiến) rơi vào ngày được chọn
+    const stageAllOrders = storageService.getProductionOrders().filter(o => o.stageId === stageInfo.id);
+    const stageDayOrders = stageAllOrders.filter(o => {
+      const dt = o.expectedCompletionTime || o.plannedStartTime || o.createdAt;
+      return dt >= startMs && dt <= endMs;
+    });
+
+    const glazingPlans = storageService.getGlazingPlans();
+    const glazingPlanNorms = storageService.getGlazingPlanNorms();
+    const glazingDayPlans = glazingPlans.filter(p => {
+      const dt = p.expectedCompletionTime || p.targetCompletionTime || p.plannedStartTime || p.createdAt;
+      return dt >= startMs && dt <= endMs;
+    });
+
     shifts.forEach(shift => {
       const timeSlots = shift.timeSlots;
       const isDay = shift.id === 'DAY';
+      const isAllDay = shift.id === 'ALL_DAY';
 
-      const shiftTx = stageTx.filter(t => {
-        const H = new Date(t.timestamp).getHours();
-        return isDay ? (H >= 6 && H < 19) : ((H >= 19 && H < 24) || (H >= 0 && H < 6));
-      });
+      let shiftTx = stageTx;
+      if (isDay) {
+        shiftTx = stageTx.filter(t => {
+          const H = new Date(t.timestamp).getHours();
+          return H >= 6 && H < 19;
+        });
+      } else if (shift.id === 'NIGHT') {
+        shiftTx = stageTx.filter(t => {
+          const H = new Date(t.timestamp).getHours();
+          return (H >= 19 && H < 24) || (H >= 0 && H < 6);
+        });
+      }
 
       const partTotals = new Map<string, number>();
       const partSlots = new Map<string, number[]>();
@@ -5249,7 +5275,21 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
         partTotals.set(t.partId, (partTotals.get(t.partId) || 0) + (t.quantity || 0));
         const H = new Date(t.timestamp).getHours();
         let slotIndex = -1;
-        if (isDay) {
+        if (isAllDay) {
+          if (H >= 6 && H < 8) slotIndex = 0;
+          else if (H >= 8 && H < 10) slotIndex = 1;
+          else if (H >= 10 && H < 12) slotIndex = 2;
+          else if (H === 12) slotIndex = 2; // Khung nghỉ trưa gộp vào 10h-12h
+          else if (H >= 13 && H < 15) slotIndex = 3;
+          else if (H >= 15 && H < 17) slotIndex = 4;
+          else if (H >= 17 && H < 19) slotIndex = 5;
+          else if (H >= 19 && H < 21) slotIndex = 6;
+          else if (H >= 21 && H < 23) slotIndex = 7;
+          else if (H >= 23 || H === 0) slotIndex = 8; // 23h-0h và giờ nghỉ đêm 0h-1h gộp vào 23h-0h
+          else if (H >= 1 && H < 3) slotIndex = 9;
+          else if (H >= 3 && H < 5) slotIndex = 10;
+          else if (H >= 5 && H < 6) slotIndex = 11;
+        } else if (isDay) {
           if (H >= 6 && H < 8) slotIndex = 0;
           else if (H >= 8 && H < 10) slotIndex = 1;
           else if (H >= 10 && H < 12) slotIndex = 2;
@@ -5275,12 +5315,40 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
         }
       });
 
-      const activeParts = Array.from(partTotals.keys());
+      // Tập hợp tất cả linh kiện: Các linh kiện đã có sản lượng thực tế trong ca HOẶC có KHSX trong ngày chọn
+      const activePartMap = new Map<string, string>(); // partId -> partName
+      partTotals.forEach((_, pId) => {
+        const pt = parts.find(p => p.id === pId || p.name === pId);
+        activePartMap.set(pId, pt?.name || pId);
+      });
+
+      if (isStandardPOStage) {
+        stageDayOrders.forEach(o => {
+          if (o.partId) {
+            const pt = parts.find(p => p.id === o.partId || p.name === o.partId);
+            if (!activePartMap.has(o.partId)) {
+              activePartMap.set(o.partId, pt?.name || o.partId);
+            }
+          }
+        });
+      } else if (stageInfo.id === 'GLAZING') {
+        glazingDayPlans.forEach(p => {
+          const relatedNorms = glazingPlanNorms.filter(n => n.appliedModel === p.modelId);
+          relatedNorms.forEach(n => {
+            const pt = parts.find(part => part.id === n.id || part.name === n.id);
+            if (!activePartMap.has(n.id)) {
+              activePartMap.set(n.id, n.partName || pt?.name || n.id);
+            }
+          });
+        });
+      }
+
+      const activeParts = Array.from(activePartMap.keys());
 
       const sheetData: any[] = [];
 
       // Title Row
-      const titleRowText = `BÁO CÁO SẢN XUẤT THEO CUNG GIỜ ${stageInfo.name.toUpperCase()} - ${shift.name.toUpperCase()} NGÀY ${titleDate}`;
+      const titleRowText = `BÁO CÁO SẢN XUẤT THEO CUNG GIỜ ${stageInfo.name.toUpperCase()} - ${shift.id === 'ALL_DAY' ? 'TỔNG CẢ NGÀY' : shift.name.toUpperCase()} NGÀY ${titleDate}`;
       const titleRow = [titleRowText];
 
       // Rows 1 and 2 headers
@@ -5304,8 +5372,11 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
       let totalQD = 0;
 
       activeParts.sort().forEach(partId => {
-        const part = parts.find(p => p.id === partId);
-        const partName = part?.name || partId;
+        const part = parts.find(p => p.id === partId || p.name === partId);
+        const partName = activePartMap.get(partId) || part?.name || partId;
+        const cleanPId = (part?.id || partId).trim().toUpperCase();
+        const cleanPName = (part?.name || partName).trim().toUpperCase();
+
         const isLaser = stageInfo.id === 'LASER';
         const isBW = stageInfo.id === 'BENDING' || stageInfo.id === 'WELDING';
         const isGlz = stageInfo.id === 'GLAZING';
@@ -5315,25 +5386,37 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
           : (isBW ? getBendingWeldingHSQD(partId) : (isPainting ? getPaintingHSQD(partId) : (isGlz ? getGlazingStageHSQD(partId) : glazingHSQD(partId))));
         const thucHien = partTotals.get(partId) || 0;
 
-        // get KHSX based on Stage
+        // get KHSX based on Stage using expectedCompletionTime (or plannedStartTime/createdAt)
         let khsx = 0;
         if (isStandardPOStage) {
-          const orders = storageService.getProductionOrders().filter(o => o.stageId === stageInfo.id && o.partId === partId);
-          khsx = orders.filter(o => {
-            const dt = o.plannedStartTime || o.createdAt;
-            return dt >= startMs && dt <= endMs;
-          }).reduce((s, o) => s + (o.targetQuantity || 0), 0);
+          const matchedOrders = stageDayOrders.filter(o => {
+            const oId = (o.partId || '').trim().toUpperCase();
+            return oId === cleanPId || oId === cleanPName;
+          });
+          khsx = matchedOrders.reduce((s, o) => s + (o.targetQuantity || 0), 0);
         } else if (stageInfo.id === 'GLAZING') {
-          const glazingPlans = storageService.getGlazingPlans();
-          const glazingPlanNorms = storageService.getGlazingPlanNorms();
-          const planNorm = glazingPlanNorms.find(n => n.id === partId);
-          if (planNorm) {
-            khsx = glazingPlans.filter(p => p.modelId === planNorm.appliedModel && (p.plannedStartTime || p.createdAt) >= startMs && (p.plannedStartTime || p.createdAt) <= endMs).reduce((s, p) => s + p.targetQuantity, 0);
+          const planNorms = glazingPlanNorms.filter(n => {
+            const nId = (n.id || '').trim().toUpperCase();
+            const nName = (n.partName || '').trim().toUpperCase();
+            return nId === cleanPId || nId === cleanPName || nName === cleanPName || nName === cleanPId;
+          });
+          if (planNorms.length > 0) {
+            const models = planNorms.map(n => (n.appliedModel || '').trim().toUpperCase());
+            khsx = glazingDayPlans.filter(p => {
+              const pModel = (p.modelId || '').trim().toUpperCase();
+              return models.includes(pModel);
+            }).reduce((s, p) => s + p.targetQuantity, 0);
+          } else {
+            const matchedOrders = stageDayOrders.filter(o => {
+              const oId = (o.partId || '').trim().toUpperCase();
+              return oId === cleanPId || oId === cleanPName;
+            });
+            khsx = matchedOrders.reduce((s, o) => s + (o.targetQuantity || 0), 0);
           }
         }
 
-        const conLai = khsx - thucHien;
-        const khsx_qd = khsx * hsqd;
+        const conLai = khsx > 0 ? Math.max(0, khsx - thucHien) : (thucHien > 0 ? 0 : '');
+        const khsx_qd = khsx * (hsqd > 0 ? hsqd : 1);
 
         sumKHSX += khsx;
         sumTH += thucHien;
@@ -5343,8 +5426,8 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
           partName, 
           khsx > 0 ? khsx : '', 
           thucHien > 0 ? thucHien : '',
-          conLai !== 0 ? conLai : '',
-          khsx > 0 ? (thucHien/khsx) : '',
+          khsx > 0 ? conLai : '',
+          khsx > 0 ? (thucHien > 0 ? (thucHien/khsx) : 0) : '',
           hsqd > 0 ? Number(hsqd.toFixed(2)) : '',
           '' // KHSX sau QD de trong for parts
         ];
@@ -5353,16 +5436,24 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
         slotsArr.forEach((v, i) => {
           r.push(v > 0 ? v : '');
           sumSlots[i] += v;
-          sumSlots_QD[i] += (v * hsqd);
+          sumSlots_QD[i] += (v * (hsqd > 0 ? hsqd : 1));
         });
-        totalQD += (thucHien * hsqd);
+        totalQD += (thucHien * (hsqd > 0 ? hsqd : 1));
 
         r.push(thucHien > 0 ? thucHien : '');
         sheetData.push(r);
       });
 
       // Total row
-      const totalRow: any[] = ['Tổng số lượng chưa quy đổi', sumKHSX > 0 ? sumKHSX : '', sumTH > 0 ? sumTH : '', sumKHSX - sumTH !== 0 ? sumKHSX - sumTH : '', sumKHSX > 0 ? (sumTH/sumKHSX) : '', '', sumKHSX_QD > 0 ? sumKHSX_QD : ''];
+      const totalRow: any[] = [
+        'Tổng số lượng chưa quy đổi', 
+        sumKHSX > 0 ? sumKHSX : '', 
+        sumTH > 0 ? sumTH : '', 
+        sumKHSX > 0 ? Math.max(0, sumKHSX - sumTH) : '', 
+        sumKHSX > 0 ? (sumTH/sumKHSX) : '', 
+        '', 
+        sumKHSX_QD > 0 ? Math.round(sumKHSX_QD) : ''
+      ];
       sumSlots.forEach(s => totalRow.push(s > 0 ? s : ''));
       totalRow.push(sumTH > 0 ? sumTH : '');
       sheetData.push(totalRow);
@@ -5584,40 +5675,99 @@ const exportProductionReportRange = (transactions: Transaction[], parts: Part[],
       partTotals.set(t.partId, (partTotals.get(t.partId) || 0) + t.quantity);
     });
 
-    const rows = Array.from(partTotals.entries()).map(([partId, qty]) => {
-      const part = parts.find(p => p.id === partId);
+    // Lấy toàn bộ PO của công đoạn này có ngày hoàn thành (hoặc ngày dự kiến) trong khoảng thời gian chọn
+    const stageAllOrders = storageService.getProductionOrders().filter(o => o.stageId === stageInfo.id);
+    const stageRangeOrders = stageAllOrders.filter(o => {
+      const time = o.expectedCompletionTime || o.plannedStartTime || o.createdAt;
+      return time >= startMs && time <= endMs;
+    });
+
+    const allStagePartIds = new Set<string>(partTotals.keys());
+    stageRangeOrders.forEach(o => {
+      if (o.partId) allStagePartIds.add(o.partId);
+    });
+
+    if (stageInfo.id === 'GLAZING') {
+      const glzPlans = storageService.getGlazingPlans().filter(p => {
+        const time = p.expectedCompletionTime || p.targetCompletionTime || p.plannedStartTime || p.createdAt;
+        return time >= startMs && time <= endMs;
+      });
+      const glzNorms = storageService.getGlazingPlanNorms();
+      glzPlans.forEach(p => {
+        glzNorms.filter(n => n.appliedModel === p.modelId).forEach(n => allStagePartIds.add(n.id));
+      });
+    }
+
+    const rows = Array.from(allStagePartIds).map(partId => {
+      const part = parts.find(p => p.id === partId || p.name === partId);
+      const cleanPId = partId.trim().toUpperCase();
+      const cleanPName = (part?.name || partId).trim().toUpperCase();
+      const qty = partTotals.get(partId) || 0;
+
+      let khsx = stageRangeOrders.filter(o => {
+        const oId = (o.partId || '').trim().toUpperCase();
+        return oId === cleanPId || oId === cleanPName;
+      }).reduce((sum, o) => sum + (o.targetQuantity || 0), 0);
+
+      if (stageInfo.id === 'GLAZING') {
+        const glzNorms = storageService.getGlazingPlanNorms().filter(n => {
+          const nId = (n.id || '').trim().toUpperCase();
+          const nName = (n.partName || '').trim().toUpperCase();
+          return nId === cleanPId || nId === cleanPName || nName === cleanPName;
+        });
+        if (glzNorms.length > 0) {
+          const appliedModels = glzNorms.map(n => n.appliedModel);
+          const glzPlans = storageService.getGlazingPlans().filter(p => {
+            const time = p.expectedCompletionTime || p.targetCompletionTime || p.plannedStartTime || p.createdAt;
+            return appliedModels.includes(p.modelId) && time >= startMs && time <= endMs;
+          });
+          khsx += glzPlans.reduce((sum, p) => sum + p.targetQuantity, 0);
+        }
+      }
+
       return {
         'Mã linh kiện': partId,
         'Tên linh kiện': part?.name || partId,
         'Đơn vị': part?.unit || 'cái',
-        'Tổng sản lượng': qty
+        'Kế hoạch': khsx,
+        'Tổng sản lượng': qty,
+        'Chênh lệch': qty - khsx
       };
     });
+
+    rows.sort((a, b) => a['Mã linh kiện'].localeCompare(b['Mã linh kiện']));
 
     const sheetData: any[][] = [
       [`Báo cáo sản lượng CÔNG ĐOẠN ${stageInfo.name.toUpperCase()}`],
       [`Từ ngày: ${format(start, 'dd/MM/yyyy')} đến ngày ${format(end, 'dd/MM/yyyy')}`],
-      ['STT', 'Mã linh kiện', 'Tên linh kiện', 'Đơn vị', 'Tổng sản lượng']
+      ['STT', 'Mã linh kiện', 'Tên linh kiện', 'Đơn vị', 'Kế hoạch (KHSX)', 'Thực tế (TH)', 'Chênh lệch']
     ];
 
     rows.forEach((r, idx) => {
+      const diffVal = r['Chênh lệch'];
+      const diffDisplay = diffVal < 0 ? `(${Math.abs(diffVal)})` : (diffVal > 0 ? diffVal : 0);
       sheetData.push([
         idx + 1,
         r['Mã linh kiện'],
         r['Tên linh kiện'],
         r['Đơn vị'],
-        r['Tổng sản lượng']
+        r['Kế hoạch'] > 0 ? r['Kế hoạch'] : '',
+        r['Tổng sản lượng'] > 0 ? r['Tổng sản lượng'] : '',
+        diffDisplay
       ]);
     });
     
+    const grandKHSX = rows.reduce((s, r) => s + r['Kế hoạch'], 0);
     const grandTotal = rows.reduce((s, r) => s + r['Tổng sản lượng'], 0);
-    sheetData.push(['', 'TỔNG CỘNG', '', '', grandTotal]);
+    const grandDiff = grandTotal - grandKHSX;
+    const grandDiffDisplay = grandDiff < 0 ? `(${Math.abs(grandDiff)})` : (grandDiff > 0 ? grandDiff : 0);
+    sheetData.push(['', 'TỔNG CỘNG', '', '', grandKHSX > 0 ? grandKHSX : '', grandTotal > 0 ? grandTotal : '', grandDiffDisplay]);
 
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
 
     ws['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 4 } },
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 4 } },
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 6 } },
       { s: { r: sheetData.length - 1, c: 1 }, e: { r: sheetData.length - 1, c: 3 } }
     ];
 
@@ -5626,7 +5776,9 @@ const exportProductionReportRange = (transactions: Transaction[], parts: Part[],
       { wch: 30 }, // Mã LK
       { wch: 40 }, // Tên LK
       { wch: 10 }, // Đơn vị
-      { wch: 15 }, // Sản lượng
+      { wch: 15 }, // KHSX
+      { wch: 15 }, // TH
+      { wch: 15 }, // Chênh lệch
     ];
 
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
@@ -5647,12 +5799,12 @@ const exportProductionReportRange = (transactions: Transaction[], parts: Part[],
              ws[cellAddress].s = { 
                font: fontStyle, 
                fill: { fgColor: { rgb: "E2E8F0" } },
-               alignment: C === 4 ? { horizontal: "right", vertical: "center" } : { horizontal: "center", vertical: "center" },
+               alignment: (C >= 4) ? { horizontal: "right", vertical: "center" } : { horizontal: "center", vertical: "center" },
                border: borderStyle
              };
            } else {
              if (C === 0 || C === 3) ws[cellAddress].s = alignCenterStyle;
-             else if (C === 4) ws[cellAddress].s = alignRightStyle;
+             else if (C >= 4) ws[cellAddress].s = alignRightStyle;
              else ws[cellAddress].s = dataStyle;
            }
         }
@@ -5699,19 +5851,26 @@ const exportProductionReportRange = (transactions: Transaction[], parts: Part[],
   const glazingPlanNorms = storageService.getGlazingPlanNorms();
 
   allPaintingOrders.forEach(po => {
-    const time = po.plannedStartTime || po.createdAt;
+    const time = po.expectedCompletionTime || po.plannedStartTime || po.createdAt;
     if (time >= startMs && time <= endMs) {
       if (!excludedGlazingParts.has(po.partId)) allLapRapParts.add(po.partId);
     }
   });
 
   glazingPlans.forEach(plan => {
-    const time = plan.plannedStartTime || plan.createdAt;
+    const time = plan.targetCompletionTime || plan.expectedCompletionTime || plan.plannedStartTime || plan.createdAt;
     if (time >= startMs && time <= endMs) {
       const relatedNorms = glazingPlanNorms.filter(n => n.appliedModel === plan.modelId);
       relatedNorms.forEach(n => {
         if (!excludedGlazingParts.has(n.id)) allLapRapParts.add(n.id);
       });
+    }
+  });
+
+  masterOrders.forEach(mo => {
+    const time = mo.expectedCompletionTime || mo.plannedStartTime || mo.createdAt;
+    if (time >= startMs && time <= endMs) {
+      if (mo.partId) allLapRapParts.add(mo.partId);
     }
   });
 
@@ -5760,13 +5919,38 @@ const exportProductionReportRange = (transactions: Transaction[], parts: Part[],
         const dStart = daysStartMs[i];
         const dEnd = daysEndMs[i];
         
-        const dayKHSX_Painting = allPaintingOrders.filter(o => o.partId === partId && (o.plannedStartTime || o.createdAt) >= dStart && (o.plannedStartTime || o.createdAt) <= dEnd).reduce((sum, o) => sum + o.targetQuantity, 0);
-        const modelsForPart = glazingPlanNorms.filter(n => n.id === partId).map(n => n.appliedModel);
+        const cleanPId = partId.trim().toUpperCase();
+        const cleanPName = (part?.name || partId).trim().toUpperCase();
+
+        const dayKHSX_Painting = allPaintingOrders.filter(o => {
+          const oId = (o.partId || '').trim().toUpperCase();
+          if (oId !== cleanPId && oId !== cleanPName) return false;
+          const time = o.expectedCompletionTime || o.plannedStartTime || o.createdAt;
+          return time >= dStart && time <= dEnd;
+        }).reduce((sum, o) => sum + o.targetQuantity, 0);
+
+        const dayKHSX_Master = masterOrders.filter(mo => {
+          const oId = (mo.partId || '').trim().toUpperCase();
+          if (oId !== cleanPId && oId !== cleanPName) return false;
+          const time = mo.expectedCompletionTime || mo.plannedStartTime || mo.createdAt;
+          return time >= dStart && time <= dEnd;
+        }).reduce((sum, mo) => sum + mo.targetQuantity, 0);
+
+        const modelsForPart = glazingPlanNorms.filter(n => {
+          const nId = (n.id || '').trim().toUpperCase();
+          const nName = (n.partName || '').trim().toUpperCase();
+          return nId === cleanPId || nId === cleanPName || nName === cleanPName;
+        }).map(n => n.appliedModel);
+
         const dayKHSX_Glazing = modelsForPart.length > 0 
-           ? glazingPlans.filter(p => modelsForPart.includes(p.modelId) && (p.plannedStartTime || p.createdAt) >= dStart && (p.plannedStartTime || p.createdAt) <= dEnd).reduce((sum, p) => sum + p.targetQuantity, 0)
+           ? glazingPlans.filter(p => {
+               if (!modelsForPart.includes(p.modelId)) return false;
+               const time = p.expectedCompletionTime || p.targetCompletionTime || p.plannedStartTime || p.createdAt;
+               return time >= dStart && time <= dEnd;
+             }).reduce((sum, p) => sum + p.targetQuantity, 0)
            : 0;
 
-        const dayKHSX = dayKHSX_Painting + dayKHSX_Glazing;
+        const dayKHSX = Math.max(dayKHSX_Painting + dayKHSX_Glazing, dayKHSX_Master);
         
         // Lấy số lượng thực hiện của các công đoạn Lắp Ráp (Sơn, Dán Kính) khi hoàn thành chi tiết đưa vào kho OUT
         const dayTH = transactions.filter(t => 
@@ -11599,6 +11783,45 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
     }
   };
 
+  const [showEditGlazingTimeModal, setShowEditGlazingTimeModal] = useState<{ id: string; currentExpectedTime: number; modelName: string } | null>(null);
+  const [editGlazingTimeValue, setEditGlazingTimeValue] = useState<string>('');
+  const [editGlazingPassword, setEditGlazingPassword] = useState<string>('');
+  const [isSavingGlazingTime, setIsSavingGlazingTime] = useState<boolean>(false);
+
+  const handleUpdateGlazingPlanTime = async () => {
+    if (!showEditGlazingTimeModal) return;
+    if (!editGlazingTimeValue) {
+      alert('Vui lòng chọn ngày giờ hoàn thành dự kiến hợp lệ!');
+      return;
+    }
+    const currentUser = storageService.getCurrentUser();
+    const isPwValid = editGlazingPassword === 'admin123' || (storageService.verifyAdminPassword && storageService.verifyAdminPassword(editGlazingPassword, currentUser));
+    if (!isPwValid) {
+      alert('Mật khẩu quản trị viên không chính xác!');
+      return;
+    }
+
+    try {
+      setIsSavingGlazingTime(true);
+      const newTs = new Date(editGlazingTimeValue).getTime();
+      if (isNaN(newTs)) {
+        alert('Thời gian không hợp lệ!');
+        return;
+      }
+
+      storageService.updateGlazingPlanTime(showEditGlazingTimeModal.id, newTs);
+      setGlazingPlans(storageService.getGlazingPlans());
+      refreshData();
+      setShowEditGlazingTimeModal(null);
+      setEditGlazingPassword('');
+      alert('Đã cập nhật ngày giờ dự kiến xong và đồng bộ lên Supabase thành công!');
+    } catch (err: any) {
+      alert('Lỗi cập nhật: ' + (err?.message || String(err)));
+    } finally {
+      setIsSavingGlazingTime(false);
+    }
+  };
+
   // Planning state
   const [selectedModel, setSelectedModel] = useState("");
   const [planQuantity, setPlanQuantity] = useState(0);
@@ -12433,7 +12656,22 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                                   </span>
                                 </div>
                                 <div className="flex flex-col items-end">
-                                  <span className="text-[9px] font-bold text-orange-400 uppercase tracking-wider">Dự kiến xong</span>
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[9px] font-bold text-orange-400 uppercase tracking-wider">Dự kiến xong</span>
+                                    <button
+                                      type="button"
+                                      title="Sửa ngày giờ dự kiến xong & đồng bộ Supabase"
+                                      onClick={() => {
+                                        const ts = plan.expectedCompletionTime || plan.targetCompletionTime || Date.now();
+                                        setEditGlazingTimeValue(format(new Date(ts), "yyyy-MM-dd'T'HH:mm"));
+                                        setEditGlazingPassword('');
+                                        setShowEditGlazingTimeModal({ id: plan.id, currentExpectedTime: ts, modelName });
+                                      }}
+                                      className="p-0.5 text-orange-500 hover:text-orange-700 hover:bg-orange-100 rounded transition-colors cursor-pointer"
+                                    >
+                                      <Edit2 size={11} />
+                                    </button>
+                                  </div>
                                   <span className="text-[11px] sm:text-xs font-bold text-orange-700">
                                     {plan.expectedCompletionTime ? format(new Date(plan.expectedCompletionTime), 'HH:mm - dd/MM') : '--:--'}
                                   </span>
@@ -13585,6 +13823,108 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                   <CheckCircle2 size={18} />
                   <span>{isBatchCreatingGlazing ? 'Đang tạo kế hoạch...' : `Xác Nhận Tạo Hàng Loạt (${excelGlazingImportList.length} Kế Hoạch)`}</span>
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal chỉnh sửa Ngày Giờ Dự Kiến Xong của Kế Hoạch Dán Kính */}
+      <AnimatePresence>
+        {showEditGlazingTimeModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-gray-100 overflow-hidden"
+            >
+              <div className="bg-gradient-to-r from-orange-600 to-amber-600 p-4 text-white flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <Clock size={20} className="text-white" />
+                  <div>
+                    <h4 className="font-bold text-sm uppercase tracking-wide">Sửa thời gian dự kiến xong</h4>
+                    <p className="text-[11px] text-orange-100">Kế hoạch Dán Kính & Đồng bộ Supabase</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowEditGlazingTimeModal(null)}
+                  className="p-1 hover:bg-white/20 rounded-lg transition-colors cursor-pointer text-white"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                <div className="bg-orange-50/70 border border-orange-200/80 rounded-xl p-3 text-xs space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 font-semibold">Mã Kế Hoạch:</span>
+                    <span className="font-mono font-bold text-orange-800">{showEditGlazingTimeModal.id}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 font-semibold">Model:</span>
+                    <span className="font-bold text-gray-900">{showEditGlazingTimeModal.modelName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500 font-semibold">Hiện tại:</span>
+                    <span className="font-mono text-gray-700">
+                      {format(new Date(showEditGlazingTimeModal.currentExpectedTime), 'HH:mm - dd/MM/yyyy')}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 uppercase tracking-wider block">
+                    1. Ngày & Giờ dự kiến xong mới:
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={editGlazingTimeValue}
+                    onChange={(e) => setEditGlazingTimeValue(e.target.value)}
+                    className="w-full p-3 border border-gray-300 rounded-xl font-bold text-sm focus:border-orange-500 focus:ring-2 focus:ring-orange-100 outline-none"
+                  />
+                  <p className="text-[11px] text-gray-400 italic">
+                    Thời gian này sẽ được gán làm KHSX ngày dán kính trong Báo cáo NSLĐ giờ, Báo cáo lũy kế và Báo cáo kế hoạch chi tiết.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-gray-700 uppercase tracking-wider block">
+                    2. Mật khẩu quản trị viên (Admin):
+                  </label>
+                  <input
+                    type="password"
+                    value={editGlazingPassword}
+                    onChange={(e) => setEditGlazingPassword(e.target.value)}
+                    placeholder="Nhập mật khẩu..."
+                    className="w-full p-3 border border-gray-300 rounded-xl text-sm focus:border-orange-500 focus:ring-2 focus:ring-orange-100 outline-none"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleUpdateGlazingPlanTime();
+                      }
+                    }}
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditGlazingTimeModal(null)}
+                    disabled={isSavingGlazingTime}
+                    className="flex-1 py-2.5 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold text-xs uppercase transition-colors cursor-pointer"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUpdateGlazingPlanTime}
+                    disabled={isSavingGlazingTime || !editGlazingTimeValue}
+                    className="flex-1 py-2.5 px-4 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs uppercase transition-all shadow-md shadow-orange-200 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Save size={14} />
+                    <span>{isSavingGlazingTime ? 'Đang lưu...' : 'Lưu & Đồng bộ'}</span>
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

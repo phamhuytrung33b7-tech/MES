@@ -153,7 +153,7 @@ export const exportDetailedProductionPlan = (
   };
 
   const getPoDateStr = (po: ProductionOrder): string => {
-    const ts = po.plannedStartTime || po.createdAt;
+    const ts = po.expectedCompletionTime || po.plannedStartTime || po.createdAt;
     return format(new Date(ts), 'yyyy-MM-dd');
   };
 
@@ -338,15 +338,16 @@ export const exportDetailedProductionPlan = (
         // Bỏ qua các kế hoạch dán kính đã hoàn thành (XONG)
         if (glz.status === 'COMPLETED') return;
 
-        // Hạn của kế hoạch dán kính (targetCompletionTime)
+        // Hạn của kế hoạch dán kính (ưu tiên expectedCompletionTime do người dùng sửa)
         let dueTs = 0;
-        if (typeof glz.targetCompletionTime === 'number' && glz.targetCompletionTime > 0) {
-          dueTs = glz.targetCompletionTime;
-        } else if (glz.targetCompletionTime) {
-          dueTs = new Date(glz.targetCompletionTime).getTime();
+        const rawTime = glz.expectedCompletionTime || glz.targetCompletionTime;
+        if (typeof rawTime === 'number' && rawTime > 0) {
+          dueTs = rawTime;
+        } else if (rawTime) {
+          dueTs = new Date(rawTime).getTime();
         }
         if (!dueTs || isNaN(dueTs)) {
-          dueTs = glz.expectedCompletionTime || glz.plannedStartTime || glz.createdAt;
+          dueTs = glz.targetCompletionTime || glz.plannedStartTime || glz.createdAt;
         }
 
         if (dueTs >= startMs && dueTs <= endMs) {
@@ -409,10 +410,10 @@ export const exportDetailedProductionPlan = (
       const masterPOs = orders.filter(o => !o.masterPoId && !o.id.startsWith('REPAIR') && o.status !== 'COMPLETED');
       masterPOs.forEach(master => {
         const subOrders = orders.filter(so => so.masterPoId === master.id && so.stageId === stageInfo.id && so.status !== 'COMPLETED');
-        const masterTs = master.plannedStartTime || master.createdAt;
+        const masterTs = master.expectedCompletionTime || master.plannedStartTime || master.createdAt;
         
         const hasSubInWindow = subOrders.some(so => {
-          const ts = so.plannedStartTime || so.createdAt;
+          const ts = so.expectedCompletionTime || so.plannedStartTime || so.createdAt;
           const rem = Math.max(0, so.targetQuantity - (so.producedQuantity || 0));
           return rem > 0 && ts >= startMs && ts <= endMs;
         });
@@ -442,7 +443,7 @@ export const exportDetailedProductionPlan = (
       // 3. Standalone POs tạo trực tiếp cho công đoạn này (chưa hoàn thành)
       const standalonePOs = orders.filter(o => !o.masterPoId && o.stageId === stageInfo.id && o.status !== 'COMPLETED');
       standalonePOs.forEach(po => {
-        const ts = po.plannedStartTime || po.createdAt;
+        const ts = po.expectedCompletionTime || po.plannedStartTime || po.createdAt;
         const rem = Math.max(0, po.targetQuantity - (po.producedQuantity || 0));
         if (rem > 0 && ts >= startMs && ts <= endMs) {
           if (!stagePlanUnits.some(u => u.planId === po.id)) {
@@ -540,7 +541,7 @@ export const exportDetailedProductionPlan = (
           let dayKhsxQty = 0;
 
           if (planUnit.glazingDateStr) {
-            // Kế hoạch dán kính: ngày chạy chính là Hạn (targetCompletionTime)
+            // Kế hoạch dán kính: ngày chạy chính là Hạn (expectedCompletionTime / targetCompletionTime)
             if (planUnit.glazingDateStr === dStr) {
               const totalTarget = Math.round(p.norm * planUnit.planQty);
               const doneQty = planUnit.glazingProducedQuantities?.[p.partId] || 0;
@@ -548,8 +549,11 @@ export const exportDetailedProductionPlan = (
             }
           } else {
             // Find matching sub-POs for this plan unit and part on this date
+            const cleanPId = p.partId.trim().toUpperCase();
+            const cleanPName = (p.partName || '').trim().toUpperCase();
             const matchingSubPOs = planUnit.subPOs.filter(sub => {
-              if (sub.partId !== p.partId) return false;
+              const subId = (sub.partId || '').trim().toUpperCase();
+              if (subId !== cleanPId && subId !== cleanPName) return false;
               const poDate = getPoDateStr(sub);
               return poDate === dStr;
             });

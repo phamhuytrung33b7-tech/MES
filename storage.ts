@@ -1545,6 +1545,29 @@ export const storageService = {
     }
   },
 
+  updateGlazingPlanTime(id: string, newExpectedTime: number) {
+    const plans = this.getGlazingPlans();
+    const planIndex = plans.findIndex(p => p.id === id);
+    if (planIndex !== -1) {
+      const plan = plans[planIndex];
+      const oldCompletion = plan.expectedCompletionTime || plan.targetCompletionTime;
+      const duration = (plan.plannedStartTime && oldCompletion) ? (oldCompletion - plan.plannedStartTime) : 0;
+
+      const updatedPlan: import('./types').GlazingPlan = {
+        ...plan,
+        expectedCompletionTime: newExpectedTime,
+        targetCompletionTime: newExpectedTime,
+        plannedStartTime: (duration > 0 && newExpectedTime > duration) ? (newExpectedTime - duration) : (plan.plannedStartTime || newExpectedTime)
+      };
+
+      plans[planIndex] = updatedPlan;
+      this.saveGlazingPlans(plans);
+      persistGlazingPlansToSupabase([updatedPlan]);
+      return updatedPlan;
+    }
+    return null;
+  },
+
   getInventory(): InventoryItem[] {
     const rawData = getCached(STORAGE_KEYS.INVENTORY, () => {
       const data = localStorage.getItem(STORAGE_KEYS.INVENTORY);
@@ -4449,13 +4472,13 @@ export const storageService = {
   updateSubPoTime(id: string, newExpectedTime: number) {
     const pos = this.getProductionOrders();
     const targetPo = pos.find(p => p.id === id);
-    if (!targetPo || !targetPo.expectedCompletionTime) return;
+    if (!targetPo) return;
 
-    const timeDiff = newExpectedTime - targetPo.expectedCompletionTime;
-    targetPo.expectedCompletionTime = newExpectedTime;
-    if (targetPo.plannedStartTime) {
+    if (targetPo.expectedCompletionTime && targetPo.plannedStartTime) {
+      const timeDiff = newExpectedTime - targetPo.expectedCompletionTime;
       targetPo.plannedStartTime += timeDiff;
     }
+    targetPo.expectedCompletionTime = newExpectedTime;
 
     this.saveProductionOrders(pos);
     persistProductionOrdersToSupabase([targetPo]);
