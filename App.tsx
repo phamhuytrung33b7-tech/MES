@@ -7029,11 +7029,23 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       return isLaserScrapItem(pId, pObj?.name);
     };
 
-    // 1. TẬP HỢP TẤT CẢ CÁC LINH KIỆN ĐÃ TỪNG XUẤT HIỆN TẠI KHO OUT CẮT LASER TRONG 35 NGÀY QUA:
-    // - Giao dịch hoàn thành sản xuất vào kho OUT: (type STAGE_OUT && location IN) hoặc (type STAGE_IN && location OUT)
-    // - Giao dịch xuất kho từ OUT chuyển công đoạn: (stageId LASER && type STAGE_OUT && location OUT) hoặc (sourceStageId LASER)
-    // - Tồn kho thực tế hiện tại tại kho OUT Cắt Laser
-    // - Lệnh sản xuất Cắt Laser đã có sản lượng đạt (producedQuantity / completedQuantity) trong 35 ngày
+    // Helper kiểm tra phôi tôn / NVL tôn tấm đầu vào (Level 3 hoặc phôi KG)
+    const isRawSheetPart = (pId: string) => {
+      const pObj = parts.find(p => p.id === pId || p.name === pId);
+      if (!pObj) {
+        const u = (pId || '').toUpperCase();
+        const l = (pId || '').toLowerCase();
+        return u.startsWith('NVL-TT') || l.includes('tôn tấm') || l.includes('tôn cuộn');
+      }
+      return (pObj.level === 3) ||
+             (pObj.id || '').toUpperCase().startsWith('NVL-TT') ||
+             (pObj.unit || '').toUpperCase() === 'KG' ||
+             (pObj.name || '').toLowerCase().includes('tôn tấm') ||
+             (pObj.name || '').toLowerCase().includes('tôn cuộn');
+    };
+
+    // 1. TẬP HỢP TẤT CẢ CÁC LINH KIỆN THÀNH PHẨM CẮT LASER (KHO OUT) TRONG 35 NGÀY QUA:
+    // Exclude phế liệu và tôn tấm nguyên liệu đầu vào (tôn tấm là phôi cấp phát, không phải linh kiện cắt ra)
     const partStatsMap = new Map<string, {
       producedTxsQty: number;
       exportedTxsQty: number;
@@ -7059,12 +7071,11 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
     // Quét giao dịch 35 ngày qua
     recent35DaysTxs.forEach(t => {
-      if (isScrap(t.partId)) return;
+      if (isScrap(t.partId) || isRawSheetPart(t.partId)) return;
 
-      // Hàng được cắt và đưa vào kho OUT tại Cắt Laser
-      const isProducedAtLaser = t.stageId === 'LASER' && (
-        (t.type === 'STAGE_OUT' && t.location === 'IN') ||
-        (t.type === 'STAGE_IN' && t.location === 'OUT')
+      // Linh kiện hoàn thành cắt và nhập vào KHO_OUT Cắt Laser
+      const isProducedAtLaser = t.stageId === 'LASER' && t.location === 'OUT' && (
+        t.type === 'STAGE_IN' || t.type === 'STAGE_OUT'
       );
 
       if (isProducedAtLaser) {
@@ -7072,7 +7083,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         stats.producedTxsQty += (t.quantity || 0);
       }
 
-      // Hàng từ kho OUT Cắt Laser được chuyển/xuất sang công đoạn tiếp theo
+      // Linh kiện từ KHO_OUT Cắt Laser được chuyển/xuất sang công đoạn tiếp theo (Bending/Welding...)
       const isExportedFromLaserOut = (
         (t.stageId === 'LASER' && t.type === 'STAGE_OUT' && t.location === 'OUT') ||
         (t.sourceStageId === 'LASER' && t.type === 'STAGE_IN')
@@ -7084,9 +7095,9 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       }
     });
 
-    // Quét tồn kho hiện tại tại kho OUT Cắt Laser
+    // Quét tồn kho hiện tại tại kho OUT Cắt Laser (chỉ linh kiện thành phẩm)
     inventory.forEach(item => {
-      if (item.stageId === 'LASER' && item.location === 'OUT' && item.quantity > 0 && !isScrap(item.partId)) {
+      if (item.stageId === 'LASER' && item.location === 'OUT' && item.quantity > 0 && !isScrap(item.partId) && !isRawSheetPart(item.partId)) {
         const stats = getOrInitStats(item.partId, item.originalPartId);
         stats.currentStockQty += item.quantity;
       }
@@ -7094,7 +7105,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
     // Quét các Lệnh sản xuất Cắt Laser
     productionOrders.forEach(po => {
-      if (po.partId && !isScrap(po.partId)) {
+      if (po.partId && !isScrap(po.partId) && !isRawSheetPart(po.partId)) {
         const poProduced = po.producedQuantity || 0;
         if (poProduced > 0) {
           const stats = getOrInitStats(po.partId);
@@ -7103,7 +7114,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       }
     });
 
-    // Bóc tách chi tiết từng linh kiện đã từng xuất hiện ở kho OUT Cắt Laser
+    // Bóc tách chi tiết từng linh kiện thành phẩm đã từng xuất hiện ở kho OUT Cắt Laser
     const outDetails = Array.from(partStatsMap.entries()).map(([partId, stats]) => {
       const partObj = parts.find(p => p.id === partId || p.name === partId);
       const bomDef = findBOMForPart(partId);
@@ -7113,15 +7124,11 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       const parentPart = parts.find(p => p.id === parentSheetId);
 
       // Số lượng tích lũy đạt trong 35 ngày:
-      // Kết hợp số lượng ghi nhận sản xuất, số lượng đã xuất kho + còn tồn, và số lượng PO
-      const historicalThroughput = Math.max(
-        stats.producedTxsQty,
-        stats.exportedTxsQty + stats.currentStockQty,
-        stats.poProducedQty,
-        stats.currentStockQty
-      );
+      // Ưu tiên số lượng ghi nhận sản xuất thực tế (producedTxsQty). Nếu chưa có giao dịch sản xuất riêng, dùng tổng (đã xuất + còn tồn)
+      const effectiveQty = stats.producedTxsQty > 0
+        ? stats.producedTxsQty
+        : Math.max(stats.exportedTxsQty + stats.currentStockQty, stats.currentStockQty, stats.poProducedQty);
 
-      const effectiveQty = historicalThroughput;
       const itemGoodWeight = effectiveQty * compWeightPerUnit;
       const itemBomScrapWeight = effectiveQty * scrapWeightPerUnit;
       const itemTheoreticalTotal = itemGoodWeight + itemBomScrapWeight;

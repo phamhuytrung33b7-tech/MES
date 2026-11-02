@@ -2632,23 +2632,49 @@ export const storageService = {
     // Deduct Level 3 parts from Laser IN based on BOM when Level 2 is produced
     if (stageId === 'LASER') {
       const bom = this.getBOM();
-      const bomDef = bom.find(b => b.childPartId === cleanId);
+      const cleanPartStr = (s: string): string => {
+        if (!s) return '';
+        let str = s.normalize('NFC').trim().toUpperCase();
+        str = str.replace(/\s*-\s*(H|CD|S|C|GLZ|OUT|IN)$/i, '');
+        str = str.replace(/-(H|CD|S|C|GLZ|OUT|IN)$/i, '');
+        return str.trim();
+      };
+
+      const cleanTargetId = cleanPartStr(cleanId);
+
+      // Find matching BOM V1 definition for this child part using flexible/variant matching
+      const bomDef = bom.find(b => {
+        if (!b || !b.childPartId) return false;
+        const bChildClean = cleanPartStr(b.childPartId);
+        if (bChildClean === cleanTargetId) return true;
+        if (isSamePartOrVariant(b.childPartId, cleanId, parts)) return true;
+        const pMatch = parts.find(p => cleanPartStr(p.id) === cleanTargetId || cleanPartStr(p.name) === cleanTargetId);
+        if (pMatch && isSamePartOrVariant(b.childPartId, pMatch.id, parts)) return true;
+        return false;
+      });
       
       if (bomDef) {
-        const totalConsumption = quantity * (bomDef.componentWeight + bomDef.scrapWeight);
-        const totalScrap = quantity * bomDef.scrapWeight;
+        const componentWeight = Number(bomDef.componentWeight) || 0;
+        const scrapWeight = Number(bomDef.scrapWeight) || 0;
+        const totalConsumption = quantity * (componentWeight + scrapWeight);
+        const totalScrap = quantity * scrapWeight;
         
         const inventory = this.getInventory();
+        const parentClean = cleanPartStr(bomDef.parentPartId);
+
         const matchingStocks = inventory.filter(i => {
-          const itPartId = i.partId.toUpperCase();
-          const targetId = bomDef.parentPartId.toUpperCase();
-          return itPartId === targetId && i.stageId === 'LASER' && i.location === 'IN';
+          if (i.stageId !== 'LASER' || i.location !== 'IN') return false;
+          const iClean = cleanPartStr(i.partId);
+          if (iClean === parentClean) return true;
+          if (isSamePartOrVariant(i.partId, bomDef.parentPartId, parts)) return true;
+          return false;
         });
         const totalStock = matchingStocks.reduce((sum, i) => sum + i.quantity, 0);
         
         if (totalStock < totalConsumption) {
-          const parentPart = parts.find(p => p.id === bomDef.parentPartId);
-          throw new Error(`Lỗi: Không đủ tồn kho ${parentPart?.name || bomDef.parentPartId} tại LASER_IN. Cần ${totalConsumption.toFixed(4)} kg, hiện có ${totalStock} kg`);
+          const parentPart = parts.find(p => p.id === bomDef.parentPartId || isSamePartOrVariant(p.id, bomDef.parentPartId, parts));
+          const parentDisplayName = parentPart?.name || bomDef.parentPartId;
+          throw new Error(`Lỗi: Không đủ tồn kho ${parentDisplayName} tại LASER_IN. Cần ${totalConsumption.toFixed(4)} kg, hiện có ${totalStock} kg`);
         }
         
         let remainingToDeduct = totalConsumption;
