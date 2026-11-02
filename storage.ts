@@ -237,11 +237,64 @@ async function persistInventoryToSupabase(inventory: InventoryItem[]) {
 }
 
 async function deleteInventoryFromSupabase(partId: string, stageId: StageId, location: string, originalPartId?: string) {
-  if (!isSupabaseConfigured) return;
+  if (!isSupabaseConfigured || !partId) return;
   try {
-    const rowId = `${partId}_${stageId}_${location}_${originalPartId || ''}`;
-    await supabase.from('wip_inventory').delete().eq('id', rowId);
-    await supabase.from('wip_inventory').delete().eq('part_id', partId).eq('stage_id', stageId).eq('location', location);
+    const cleanPartId = partId.trim();
+    const cleanOrigId = (originalPartId || '').trim();
+
+    // Look up catalog to find canonical ID and Name
+    let partsList: any[] = [];
+    if (cache[STORAGE_KEYS.PARTS]) {
+      partsList = cache[STORAGE_KEYS.PARTS];
+    } else {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.PARTS);
+        if (raw) partsList = JSON.parse(raw);
+      } catch {}
+    }
+
+    const cleanUpper = cleanPartId.toUpperCase();
+    const catalogPart = Array.isArray(partsList) ? partsList.find((p: any) => p && (p.id?.toUpperCase() === cleanUpper || p.name?.toUpperCase().trim() === cleanUpper)) : null;
+    const targetId = catalogPart ? catalogPart.id : cleanPartId;
+    const targetName = catalogPart ? catalogPart.name : '';
+
+    const possiblePartIds = Array.from(new Set([cleanPartId, targetId, targetName, cleanUpper].filter(Boolean)));
+
+    // 1. Delete by synthetic ID in wip_inventory
+    const rowIds: string[] = [];
+    possiblePartIds.forEach(p => {
+      rowIds.push(`${p}_${stageId}_${location}_${cleanOrigId}`);
+      if (cleanOrigId) {
+        rowIds.push(`${p}_${stageId}_${location}_`);
+      }
+    });
+
+    const deletePromises: Promise<any>[] = [
+      Promise.resolve(supabase.from('wip_inventory').delete().in('id', rowIds))
+    ];
+
+    // 2. Also delete by column match (part_id, stage_id, location)
+    possiblePartIds.forEach(pid => {
+      if (cleanOrigId) {
+        deletePromises.push(
+          Promise.resolve(supabase.from('wip_inventory').delete().match({
+            part_id: pid,
+            stage_id: stageId,
+            location: location,
+            original_part_id: cleanOrigId
+          }))
+        );
+      }
+      deletePromises.push(
+        Promise.resolve(supabase.from('wip_inventory').delete().match({
+          part_id: pid,
+          stage_id: stageId,
+          location: location
+        }))
+      );
+    });
+
+    await Promise.allSettled(deletePromises);
   } catch (err: any) {
     quietWarn('deleteInventory', 'deleteInventory error:', err);
   }
@@ -2197,12 +2250,18 @@ export const storageService = {
     return finalResult;
   },
 
-  setAbsoluteInventory(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', newQuantity: number) {
+  async setAbsoluteInventory(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', newQuantity: number) {
+    if (newQuantity <= 0) {
+      await this.deleteInventoryItem(partId, stageId, location);
+      return;
+    }
+
     const inventory = this.getInventory();
     const cleanIdUpper = partId.trim().toUpperCase();
     const parts = this.getParts();
     const partInCatalog = parts.find(p => p.id.toUpperCase() === cleanIdUpper || p.name.toUpperCase().trim() === cleanIdUpper);
     const targetNameUpper = partInCatalog ? partInCatalog.name.toUpperCase().trim() : '';
+    const canonicalPartId = partInCatalog ? partInCatalog.id : cleanIdUpper;
 
     // Remove all existing matching entries
     const newInventory = inventory.filter(item => {
@@ -2211,21 +2270,21 @@ export const storageService = {
       return !(matchesPart && item.stageId === stageId && item.location === location);
     });
 
-    // Add back the new quantity if > 0
-    if (newQuantity > 0) {
-      newInventory.push({
-        partId: partInCatalog ? partInCatalog.id : cleanIdUpper,
-        stageId,
-        location,
-        quantity: newQuantity,
-        lastUpdated: Date.now()
-      });
-    }
+    const itemToSave: InventoryItem = {
+      partId: canonicalPartId,
+      stageId,
+      location,
+      quantity: newQuantity,
+      lastUpdated: Date.now()
+    };
+    newInventory.push(itemToSave);
 
     this.saveInventory(newInventory);
+    await deleteInventoryFromSupabase(partId, stageId, location);
+    await persistSingleInventoryItemToSupabase(itemToSave);
   },
 
-  updateInventory(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', delta: number, originalPartId?: string) {
+  async updateInventory(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', delta: number, originalPartId?: string) {
     // Guard: Prevent saving PO IDs as inventory part IDs
     if (partId && (partId.startsWith('PO-') || partId.startsWith('REPAIR-'))) {
       const pos = this.getProductionOrders();
@@ -2289,11 +2348,20 @@ export const storageService = {
 
     this.saveInventory(inventory);
     if (itemToSave) {
-      persistSingleInventoryItemToSupabase(itemToSave);
+      if (itemToSave.quantity <= 0) {
+        await deleteInventoryFromSupabase(partId, stageId, location, originalPartId);
+      } else {
+        await persistSingleInventoryItemToSupabase(itemToSave);
+      }
     }
   },
 
-  setInventoryQuantity(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', quantity: number, originalPartId?: string) {
+  async setInventoryQuantity(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', quantity: number, originalPartId?: string) {
+    if (quantity <= 0) {
+      await this.deleteInventoryItem(partId, stageId, location, originalPartId);
+      return;
+    }
+
     const inventory = this.getInventory();
     const parts = this.getParts();
     
@@ -2338,11 +2406,14 @@ export const storageService = {
 
     this.saveInventory(inventory);
     if (itemToSave) {
-      persistSingleInventoryItemToSupabase(itemToSave);
+      if (targetId !== partId || targetNameUpper) {
+        await deleteInventoryFromSupabase(partId, stageId, location, originalPartId);
+      }
+      await persistSingleInventoryItemToSupabase(itemToSave);
     }
   },
 
-  deleteInventoryItem(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', originalPartId?: string) {
+  async deleteInventoryItem(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', originalPartId?: string) {
     const inventory = this.getInventory();
     const parts = this.getParts();
     const cleanIdUpper = partId.trim().toUpperCase();
@@ -2360,7 +2431,7 @@ export const storageService = {
       }
     );
     this.saveInventory(filtered);
-    deleteInventoryFromSupabase(partId, stageId, location, originalPartId);
+    await deleteInventoryFromSupabase(partId, stageId, location, originalPartId);
   },
 
   applyBOMDeduction(partId: string, stageId: StageId, quantity: number, poId?: string) {
@@ -2971,7 +3042,7 @@ export const storageService = {
     return newTransaction;
   },
 
-  recordManualInbound(partId: string, stageId: StageId, location: 'IN' | 'OUT', quantity: number, poId?: string, force?: boolean, customTimestamp?: number) {
+  async recordManualInbound(partId: string, stageId: StageId, location: 'IN' | 'OUT', quantity: number, poId?: string, force?: boolean, customTimestamp?: number) {
     const cleanId = partId.startsWith('GLZ-OUT-') ? partId.trim().toUpperCase() : partId.split(' - ')[0].trim().toUpperCase();
     let linkedPoId = poId;
 
@@ -3052,7 +3123,7 @@ export const storageService = {
     const std = (s: string) => s ? s.normalize('NFC').trim().toUpperCase() : '';
     const originalPartId = (std(finalPartId) !== std(cleanId)) ? cleanId : undefined;
 
-    this.updateInventory(finalPartId, stageId, location, quantity, originalPartId);
+    await this.updateInventory(finalPartId, stageId, location, quantity, originalPartId);
     
     const transactions = this.getTransactions();
     const newTransaction: Transaction = {

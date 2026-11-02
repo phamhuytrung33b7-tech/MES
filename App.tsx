@@ -6403,6 +6403,20 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     storageService.saveStagePlannedWorkers(updated, chartDate);
   };
 
+  const checkAdminPermission = async (actionName: string): Promise<boolean> => {
+    const currentUser = storageService.getCurrentUser();
+    if (currentUser?.role === 'ADMIN') {
+      return true;
+    }
+    const pwd = await customPrompt(`Chỉ Quản trị viên (Admin) mới có quyền ${actionName}.\nVui lòng nhập mật khẩu Quản trị viên:`, '', true);
+    if (pwd === null) return false;
+    if (storageService.verifyAdminPassword(pwd, currentUser)) {
+      return true;
+    }
+    await customAlert('Mật khẩu Quản trị viên không chính xác! Bạn không có quyền thực hiện thao tác này.');
+    return false;
+  };
+
   const [showManualAddModal, setShowManualAddModal] = useState<{stageId: StageId, location: 'IN' | 'OUT'} | null>(null);
   const [manualAddPart, setManualAddPart] = useState('');
   const [manualAddPartSearch, setManualAddPartSearch] = useState('');
@@ -7983,15 +7997,15 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
                               <button
                                 onClick={async () => {
-                                  const pwd = await customPrompt('Nhập mật khẩu để sửa số lượng phế liệu:', '', true);
-                                  if (pwd === 'admin123') {
-                                    const newQty = await customPrompt(`Nhập khối lượng phế liệu mới (KG) cho ${item.partId}:`, String(item.quantity));
-                                    if (newQty !== null) {
-                                      storageService.setInventoryQuantity(item.partId, 'LASER', item.location, parseFloat(newQty) || 0, item.originalPartId);
+                                  const ok = await checkAdminPermission('sửa số lượng phế liệu');
+                                  if (!ok) return;
+                                  const newQty = await customPrompt(`Nhập khối lượng phế liệu mới (KG) cho ${item.partId}:`, String(item.quantity));
+                                  if (newQty !== null) {
+                                    const parsedQty = parseFloat(newQty);
+                                    if (!isNaN(parsedQty)) {
+                                      await storageService.setInventoryQuantity(item.partId, 'LASER', item.location, Math.max(0, parsedQty), item.originalPartId);
                                       refreshData();
                                     }
-                                  } else if (pwd !== null) {
-                                    await customAlert('Mật khẩu không chính xác!');
                                   }
                                 }}
                                 className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
@@ -8002,14 +8016,11 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
                               <button
                                 onClick={async () => {
-                                  const pwd = await customPrompt('Nhập mật khẩu để xóa tồn phế liệu:', '', true);
-                                  if (pwd === 'admin123') {
-                                    if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn phế liệu của ${item.partId}?`)) {
-                                      storageService.deleteInventoryItem(item.partId, 'LASER', item.location, item.originalPartId);
-                                      refreshData();
-                                    }
-                                  } else if (pwd !== null) {
-                                    await customAlert('Mật khẩu không chính xác!');
+                                  const ok = await checkAdminPermission('xóa tồn phế liệu');
+                                  if (!ok) return;
+                                  if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn phế liệu của ${item.partId}?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
+                                    await storageService.deleteInventoryItem(item.partId, 'LASER', item.location, item.originalPartId);
+                                    refreshData();
                                   }
                                 }}
                                 className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
@@ -8041,7 +8052,11 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                     </div>
                     {['LASER', 'BENDING', 'WELDING', 'PAINTING'].includes(selectedStageDetail!) && (
                       <button 
-                        onClick={() => setShowManualAddModal({ stageId: selectedStageDetail as StageId, location: 'IN' })}
+                        onClick={async () => {
+                          const ok = await checkAdminPermission('thêm tồn kho');
+                          if (!ok) return;
+                          setShowManualAddModal({ stageId: selectedStageDetail as StageId, location: 'IN' });
+                        }}
                         className="text-xs bg-blue-100 text-blue-600 hover:bg-blue-200 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition-colors cursor-pointer"
                       >
                         <Plus size={14} /> Thêm tồn
@@ -8123,35 +8138,32 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     </button>
                                     <button 
                                       onClick={async () => {
-                                        const pwd = await customPrompt('Nhập mật khẩu để sửa tồn kho:', '', true);
-                                        if (pwd === 'admin123') {
-                                          const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId}:`, String(qty));
-                                          if (newQty !== null) {
-                                            storageService.setInventoryQuantity(item.partId, selectedStageDetail, 'IN', parseFloat(newQty) || 0, item.originalPartId);
+                                        const ok = await checkAdminPermission('chỉnh sửa số lượng tồn kho');
+                                        if (!ok) return;
+                                        const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId}:`, String(qty));
+                                        if (newQty !== null) {
+                                          const parsedQty = parseFloat(newQty);
+                                          if (!isNaN(parsedQty)) {
+                                            await storageService.setInventoryQuantity(item.partId, selectedStageDetail, 'IN', Math.max(0, parsedQty), item.originalPartId);
                                             refreshData();
                                           }
-                                        } else if (pwd !== null) {
-                                          await customAlert('Mật khẩu không chính xác!');
                                         }
                                       }}
-                                      className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors"
+                                      className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors cursor-pointer"
                                       title="Sửa số lượng"
                                     >
                                       <Edit2 size={16} />
                                     </button>
                                     <button 
                                       onClick={async () => {
-                                        const pwd = await customPrompt('Nhập mật khẩu để xóa tồn kho:', '', true);
-                                        if (pwd === 'admin123') {
-                                          if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho IN)?`)) {
-                                            storageService.deleteInventoryItem(item.partId, selectedStageDetail, 'IN', item.originalPartId);
-                                            refreshData();
-                                          }
-                                        } else if (pwd !== null) {
-                                          await customAlert('Mật khẩu không chính xác!');
+                                        const ok = await checkAdminPermission('xóa linh kiện tồn kho');
+                                        if (!ok) return;
+                                        if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho IN)?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
+                                          await storageService.deleteInventoryItem(item.partId, selectedStageDetail, 'IN', item.originalPartId);
+                                          refreshData();
                                         }
                                       }}
-                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
+                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
                                       title="Xóa tồn kho"
                                     >
                                       <Trash2 size={16} />
@@ -8198,7 +8210,11 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                     </div>
                     {['LASER', 'BENDING', 'WELDING', 'PAINTING'].includes(selectedStageDetail!) && (
                       <button 
-                        onClick={() => setShowManualAddModal({ stageId: selectedStageDetail as StageId, location: 'OUT' })}
+                        onClick={async () => {
+                          const ok = await checkAdminPermission('thêm tồn kho');
+                          if (!ok) return;
+                          setShowManualAddModal({ stageId: selectedStageDetail as StageId, location: 'OUT' });
+                        }}
                         className="text-xs bg-orange-100 text-orange-600 hover:bg-orange-200 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition-colors cursor-pointer"
                       >
                         <Plus size={14} /> Thêm tồn
@@ -8287,35 +8303,32 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     </button>
                                     <button 
                                       onClick={async () => {
-                                        const pwd = await customPrompt('Nhập mật khẩu để sửa tồn kho:', '', true);
-                                        if (pwd === 'admin123') {
-                                          const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId}:`, String(qty));
-                                          if (newQty !== null) {
-                                            storageService.setInventoryQuantity(item.partId, selectedStageDetail, 'OUT', parseFloat(newQty) || 0, item.originalPartId);
+                                        const ok = await checkAdminPermission('chỉnh sửa số lượng tồn kho');
+                                        if (!ok) return;
+                                        const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId}:`, String(qty));
+                                        if (newQty !== null) {
+                                          const parsedQty = parseFloat(newQty);
+                                          if (!isNaN(parsedQty)) {
+                                            await storageService.setInventoryQuantity(item.partId, selectedStageDetail, 'OUT', Math.max(0, parsedQty), item.originalPartId);
                                             refreshData();
                                           }
-                                        } else if (pwd !== null) {
-                                          await customAlert('Mật khẩu không chính xác!');
                                         }
                                       }}
-                                      className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors"
+                                      className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors cursor-pointer"
                                       title="Sửa số lượng"
                                     >
                                       <Edit2 size={16} />
                                     </button>
                                     <button 
                                       onClick={async () => {
-                                        const pwd = await customPrompt('Nhập mật khẩu để xóa tồn kho:', '', true);
-                                        if (pwd === 'admin123') {
-                                          if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho OUT)?`)) {
-                                            storageService.deleteInventoryItem(item.partId, selectedStageDetail, 'OUT', item.originalPartId);
-                                            refreshData();
-                                          }
-                                        } else if (pwd !== null) {
-                                          await customAlert('Mật khẩu không chính xác!');
+                                        const ok = await checkAdminPermission('xóa linh kiện tồn kho');
+                                        if (!ok) return;
+                                        if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho OUT)?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
+                                          await storageService.deleteInventoryItem(item.partId, selectedStageDetail, 'OUT', item.originalPartId);
+                                          refreshData();
                                         }
                                       }}
-                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
+                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
                                       title="Xóa tồn kho"
                                     >
                                       <Trash2 size={16} />
@@ -8442,21 +8455,35 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     <span className="text-xs font-mono opacity-40 uppercase mr-4 text-gray-900">{displayUnit}</span>
                                     <button 
                                       onClick={async () => {
-                                        const pwd = await customPrompt('Nhập mật khẩu để sửa tồn kho lỗi:', '', true);
-                                        if (pwd === 'admin123') {
-                                          const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId} (Lỗi):`, String(qty));
-                                          if (newQty !== null) {
-                                            storageService.setInventoryQuantity(item.partId, selectedStageDetail || STAGES[0].id, 'DEFECT', parseFloat(newQty) || 0, item.originalPartId);
+                                        const ok = await checkAdminPermission('sửa tồn kho lỗi');
+                                        if (!ok) return;
+                                        const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId} (Lỗi):`, String(qty));
+                                        if (newQty !== null) {
+                                          const parsedQty = parseFloat(newQty);
+                                          if (!isNaN(parsedQty)) {
+                                            await storageService.setInventoryQuantity(item.partId, selectedStageDetail || STAGES[0].id, 'DEFECT', Math.max(0, parsedQty), item.originalPartId);
                                             refreshData();
                                           }
-                                        } else if (pwd !== null) {
-                                          await customAlert('Mật khẩu không chính xác!');
                                         }
                                       }}
-                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
+                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
                                       title="Sửa tồn lỗi"
                                     >
                                       <Edit2 size={16} />
+                                    </button>
+                                    <button 
+                                      onClick={async () => {
+                                        const ok = await checkAdminPermission('xóa linh kiện tồn kho lỗi');
+                                        if (!ok) return;
+                                        if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho lỗi của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name}?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
+                                          await storageService.deleteInventoryItem(item.partId, selectedStageDetail || STAGES[0].id, 'DEFECT', item.originalPartId);
+                                          refreshData();
+                                        }
+                                      }}
+                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
+                                      title="Xóa tồn lỗi"
+                                    >
+                                      <Trash2 size={16} />
                                     </button>
                                   </div>
                                 </td>
@@ -9097,14 +9124,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                       setManualAddPartSearch('');
                       setManualAddQty('');
 
-                      const pwd = await customPrompt('Nhập mật khẩu để cấu hình tồn kho:', '', true);
-                      if (pwd !== 'admin123') {
-                        if (pwd !== null) await customAlert('Mật khẩu không chính xác!');
-                        return;
-                      }
+                      const ok = await checkAdminPermission('thêm tồn kho');
+                      if (!ok) return;
+
                       try {
-                        storageService.recordManualInbound(part, stageId, location, qty);
-                        await customAlert('Thêm tồn kho thành công!');
+                        await storageService.recordManualInbound(part, stageId, location, qty);
+                        await customAlert('Thêm tồn kho thành công và đã đồng bộ lên Supabase!');
                         refreshData();
                       } catch (err: any) {
                         const errMsg = err.message || '';
