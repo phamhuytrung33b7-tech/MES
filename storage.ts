@@ -206,7 +206,7 @@ async function persistSingleInventoryItemToSupabase(item: InventoryItem) {
       original_part_id: item.originalPartId || '',
       stage_id: item.stageId,
       location: item.location,
-      quantity: toBigIntOrDefault(item.quantity, 0)
+      quantity: Math.round(Number(item.quantity || 0) * 10000) / 10000
     };
     await supabase.from('wip_inventory').upsert(dbRow, { onConflict: 'id' });
   } catch (err: any) {
@@ -225,7 +225,7 @@ async function persistInventoryToSupabase(inventory: InventoryItem[]) {
       original_part_id: item.originalPartId || '',
       stage_id: item.stageId,
       location: item.location,
-      quantity: toBigIntOrDefault(item.quantity, 0)
+      quantity: Math.round(Number(item.quantity || 0) * 10000) / 10000
     }));
     for (let i = 0; i < dbRows.length; i += 150) {
       const chunk = dbRows.slice(i, i + 150);
@@ -254,8 +254,6 @@ export function getPartVariants(partId: string, partsList: any[]): { baseId: str
     const pNameUpper = (p.name || '').toUpperCase().trim();
     if (pIdUpper === rawUpper || pIdUpper === strippedUpper) return true;
     if (pNameUpper === rawUpper || pNameUpper === strippedUpper) return true;
-    if (pIdUpper.length > 5 && (rawUpper.includes(pIdUpper) || strippedUpper.includes(pIdUpper))) return true;
-    if (pNameUpper.length > 5 && (rawUpper.includes(pNameUpper) || strippedUpper.includes(pNameUpper))) return true;
     return false;
   }) : null;
 
@@ -311,8 +309,7 @@ export function getPartSearchTokens(partId: string, partsList: any[]): string[] 
     const pIdUpper = (p.id || '').toUpperCase().trim();
     const pNameUpper = (p.name || '').toUpperCase().trim();
     return pIdUpper === raw.toUpperCase() || pIdUpper === stripped.toUpperCase() ||
-           pNameUpper === raw.toUpperCase() || pNameUpper === stripped.toUpperCase() ||
-           (pIdUpper.length > 5 && (raw.toUpperCase().includes(pIdUpper) || stripped.toUpperCase().includes(pIdUpper)));
+           pNameUpper === raw.toUpperCase() || pNameUpper === stripped.toUpperCase();
   }) : null;
 
   if (catalogPart) {
@@ -333,11 +330,6 @@ export function getPartSearchTokens(partId: string, partsList: any[]): string[] 
           const baseModelMatch = cleanM.match(/([A-Z]{2,3}\d{4,5})/i);
           if (baseModelMatch && baseModelMatch[1]) {
             tokens.add(baseModelMatch[1].toUpperCase());
-          }
-          // Extract numeric part code suffix (e.g. 0032 or 0010)
-          const subNumMatch = cleanM.match(/(\d{4})$/);
-          if (subNumMatch && subNumMatch[1]) {
-            tokens.add(subNumMatch[1]);
           }
         }
       });
@@ -363,35 +355,12 @@ export function isSamePartOrVariant(partA: string, partB: string, partsList: any
 
   if (cleanA === cleanB) return true;
 
-  if (cleanA.length >= 5 && cleanB.length >= 5) {
-    if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
-  }
-
-  // Check base model code matching (e.g. SHA76623 vs SHA76623KL)
-  const baseA = cleanA.match(/([A-Z]{2,3}\d{4,5})/i)?.[1]?.toUpperCase();
-  const baseB = cleanB.match(/([A-Z]{2,3}\d{4,5})/i)?.[1]?.toUpperCase();
-  if (baseA && baseB && baseA === baseB) {
-    const subA = cleanA.match(/(\d{4})$/)?.[1];
-    const subB = cleanB.match(/(\d{4})$/)?.[1];
-    if (!subA || !subB || subA === subB) {
+  // Check if both resolve to the same catalog item
+  if (Array.isArray(partsList) && partsList.length > 0) {
+    const catA = partsList.find((p: any) => p && (p.id.toUpperCase() === rawA || p.id.toUpperCase() === cleanA || p.name.toUpperCase().trim() === rawA || p.name.toUpperCase().trim() === cleanA));
+    const catB = partsList.find((p: any) => p && (p.id.toUpperCase() === rawB || p.id.toUpperCase() === cleanB || p.name.toUpperCase().trim() === rawB || p.name.toUpperCase().trim() === cleanB));
+    if (catA && catB && catA.id === catB.id) {
       return true;
-    }
-  }
-
-  const tokensA = getPartSearchTokens(partA, partsList);
-  const tokensB = getPartSearchTokens(partB, partsList);
-
-  for (const tA of tokensA) {
-    if (tA && tA.length >= 4) {
-      const uA = tA.toUpperCase();
-      if (rawB.includes(uA) || cleanB.includes(uA)) return true;
-    }
-  }
-
-  for (const tB of tokensB) {
-    if (tB && tB.length >= 4) {
-      const uB = tB.toUpperCase();
-      if (rawA.includes(uB) || cleanA.includes(uB)) return true;
     }
   }
 
@@ -430,20 +399,15 @@ async function deleteInventoryFromSupabase(partId: string, stageId: StageId, loc
       ...(stageId === 'GLAZING' ? ['Dán kính', 'DÁN KÍNH', 'GLAZING'] : []),
     ]));
 
-    // 1. Delete by synthetic IDs across allVariants x stageAliases x location x origVariants
+    // 1. Delete by synthetic IDs strictly for this location and stageAliases
     const rowIds: string[] = [];
     allVariants.forEach(v => {
       stageAliases.forEach(s => {
         rowIds.push(`${v}_${s}_${location}_`);
         rowIds.push(`${v}_${s}_${location}`);
-        rowIds.push(`${v}_${s}_IN_`);
-        rowIds.push(`${v}_${s}_OUT_`);
-        rowIds.push(`${v}_${s}_DEFECT_`);
         origVariants.forEach(o => {
           if (o) {
             rowIds.push(`${v}_${s}_${location}_${o}`);
-            rowIds.push(`${v}_${s}_IN_${o}`);
-            rowIds.push(`${v}_${s}_OUT_${o}`);
           }
         });
       });
@@ -454,7 +418,7 @@ async function deleteInventoryFromSupabase(partId: string, stageId: StageId, loc
       deletePromises.push(Promise.resolve(supabase.from('wip_inventory').delete().in('id', chunk)));
     }
 
-    // 2. Delete by stage_id in stageAliases AND part_id in allVariants (across ALL locations)
+    // 2. Delete strictly scoped to (stage_id, location, part_id)
     for (let i = 0; i < allVariants.length; i += 100) {
       const chunk = allVariants.slice(i, i + 100);
       stageAliases.forEach(s => {
@@ -463,53 +427,12 @@ async function deleteInventoryFromSupabase(partId: string, stageId: StageId, loc
             supabase.from('wip_inventory')
               .delete()
               .eq('stage_id', s)
+              .eq('location', location)
               .in('part_id', chunk)
           )
         );
       });
     }
-
-    // 3. Fallback ilike pattern deletion for each search token (e.g. SHA76623KL, 04-29-08-SHA76623KL-0032, SHA76623KL-CT)
-    searchTokens.forEach(t => {
-      if (t && t.length >= 4) {
-        stageAliases.forEach(s => {
-          deletePromises.push(
-            Promise.resolve(
-              supabase.from('wip_inventory')
-                .delete()
-                .eq('stage_id', s)
-                .ilike('part_id', `%${t}%`)
-            )
-          );
-          deletePromises.push(
-            Promise.resolve(
-              supabase.from('wip_inventory')
-                .delete()
-                .eq('stage_id', s)
-                .ilike('id', `%${t}%`)
-            )
-          );
-        });
-
-        // If token is specific (length >= 5), delete REGARDLESS of stage_id to eradicate corrupt stage records on Supabase
-        if (t.length >= 5) {
-          deletePromises.push(
-            Promise.resolve(
-              supabase.from('wip_inventory')
-                .delete()
-                .ilike('part_id', `%${t}%`)
-            )
-          );
-          deletePromises.push(
-            Promise.resolve(
-              supabase.from('wip_inventory')
-                .delete()
-                .ilike('id', `%${t}%`)
-            )
-          );
-        }
-      }
-    });
 
     await Promise.allSettled(deletePromises);
   } catch (err: any) {
@@ -2540,9 +2463,6 @@ export const storageService = {
       const combined2 = (pId + pName).normalize('NFC').replace(/\s+/g, '');
       if (upperTargetStr === combined1 || upperTargetStr === combined2) return true;
       
-      // If the target string contains the ID (which is usually highly specific) and it's longer than 5 chars
-      if (pId.length > 5 && upperTargetStr.includes(pId.normalize('NFC').replace(/\s+/g, ''))) return true;
-      
       return false;
     });
     const finalResult = targetCatalogPart ? targetCatalogPart.id : targetPartIdStr;
@@ -3309,6 +3229,16 @@ export const storageService = {
     const cleanId = partId.startsWith('GLZ-OUT-') ? partId.trim().toUpperCase() : partId.split(' - ')[0].trim().toUpperCase();
     let linkedPoId = poId;
 
+    // Auto-register part in catalog if missing
+    if (cleanId) {
+      const existingParts = this.getParts();
+      const foundPart = existingParts.find(p => p.id.toUpperCase() === cleanId || p.name.toUpperCase().trim() === cleanId);
+      if (!foundPart) {
+        const partName = partId.includes(' - ') ? partId.split(' - ')[1].trim() : cleanId;
+        this.saveParts([...existingParts, { id: cleanId, name: partName, unit: 'Bộ' }]);
+      }
+    }
+
     // Check for required PO
     const pos = this.getProductionOrders();
     const poIndex = poId 
@@ -3319,8 +3249,8 @@ export const storageService = {
 
     // Apply BOM logic if entering into OUT (Production result)
     if (location === 'OUT') {
-      // Validate PO limit BEFORE deducting BOM and saving anything (STRICT: Never allow exceeding PO limit)
-      if (poIndex !== -1) {
+      // Validate PO limit BEFORE deducting BOM and saving anything (STRICT: Never allow exceeding PO limit unless forced by admin)
+      if (!force && poIndex !== -1) {
         const po = pos[poIndex];
         const nextProd = po.producedQuantity + quantity;
         if (nextProd > po.targetQuantity) {
@@ -3332,7 +3262,9 @@ export const storageService = {
         }
       }
 
-      this.applyBOMDeduction(cleanId, stageId, quantity, currentPoId);
+      if (!force) {
+        this.applyBOMDeduction(cleanId, stageId, quantity, currentPoId);
+      }
 
       // Update PO progress
       if (poIndex !== -1) {
@@ -3362,8 +3294,8 @@ export const storageService = {
         persistProductionOrdersToSupabase([po, masterPo].filter(Boolean) as ProductionOrder[]);
       }
     } else if (location === 'IN') {
-      // Validate PO limit for IN (Never allow exceeding PO limit at any stage)
-      if (poIndex !== -1) {
+      // Validate PO limit for IN (Never allow exceeding PO limit at any stage unless forced)
+      if (!force && poIndex !== -1) {
         const po = pos[poIndex];
         const transactions = this.getTransactions();
         const alreadyIn = transactions
@@ -3403,6 +3335,9 @@ export const storageService = {
     };
     transactions.unshift(newTransaction);
     this.saveTransactions(transactions);
+
+    // Đồng bộ lập tức giao dịch mới lên Supabase
+    await persistTransactionsToSupabase([newTransaction]);
 
     return newTransaction;
   },
@@ -5422,17 +5357,68 @@ export const storageService = {
         return rows;
       })();
 
-      // 3. Fetch wip_inventory
-      const fetchInv = supabase
-        .from('wip_inventory')
-        .select('part_id, original_part_id, stage_id, location, quantity');
+      // 3. Fetch wip_inventory với phân trang song song
+      const fetchInv = (async () => {
+        try {
+          const { count: totalInvCount } = await supabase
+            .from('wip_inventory')
+            .select('*', { count: 'exact', head: true });
 
-      // 4. Fetch wip_transactions (35 ngày gần nhất)
-      const fetchTxs = supabase
-        .from('wip_transactions')
-        .select('id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded')
-        .gte('timestamp', cutoff35d)
-        .order('timestamp', { ascending: false });
+          const total = totalInvCount || 0;
+          const invPageSize = 1000;
+          const pagePromises = [];
+          for (let from = 0; from < Math.max(total, 1); from += invPageSize) {
+            pagePromises.push(
+              supabase
+                .from('wip_inventory')
+                .select('part_id, original_part_id, stage_id, location, quantity')
+                .range(from, from + invPageSize - 1)
+            );
+          }
+          const pages = await Promise.all(pagePromises);
+          const rows: any[] = [];
+          pages.forEach(p => {
+            if (!p.error && p.data) rows.push(...p.data);
+          });
+          return rows;
+        } catch (e) {
+          console.error('[Supabase] Error fetching wip_inventory:', e);
+          return [];
+        }
+      })();
+
+      // 4. Fetch wip_transactions (35 ngày gần nhất) với phân trang song song (Không bị cắt 1000 dòng!)
+      const fetchTxs = (async () => {
+        try {
+          const { count: totalTxCount } = await supabase
+            .from('wip_transactions')
+            .select('*', { count: 'exact', head: true })
+            .gte('timestamp', cutoff35d);
+
+          const total = totalTxCount || 0;
+          const txPageSize = 1000;
+          const pagePromises = [];
+          for (let from = 0; from < Math.max(total, 1); from += txPageSize) {
+            pagePromises.push(
+              supabase
+                .from('wip_transactions')
+                .select('id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded')
+                .gte('timestamp', cutoff35d)
+                .order('timestamp', { ascending: false })
+                .range(from, from + txPageSize - 1)
+            );
+          }
+          const pages = await Promise.all(pagePromises);
+          const rows: any[] = [];
+          pages.forEach(p => {
+            if (!p.error && p.data) rows.push(...p.data);
+          });
+          return rows;
+        } catch (e) {
+          console.error('[Supabase] Error fetching wip_transactions:', e);
+          return [];
+        }
+      })();
 
       // 5. Fetch glazing_plans
       const fetchGlazing = supabase
@@ -5447,7 +5433,7 @@ export const storageService = {
         .gte('timestamp', cutoff24h)
         .order('timestamp', { ascending: false });
 
-      const [configRes, poRows, invRes, txRes, gpRes, qrRes] = await Promise.all([
+      const [configRes, poRows, invRows, txRows, gpRes, qrRes] = await Promise.all([
         fetchConfigs,
         fetchPOs,
         fetchInv,
@@ -5504,8 +5490,8 @@ export const storageService = {
         } catch {}
       }
 
-      if (!invRes.error && invRes.data) {
-        const inv: InventoryItem[] = invRes.data.map((r: any) => ({
+      if (invRows && invRows.length >= 0) {
+        const inv: InventoryItem[] = invRows.map((r: any) => ({
           partId: r.part_id,
           originalPartId: r.original_part_id || undefined,
           stageId: r.stage_id,
@@ -5518,8 +5504,8 @@ export const storageService = {
         } catch {}
       }
 
-      if (!txRes.error && txRes.data) {
-        const txs: Transaction[] = txRes.data.map((r: any) => ({
+      if (txRows && txRows.length >= 0) {
+        const txs: Transaction[] = txRows.map((r: any) => ({
           id: r.id,
           type: r.type,
           partId: r.part_id,
@@ -5586,8 +5572,8 @@ export const storageService = {
       if (!qrRes.error && qrRes.data) {
         // Collect printed flags from wip_transactions and local memory
         const printedIds = new Set<string>();
-        if (!txRes.error && txRes.data) {
-          txRes.data.forEach((r: any) => {
+        if (txRows && txRows.length > 0) {
+          txRows.forEach((r: any) => {
             if (r.printed) printedIds.add(r.id);
           });
         }
@@ -5638,9 +5624,118 @@ export const storageService = {
     }
   },
 
+  hydrateFromCloud(force: boolean = false): Promise<boolean> {
+    return this.init(force);
+  },
+
   async refreshFromSupabase(): Promise<boolean> {
     clearCache();
     return await this.init(true);
+  },
+
+  /**
+   * Kéo dữ liệu mới nhất từ wip_inventory và wip_transactions từ Supabase về cập nhật tồn kho chi tiết
+   */
+  async pullInventoryAndTransactionsFromSupabase(): Promise<{ inventoryCount: number; txCount: number }> {
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase chưa được cấu hình.');
+    }
+
+    isSyncing = true;
+    notifySyncChange();
+
+    try {
+      const cutoff35d = Date.now() - 35 * 24 * 60 * 60 * 1000;
+
+      // 1. Fetch wip_inventory song song theo khối 1000 dòng
+      const { count: totalInvCount } = await supabase
+        .from('wip_inventory')
+        .select('*', { count: 'exact', head: true });
+      const invTotal = totalInvCount || 0;
+      const invPages = [];
+      for (let from = 0; from < Math.max(invTotal, 1); from += 1000) {
+        invPages.push(
+          supabase
+            .from('wip_inventory')
+            .select('part_id, original_part_id, stage_id, location, quantity')
+            .range(from, from + 999)
+        );
+      }
+      const invRes = await Promise.all(invPages);
+      const rawInvRows = invRes.flatMap(r => r.data || []);
+      const inv: InventoryItem[] = rawInvRows.map((r: any) => ({
+        partId: r.part_id,
+        originalPartId: r.original_part_id || undefined,
+        stageId: r.stage_id,
+        location: r.location,
+        quantity: Number(r.quantity) || 0
+      }));
+      cache[STORAGE_KEYS.INVENTORY] = inv;
+      try {
+        localStorage.setItem(STORAGE_KEYS.INVENTORY, JSON.stringify(inv));
+      } catch {}
+
+      // 2. Fetch wip_transactions song song 35 ngày gần nhất
+      const { count: totalTxCount } = await supabase
+        .from('wip_transactions')
+        .select('*', { count: 'exact', head: true })
+        .gte('timestamp', cutoff35d);
+      const txTotal = totalTxCount || 0;
+      const txPages = [];
+      for (let from = 0; from < Math.max(txTotal, 1); from += 1000) {
+        txPages.push(
+          supabase
+            .from('wip_transactions')
+            .select('id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded')
+            .gte('timestamp', cutoff35d)
+            .order('timestamp', { ascending: false })
+            .range(from, from + 999)
+        );
+      }
+      const txRes = await Promise.all(txPages);
+      const rawTxRows = txRes.flatMap(r => r.data || []);
+      const txs: Transaction[] = rawTxRows.map((r: any) => ({
+        id: r.id,
+        type: r.type,
+        partId: r.part_id,
+        partName: r.part_name || undefined,
+        originalPartId: r.original_part_id || undefined,
+        quantity: Number(r.quantity) || 0,
+        stageId: r.stage_id,
+        location: r.location || undefined,
+        timestamp: Number(r.timestamp),
+        qrData: r.qr_data || undefined,
+        sourceStageId: r.source_stage_id || undefined,
+        targetStageId: r.target_stage_id || undefined,
+        poId: r.po_id || undefined,
+        planId: r.plan_id || undefined,
+        printed: Boolean(r.printed),
+        defectReason: r.defect_reason || undefined,
+        defectCategory: r.defect_category || undefined,
+        kpiRecorded: Boolean(r.kpi_recorded)
+      }));
+      cache[STORAGE_KEYS.TRANSACTIONS] = txs;
+      try {
+        localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+      } catch {}
+
+      lastSyncTime = Date.now();
+      isRemoteHydrated = true;
+      isSyncing = false;
+      syncError = null;
+      notifySyncChange();
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('wip_data_updated'));
+      }
+
+      return { inventoryCount: inv.length, txCount: txs.length };
+    } catch (err: any) {
+      isSyncing = false;
+      syncError = err?.message || 'Lỗi khi kéo dữ liệu tồn kho';
+      notifySyncChange();
+      throw err;
+    }
   },
 
   /**

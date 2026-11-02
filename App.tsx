@@ -9307,24 +9307,28 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
               >
                 <X size={20} />
               </button>
-              <h2 className="text-2xl font-bold uppercase text-gray-900 mb-6 flex items-center gap-3">
+              <h2 className="text-2xl font-bold uppercase text-gray-900 mb-1 flex items-center gap-3">
                 <PackagePlus className={showManualAddModal.location === 'IN' ? "text-blue-600" : "text-orange-600"} />
-                Thêm tồn kho {showManualAddModal.location}
+                Thêm tồn kho {showManualAddModal.location} ({STAGES.find(s => s.id === showManualAddModal.stageId)?.name})
               </h2>
+              <p className="text-xs text-gray-500 mb-6 font-medium leading-relaxed">
+                Thêm linh kiện tồn kho tự do. Không ràng buộc bởi mục tiêu PO con và linh kiện này có thể được sử dụng bình thường khi sản xuất các PO con.
+              </p>
               <div className="space-y-6">
                 <div>
-                  <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Linh kiện</label>
+                  <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Gõ từ khóa chọn hoặc nhập mã/tên Linh kiện</label>
                   <input
                     list="manual-add-parts"
                     value={manualAddPartSearch}
                     onChange={(e) => {
-                      setManualAddPartSearch(e.target.value);
-                      const match = parts.find(p => `${p.id} - ${p.name}` === e.target.value || p.id === e.target.value);
+                      const val = e.target.value;
+                      setManualAddPartSearch(val);
+                      const match = parts.find(p => `${p.id} - ${p.name}` === val || p.id === val || p.name === val);
                       if (match) setManualAddPart(match.id);
-                      else setManualAddPart('');
+                      else setManualAddPart(val.trim());
                     }}
                     className="w-full bg-gray-50 border border-gray-200 p-4 rounded-xl font-bold text-gray-800 outline-none focus:border-blue-500 transition-all font-mono"
-                    placeholder="Nhập mã hoặc tên linh kiện..."
+                    placeholder="Gõ mã hoặc tên linh kiện bất kỳ..."
                   />
                   <datalist id="manual-add-parts">
                     {parts.map(p => (
@@ -9333,25 +9337,28 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   </datalist>
                 </div>
                 <div>
-                  <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Số lượng</label>
+                  <label className="block text-sm font-bold uppercase text-gray-600 mb-2">Số lượng tồn kho</label>
                   <input 
                     type="number"
+                    step="any"
                     value={manualAddQty}
                     onChange={(e) => setManualAddQty(e.target.value)}
-                    className="w-full bg-gray-50 border border-gray-200 p-4 rounded-xl font-bold text-gray-800 outline-none focus:border-blue-500 transition-all font-mono"
+                    className="w-full bg-gray-50 border border-gray-200 p-4 rounded-xl font-bold text-gray-800 outline-none focus:border-blue-500 transition-all font-mono text-lg"
                     placeholder="Nhập số lượng..."
                   />
                 </div>
                 <div className="pt-2">
                   <button 
                     onClick={async () => {
-                      if (!manualAddPart || !manualAddQty || Number(manualAddQty) <= 0) {
-                        await customAlert('Vui lòng chọn linh kiện và nhập số lượng hợp lệ.');
+                      const rawInput = manualAddPart || manualAddPartSearch.trim();
+                      const targetPartId = rawInput.includes(' - ') ? rawInput.split(' - ')[0].trim() : rawInput.trim();
+                      const qty = Number(manualAddQty);
+
+                      if (!targetPartId || isNaN(qty) || qty <= 0) {
+                        await customAlert('Vui lòng chọn/nhập linh kiện và nhập số lượng hợp lệ lớn hơn 0.');
                         return;
                       }
                       
-                      const part = manualAddPart;
-                      const qty = Number(manualAddQty);
                       const stageId = showManualAddModal.stageId;
                       const location = showManualAddModal.location;
                       
@@ -9364,8 +9371,9 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                       if (!ok) return;
 
                       try {
-                        await storageService.recordManualInbound(part, stageId, location, qty);
-                        await customAlert('Thêm tồn kho thành công và đã đồng bộ lên Supabase!');
+                        // Pass force = true to bypass PO limits and add stock freely for PO usage!
+                        await storageService.recordManualInbound(targetPartId, stageId, location, qty, undefined, true);
+                        await customAlert(`Thành công! Đã thêm ${qty} tồn kho cho linh kiện "${targetPartId}" tại ${STAGES.find(s => s.id === stageId)?.name} (${location}) và đồng bộ lên Supabase.\n\nLinh kiện này đã có sẵn trong kho để sử dụng cho các PO con!`);
                         refreshData();
                       } catch (err: any) {
                         const errMsg = err.message || '';
@@ -9376,10 +9384,10 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         }
                       }
                     }}
-                    className={cn("w-full py-4 text-white rounded-xl font-bold text-lg uppercase transition-all shadow-lg flex items-center justify-center gap-2", showManualAddModal.location === 'IN' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-600 hover:bg-orange-700')}
+                    className={cn("w-full py-4 text-white rounded-xl font-bold text-lg uppercase transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-98", showManualAddModal.location === 'IN' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-600 hover:bg-orange-700')}
                   >
                     <PackagePlus size={24} />
-                    Xác nhận thêm
+                    Xác nhận thêm & Đồng bộ Supabase
                   </button>
                 </div>
               </div>
