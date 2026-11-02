@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, UserAccount, View, DeletedPOBackup, POSnapshot } from './types';
+import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, UserAccount, View, DeletedPOBackup, POSnapshot, HiddenInventoryItem } from './types';
 import { format, addMilliseconds, setHours, setMinutes, setSeconds, getHours, getMinutes, isBefore, isAfter, startOfDay, addDays } from 'date-fns';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
@@ -43,6 +43,7 @@ const STORAGE_KEYS = {
   DELETED_PO_BACKUPS: 'wip_deleted_po_backups',
   PO_SNAPSHOTS: 'wip_po_snapshots',
   DATA_RESET_VERSION: 'data_reset_version',
+  HIDDEN_INVENTORY_PARTS: 'wip_hidden_inventory_parts',
 };
 
 // In-memory cache to eliminate redundant reads & preserve Free tier egress
@@ -236,13 +237,171 @@ async function persistInventoryToSupabase(inventory: InventoryItem[]) {
   }
 }
 
+// Helper function to extract canonical part ID, catalog name, and all possible suffix variants
+export function getPartVariants(partId: string, partsList: any[]): { baseId: string; catalogId?: string; catalogName?: string; allVariants: string[] } {
+  if (!partId) return { baseId: '', allVariants: [] };
+  const raw = partId.trim();
+  const stripped = raw
+    .replace(/\s*-\s*(CD|H|S|C|P|G|W|B|L|CT|BD|GLZ|OUT|IN|Dán kính|Dập\/Chấn|Hàn|Sơn|Cắt Laser)$/gi, '')
+    .trim();
+
+  const rawUpper = raw.toUpperCase();
+  const strippedUpper = stripped.toUpperCase();
+
+  const found = Array.isArray(partsList) ? partsList.find((p: any) => {
+    if (!p) return false;
+    const pIdUpper = (p.id || '').toUpperCase().trim();
+    const pNameUpper = (p.name || '').toUpperCase().trim();
+    if (pIdUpper === rawUpper || pIdUpper === strippedUpper) return true;
+    if (pNameUpper === rawUpper || pNameUpper === strippedUpper) return true;
+    if (pIdUpper.length > 5 && (rawUpper.includes(pIdUpper) || strippedUpper.includes(pIdUpper))) return true;
+    if (pNameUpper.length > 5 && (rawUpper.includes(pNameUpper) || strippedUpper.includes(pNameUpper))) return true;
+    return false;
+  }) : null;
+
+  const variants = new Set<string>();
+  variants.add(raw);
+  variants.add(stripped);
+  variants.add(rawUpper);
+  variants.add(strippedUpper);
+
+  const suffixes = ['', ' - CD', ' - H', ' - S', ' - C', ' - P', ' - G', ' - W', ' - B', ' - L', ' - CT', ' - BD', ' - OUT', ' - IN'];
+
+  if (found) {
+    if (found.id) {
+      suffixes.forEach(s => {
+        variants.add(found.id + s);
+        variants.add((found.id + s).toUpperCase());
+      });
+    }
+    if (found.name) {
+      suffixes.forEach(s => {
+        variants.add(found.name + s);
+        variants.add((found.name + s).toUpperCase());
+      });
+    }
+  }
+
+  suffixes.forEach(s => {
+    variants.add(stripped + s);
+    variants.add((stripped + s).toUpperCase());
+  });
+
+  return {
+    baseId: found?.id || stripped,
+    catalogId: found?.id,
+    catalogName: found?.name,
+    allVariants: Array.from(variants).filter(Boolean)
+  };
+}
+
+// Helper function to extract all possible search tokens (IDs, catalog names, model codes) for a part
+export function getPartSearchTokens(partId: string, partsList: any[]): string[] {
+  const tokens = new Set<string>();
+  if (!partId) return [];
+
+  const raw = partId.trim();
+  const stripped = raw.replace(/\s*-\s*(CD|H|S|C|P|G|W|B|L|CT|BD|GLZ|OUT|IN|Dán kính|Dập\/Chấn|Hàn|Sơn|Cắt Laser)$/gi, '').trim();
+
+  if (raw) tokens.add(raw);
+  if (stripped) tokens.add(stripped);
+
+  const catalogPart = Array.isArray(partsList) ? partsList.find((p: any) => {
+    if (!p) return false;
+    const pIdUpper = (p.id || '').toUpperCase().trim();
+    const pNameUpper = (p.name || '').toUpperCase().trim();
+    return pIdUpper === raw.toUpperCase() || pIdUpper === stripped.toUpperCase() ||
+           pNameUpper === raw.toUpperCase() || pNameUpper === stripped.toUpperCase() ||
+           (pIdUpper.length > 5 && (raw.toUpperCase().includes(pIdUpper) || stripped.toUpperCase().includes(pIdUpper)));
+  }) : null;
+
+  if (catalogPart) {
+    if (catalogPart.id) tokens.add(catalogPart.id);
+    if (catalogPart.name) tokens.add(catalogPart.name);
+  }
+
+  // Extract model/part code tokens like SHA76623KL, SHA76623KL-0032, SHA76623KL-CT, SHA76623
+  const allStrings = [raw, stripped, catalogPart?.id, catalogPart?.name].filter(Boolean) as string[];
+  allStrings.forEach(str => {
+    const matches = str.match(/([A-Z0-9]{4,}[A-Z0-9-]*)/gi);
+    if (matches) {
+      matches.forEach(m => {
+        const cleanM = m.replace(/^L-/i, '').trim();
+        if (cleanM.length >= 4) {
+          tokens.add(cleanM);
+          // Also extract base model prefix (e.g., SHA76623 from SHA76623KL or SHA76623KL-0032)
+          const baseModelMatch = cleanM.match(/([A-Z]{2,3}\d{4,5})/i);
+          if (baseModelMatch && baseModelMatch[1]) {
+            tokens.add(baseModelMatch[1].toUpperCase());
+          }
+          // Extract numeric part code suffix (e.g. 0032 or 0010)
+          const subNumMatch = cleanM.match(/(\d{4})$/);
+          if (subNumMatch && subNumMatch[1]) {
+            tokens.add(subNumMatch[1]);
+          }
+        }
+      });
+    }
+  });
+
+  return Array.from(tokens).filter(t => t && t.length >= 4);
+}
+
+export function isSamePartOrVariant(partA: string, partB: string, partsList: any[] = []): boolean {
+  if (!partA || !partB) return false;
+  const rawA = partA.trim().toUpperCase();
+  const rawB = partB.trim().toUpperCase();
+  if (rawA === rawB) return true;
+
+  const strip = (s: string) => s
+    .replace(/\s*-\s*(CD|H|S|C|P|G|W|B|L|CT|BD|GLZ|OUT|IN|Dán kính|Dập\/Chấn|Hàn|Sơn|Cắt Laser)$/gi, '')
+    .trim()
+    .toUpperCase();
+
+  const cleanA = strip(rawA);
+  const cleanB = strip(rawB);
+
+  if (cleanA === cleanB) return true;
+
+  if (cleanA.length >= 5 && cleanB.length >= 5) {
+    if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true;
+  }
+
+  // Check base model code matching (e.g. SHA76623 vs SHA76623KL)
+  const baseA = cleanA.match(/([A-Z]{2,3}\d{4,5})/i)?.[1]?.toUpperCase();
+  const baseB = cleanB.match(/([A-Z]{2,3}\d{4,5})/i)?.[1]?.toUpperCase();
+  if (baseA && baseB && baseA === baseB) {
+    const subA = cleanA.match(/(\d{4})$/)?.[1];
+    const subB = cleanB.match(/(\d{4})$/)?.[1];
+    if (!subA || !subB || subA === subB) {
+      return true;
+    }
+  }
+
+  const tokensA = getPartSearchTokens(partA, partsList);
+  const tokensB = getPartSearchTokens(partB, partsList);
+
+  for (const tA of tokensA) {
+    if (tA && tA.length >= 4) {
+      const uA = tA.toUpperCase();
+      if (rawB.includes(uA) || cleanB.includes(uA)) return true;
+    }
+  }
+
+  for (const tB of tokensB) {
+    if (tB && tB.length >= 4) {
+      const uB = tB.toUpperCase();
+      if (rawA.includes(uB) || cleanA.includes(uB)) return true;
+    }
+  }
+
+  return false;
+}
+
+
 async function deleteInventoryFromSupabase(partId: string, stageId: StageId, location: string, originalPartId?: string) {
   if (!isSupabaseConfigured || !partId) return;
   try {
-    const cleanPartId = partId.trim();
-    const cleanOrigId = (originalPartId || '').trim();
-
-    // Look up catalog to find canonical ID and Name
     let partsList: any[] = [];
     if (cache[STORAGE_KEYS.PARTS]) {
       partsList = cache[STORAGE_KEYS.PARTS];
@@ -253,45 +412,103 @@ async function deleteInventoryFromSupabase(partId: string, stageId: StageId, loc
       } catch {}
     }
 
-    const cleanUpper = cleanPartId.toUpperCase();
-    const catalogPart = Array.isArray(partsList) ? partsList.find((p: any) => p && (p.id?.toUpperCase() === cleanUpper || p.name?.toUpperCase().trim() === cleanUpper)) : null;
-    const targetId = catalogPart ? catalogPart.id : cleanPartId;
-    const targetName = catalogPart ? catalogPart.name : '';
+    const { allVariants } = getPartVariants(partId, partsList);
+    const searchTokens = getPartSearchTokens(partId, partsList);
+    const origVariants = originalPartId ? getPartVariants(originalPartId, partsList).allVariants : [''];
 
-    const possiblePartIds = Array.from(new Set([cleanPartId, targetId, targetName, cleanUpper].filter(Boolean)));
+    const deletePromises: Promise<any>[] = [];
 
-    // 1. Delete by synthetic ID in wip_inventory
+    // Stage ID aliases (e.g., PAINTING and Sơn, WELDING and Hàn, BENDING and Chấn/Dập)
+    const stageAliases = Array.from(new Set([
+      stageId,
+      stageId.toUpperCase(),
+      stageId.toLowerCase(),
+      ...(stageId === 'PAINTING' ? ['Sơn', 'SON', 'sơn'] : []),
+      ...(stageId === 'WELDING' ? ['Hàn', 'HAN', 'hàn'] : []),
+      ...(stageId === 'BENDING' ? ['Chấn', 'Dập', 'CHẤN', 'DẬP'] : []),
+      ...(stageId === 'LASER' ? ['Laser', 'Cắt Laser', 'LASER'] : []),
+      ...(stageId === 'GLAZING' ? ['Dán kính', 'DÁN KÍNH', 'GLAZING'] : []),
+    ]));
+
+    // 1. Delete by synthetic IDs across allVariants x stageAliases x location x origVariants
     const rowIds: string[] = [];
-    possiblePartIds.forEach(p => {
-      rowIds.push(`${p}_${stageId}_${location}_${cleanOrigId}`);
-      if (cleanOrigId) {
-        rowIds.push(`${p}_${stageId}_${location}_`);
-      }
+    allVariants.forEach(v => {
+      stageAliases.forEach(s => {
+        rowIds.push(`${v}_${s}_${location}_`);
+        rowIds.push(`${v}_${s}_${location}`);
+        rowIds.push(`${v}_${s}_IN_`);
+        rowIds.push(`${v}_${s}_OUT_`);
+        rowIds.push(`${v}_${s}_DEFECT_`);
+        origVariants.forEach(o => {
+          if (o) {
+            rowIds.push(`${v}_${s}_${location}_${o}`);
+            rowIds.push(`${v}_${s}_IN_${o}`);
+            rowIds.push(`${v}_${s}_OUT_${o}`);
+          }
+        });
+      });
     });
 
-    const deletePromises: Promise<any>[] = [
-      Promise.resolve(supabase.from('wip_inventory').delete().in('id', rowIds))
-    ];
+    for (let i = 0; i < rowIds.length; i += 100) {
+      const chunk = rowIds.slice(i, i + 100);
+      deletePromises.push(Promise.resolve(supabase.from('wip_inventory').delete().in('id', chunk)));
+    }
 
-    // 2. Also delete by column match (part_id, stage_id, location)
-    possiblePartIds.forEach(pid => {
-      if (cleanOrigId) {
+    // 2. Delete by stage_id in stageAliases AND part_id in allVariants (across ALL locations)
+    for (let i = 0; i < allVariants.length; i += 100) {
+      const chunk = allVariants.slice(i, i + 100);
+      stageAliases.forEach(s => {
         deletePromises.push(
-          Promise.resolve(supabase.from('wip_inventory').delete().match({
-            part_id: pid,
-            stage_id: stageId,
-            location: location,
-            original_part_id: cleanOrigId
-          }))
+          Promise.resolve(
+            supabase.from('wip_inventory')
+              .delete()
+              .eq('stage_id', s)
+              .in('part_id', chunk)
+          )
         );
+      });
+    }
+
+    // 3. Fallback ilike pattern deletion for each search token (e.g. SHA76623KL, 04-29-08-SHA76623KL-0032, SHA76623KL-CT)
+    searchTokens.forEach(t => {
+      if (t && t.length >= 4) {
+        stageAliases.forEach(s => {
+          deletePromises.push(
+            Promise.resolve(
+              supabase.from('wip_inventory')
+                .delete()
+                .eq('stage_id', s)
+                .ilike('part_id', `%${t}%`)
+            )
+          );
+          deletePromises.push(
+            Promise.resolve(
+              supabase.from('wip_inventory')
+                .delete()
+                .eq('stage_id', s)
+                .ilike('id', `%${t}%`)
+            )
+          );
+        });
+
+        // If token is specific (length >= 5), delete REGARDLESS of stage_id to eradicate corrupt stage records on Supabase
+        if (t.length >= 5) {
+          deletePromises.push(
+            Promise.resolve(
+              supabase.from('wip_inventory')
+                .delete()
+                .ilike('part_id', `%${t}%`)
+            )
+          );
+          deletePromises.push(
+            Promise.resolve(
+              supabase.from('wip_inventory')
+                .delete()
+                .ilike('id', `%${t}%`)
+            )
+          );
+        }
       }
-      deletePromises.push(
-        Promise.resolve(supabase.from('wip_inventory').delete().match({
-          part_id: pid,
-          stage_id: stageId,
-          location: location
-        }))
-      );
     });
 
     await Promise.allSettled(deletePromises);
@@ -470,7 +687,7 @@ function getCached<T>(key: string, fetchFn: () => T): T {
   return data;
 }
 
-function clearCache(key?: string) {
+export function clearCache(key?: string) {
   if (key) {
     delete cache[key];
     if (key === STORAGE_KEYS.TRANSFORMATIONS || key === STORAGE_KEYS.PARTS) {
@@ -1652,6 +1869,19 @@ export const storageService = {
         }
       }
 
+      // Canonicalize partId by stripping stage suffixes (e.g. " - CD", " - H") to prevent split records
+      if (targetPartId && !targetPartId.startsWith('GLZ-OUT-')) {
+        const stripped = targetPartId.replace(/\s*-\s*(CD|H|S|C|GLZ|OUT|IN)$/i, '').trim();
+        const catalogMatch = parts.find(p => p.id.toUpperCase() === stripped.toUpperCase() || p.name.toUpperCase().trim() === stripped.toUpperCase());
+        if (catalogMatch && targetPartId !== catalogMatch.id) {
+          targetPartId = catalogMatch.id;
+          hasRepaired = true;
+        } else if (stripped !== targetPartId) {
+          targetPartId = stripped;
+          hasRepaired = true;
+        }
+      }
+
       // Merge duplicate entries
       const existing = cleanInventory.find(i => 
         i.partId.toUpperCase().trim() === targetPartId.toUpperCase().trim() && 
@@ -1678,6 +1908,76 @@ export const storageService = {
     }
 
     return [...cleanInventory];
+  },
+
+  getHiddenInventoryItems(): HiddenInventoryItem[] {
+    return getCached(STORAGE_KEYS.HIDDEN_INVENTORY_PARTS, () => {
+      const data = localStorage.getItem(STORAGE_KEYS.HIDDEN_INVENTORY_PARTS);
+      return data ? JSON.parse(data) : [];
+    });
+  },
+
+  saveHiddenInventoryItems(items: HiddenInventoryItem[]) {
+    localStorage.setItem(STORAGE_KEYS.HIDDEN_INVENTORY_PARTS, JSON.stringify(items));
+    cache[STORAGE_KEYS.HIDDEN_INVENTORY_PARTS] = items;
+    queueConfigPersist(STORAGE_KEYS.HIDDEN_INVENTORY_PARTS, items);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('wip_data_updated'));
+    }
+  },
+
+  isItemHidden(item: InventoryItem, hiddenList?: HiddenInventoryItem[]): boolean {
+    if (!item) return false;
+    const list = hiddenList || this.getHiddenInventoryItems();
+    if (!list || list.length === 0) return false;
+    const parts = this.getParts();
+    return list.some(h => {
+      if (h.stageId !== item.stageId) return false;
+      if (h.location && h.location !== item.location) return false;
+      if (h.originalPartId && item.originalPartId && h.originalPartId !== item.originalPartId) return false;
+      return isSamePartOrVariant(h.partId, item.partId, parts);
+    });
+  },
+
+  toggleHideInventoryItem(item: InventoryItem, currentUser?: UserAccount | null): boolean {
+    const list = [...this.getHiddenInventoryItems()];
+    const parts = this.getParts();
+    const existingIdx = list.findIndex(h => 
+      h.stageId === item.stageId &&
+      h.location === item.location &&
+      isSamePartOrVariant(h.partId, item.partId, parts) &&
+      (!h.originalPartId || !item.originalPartId || h.originalPartId === item.originalPartId)
+    );
+
+    let isNowHidden: boolean;
+    if (existingIdx >= 0) {
+      list.splice(existingIdx, 1);
+      isNowHidden = false;
+    } else {
+      list.push({
+        stageId: item.stageId,
+        location: item.location,
+        partId: item.partId,
+        originalPartId: item.originalPartId,
+        hiddenAt: Date.now(),
+        hiddenBy: currentUser?.username || 'admin'
+      });
+      isNowHidden = true;
+    }
+    this.saveHiddenInventoryItems(list);
+    return isNowHidden;
+  },
+
+  unhideInventoryItem(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', originalPartId?: string): void {
+    const list = this.getHiddenInventoryItems();
+    const parts = this.getParts();
+    const filtered = list.filter(h => !(
+      h.stageId === stageId &&
+      h.location === location &&
+      isSamePartOrVariant(h.partId, partId, parts) &&
+      (!h.originalPartId || !originalPartId || h.originalPartId === originalPartId)
+    ));
+    this.saveHiddenInventoryItems(filtered);
   },
 
   getTransactions(): Transaction[] {
@@ -2257,16 +2557,13 @@ export const storageService = {
     }
 
     const inventory = this.getInventory();
-    const cleanIdUpper = partId.trim().toUpperCase();
     const parts = this.getParts();
-    const partInCatalog = parts.find(p => p.id.toUpperCase() === cleanIdUpper || p.name.toUpperCase().trim() === cleanIdUpper);
-    const targetNameUpper = partInCatalog ? partInCatalog.name.toUpperCase().trim() : '';
-    const canonicalPartId = partInCatalog ? partInCatalog.id : cleanIdUpper;
+    const { baseId, catalogId } = getPartVariants(partId, parts);
+    const canonicalPartId = catalogId || baseId || partId.trim();
 
-    // Remove all existing matching entries
+    // Remove all existing matching entries across all variants
     const newInventory = inventory.filter(item => {
-      const itemPartId = item.partId.toUpperCase().trim();
-      const matchesPart = itemPartId === cleanIdUpper || (targetNameUpper && itemPartId === targetNameUpper);
+      const matchesPart = isSamePartOrVariant(item.partId, partId, parts);
       return !(matchesPart && item.stageId === stageId && item.location === location);
     });
 
@@ -2274,7 +2571,7 @@ export const storageService = {
       partId: canonicalPartId,
       stageId,
       location,
-      quantity: newQuantity,
+      quantity: Math.round(Number(newQuantity) * 10000) / 10000,
       lastUpdated: Date.now()
     };
     newInventory.push(itemToSave);
@@ -2297,24 +2594,16 @@ export const storageService = {
 
     const inventory = this.getInventory();
     const parts = this.getParts();
-    
-    // Find absolute correct case in catalog if exists
-    const cleanIdUpper = partId.trim().toUpperCase();
-    const cleanOrigIdUpper = originalPartId?.trim().toUpperCase() || '';
-    
-    const partInCatalog = parts.find(p => p.id.toUpperCase() === cleanIdUpper || p.name.toUpperCase().trim() === cleanIdUpper);
-    const targetId = partInCatalog ? partInCatalog.id : partId.trim();
-    const targetNameUpper = partInCatalog ? partInCatalog.name.toUpperCase().trim() : '';
-    
-    const origPartInCatalog = originalPartId ? parts.find(p => p.id.toUpperCase() === cleanOrigIdUpper || p.name.toUpperCase().trim() === cleanOrigIdUpper) : undefined;
-    const targetOrigId = origPartInCatalog ? origPartInCatalog.id : (originalPartId?.trim() || '');
+    const { baseId, catalogId } = getPartVariants(partId, parts);
+    const targetId = catalogId || baseId || partId.trim();
+
+    const origVariants = originalPartId ? getPartVariants(originalPartId, parts) : null;
+    const targetOrigId = origVariants?.catalogId || origVariants?.baseId || (originalPartId?.trim() || '');
 
     const index = inventory.findIndex(
       (item) => {
-        const itemPartId = item.partId.toUpperCase().trim();
-        const itemOrigId = (item.originalPartId || '').toUpperCase().trim();
-        const matchesPart = itemPartId === cleanIdUpper || (targetNameUpper && itemPartId === targetNameUpper);
-        return matchesPart && item.stageId === stageId && item.location === location && itemOrigId === cleanOrigIdUpper;
+        const matchesPart = isSamePartOrVariant(item.partId, partId, parts);
+        return matchesPart && item.stageId === stageId && item.location === location;
       }
     );
 
@@ -2364,73 +2653,47 @@ export const storageService = {
 
     const inventory = this.getInventory();
     const parts = this.getParts();
-    
-    // Find absolute correct case in catalog if exists
-    const cleanIdUpper = partId.trim().toUpperCase();
-    const cleanOrigIdUpper = originalPartId?.trim().toUpperCase() || '';
-    
-    const partInCatalog = parts.find(p => p.id.toUpperCase() === cleanIdUpper || p.name.toUpperCase().trim() === cleanIdUpper);
-    const targetId = partInCatalog ? partInCatalog.id : partId.trim();
-    const targetNameUpper = partInCatalog ? partInCatalog.name.toUpperCase().trim() : '';
+    const { baseId, catalogId } = getPartVariants(partId, parts);
+    const canonicalPartId = catalogId || baseId || partId.trim();
 
-    const origPartInCatalog = originalPartId ? parts.find(p => p.id.toUpperCase() === cleanOrigIdUpper || p.name.toUpperCase().trim() === cleanOrigIdUpper) : undefined;
-    const targetOrigId = origPartInCatalog ? origPartInCatalog.id : (originalPartId?.trim() || '');
+    const origVariants = originalPartId ? getPartVariants(originalPartId, parts) : null;
+    const cleanOrigId = origVariants?.catalogId || origVariants?.baseId || (originalPartId?.trim() || '');
 
-    const index = inventory.findIndex(
-      (item) => {
-        const itemPartId = item.partId.toUpperCase().trim();
-        const itemOrigId = (item.originalPartId || '').toUpperCase().trim();
-        const matchesPart = itemPartId === cleanIdUpper || (targetNameUpper && itemPartId === targetNameUpper);
-        return matchesPart && item.stageId === stageId && item.location === location && itemOrigId === cleanOrigIdUpper;
-      }
-    );
+    // 1. Remove all old/duplicate variant entries in local state for this part at this stage & location
+    const newInventory = inventory.filter(item => {
+      const matchesPart = isSamePartOrVariant(item.partId, partId, parts);
+      return !(matchesPart && item.stageId === stageId && item.location === location);
+    });
 
-    let itemToSave: InventoryItem | null = null;
-    if (index >= 0) {
-      inventory[index].quantity = Math.max(0, quantity);
-      inventory[index].partId = targetId;
-      if (targetOrigId) inventory[index].originalPartId = targetOrigId;
-      if (!inventory[index].lastUpdated) inventory[index].lastUpdated = Date.now();
-      itemToSave = inventory[index];
-    } else {
-      itemToSave = { 
-        partId: targetId, 
-        originalPartId: targetOrigId || undefined,
-        stageId, 
-        location, 
-        quantity: Math.max(0, quantity),
-        lastUpdated: Date.now()
-      };
-      inventory.push(itemToSave);
-    }
+    const itemToSave: InventoryItem = {
+      partId: canonicalPartId,
+      originalPartId: cleanOrigId || undefined,
+      stageId,
+      location,
+      quantity: Math.round(Number(quantity) * 10000) / 10000,
+      lastUpdated: Date.now()
+    };
+    newInventory.push(itemToSave);
 
-    this.saveInventory(inventory);
-    if (itemToSave) {
-      if (targetId !== partId || targetNameUpper) {
-        await deleteInventoryFromSupabase(partId, stageId, location, originalPartId);
-      }
-      await persistSingleInventoryItemToSupabase(itemToSave);
-    }
+    this.saveInventory(newInventory);
+
+    // 2. Eradicate any legacy variant/suffix rows in Supabase before saving clean row
+    await deleteInventoryFromSupabase(partId, stageId, location, originalPartId);
+    await persistSingleInventoryItemToSupabase(itemToSave);
   },
 
   async deleteInventoryItem(partId: string, stageId: StageId, location: 'IN' | 'OUT' | 'DEFECT', originalPartId?: string) {
     const inventory = this.getInventory();
     const parts = this.getParts();
-    const cleanIdUpper = partId.trim().toUpperCase();
-    const cleanOrigIdUpper = originalPartId?.trim().toUpperCase() || '';
-
-    const partInCatalog = parts.find(p => p.id.toUpperCase() === cleanIdUpper || p.name.toUpperCase().trim() === cleanIdUpper);
-    const targetNameUpper = partInCatalog ? partInCatalog.name.toUpperCase().trim() : '';
 
     const filtered = inventory.filter(
       (item) => {
-        const itemPartId = item.partId.toUpperCase().trim();
-        const itemOrigId = (item.originalPartId || '').toUpperCase().trim();
-        const matchesPart = itemPartId === cleanIdUpper || (targetNameUpper && itemPartId === targetNameUpper);
-        return !(matchesPart && item.stageId === stageId && item.location === location && itemOrigId === cleanOrigIdUpper);
+        const matchesPart = isSamePartOrVariant(item.partId, partId, parts);
+        return !(matchesPart && item.stageId === stageId && item.location === location);
       }
     );
     this.saveInventory(filtered);
+    clearCache(STORAGE_KEYS.INVENTORY);
     await deleteInventoryFromSupabase(partId, stageId, location, originalPartId);
   },
 

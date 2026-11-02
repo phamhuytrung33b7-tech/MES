@@ -63,7 +63,9 @@ import {
   Scissors,
   Scale,
   Percent,
-  Loader2
+  Loader2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -6281,6 +6283,16 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   const [selectedStageDetail, setSelectedStageDetail] = useState<StageId | null>(null);
   const [expandedInventoryKeys, setExpandedInventoryKeys] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
+  const [hiddenInventoryItems, setHiddenInventoryItems] = useState(() => storageService.getHiddenInventoryItems());
+  const [showHiddenItems, setShowHiddenItems] = useState(false);
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      setHiddenInventoryItems(storageService.getHiddenInventoryItems());
+    };
+    window.addEventListener('wip_data_updated', handleUpdate);
+    return () => window.removeEventListener('wip_data_updated', handleUpdate);
+  }, []);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showExportPreparationModal, setShowExportPreparationModal] = useState(false);
   const [showExportHourlyModal, setShowExportHourlyModal] = useState(false);
@@ -6415,6 +6427,39 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     }
     await customAlert('Mật khẩu Quản trị viên không chính xác! Bạn không có quyền thực hiện thao tác này.');
     return false;
+  };
+
+  const stageHiddenCount = useMemo(() => {
+    if (!selectedStageDetail) return 0;
+    return inventory.filter((item: any) => item.stageId === selectedStageDetail && storageService.isItemHidden(item, hiddenInventoryItems)).length;
+  }, [inventory, selectedStageDetail, hiddenInventoryItems]);
+
+  const toggleItemHide = async (item: InventoryItem) => {
+    const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
+    const part = parts.find((p: any) => p.id === item.partId || p.name === item.partId);
+    const displayName = part?.name || item.partId;
+    const locName = item.location === 'IN' ? 'KHO_IN' : item.location === 'OUT' ? 'KHO_OUT' : 'KHO_NG';
+    
+    const ok = await checkAdminPermission(isHidden ? 'bỏ ẩn linh kiện' : 'ẩn linh kiện tồn kho');
+    if (!ok) return;
+
+    const actionText = isHidden ? 'BỎ ẨN' : 'ẨN';
+    const consequenceText = isHidden 
+      ? `Linh kiện sẽ hiển thị lại bình thường và ĐƯỢC CỘNG vào số lượng tồn ${locName} của công đoạn.`
+      : `Linh kiện sẽ BỊ ẨN và KHÔNG ĐƯỢC CỘNG vào số lượng tồn ${locName} của công đoạn.`;
+
+    const confirmed = await customConfirm(`Bạn có chắc chắn muốn ${actionText} linh kiện "${displayName}" tại ${locName}?\n\n${consequenceText}`);
+    if (!confirmed) return;
+
+    const nowHidden = storageService.toggleHideInventoryItem(item, storageService.getCurrentUser());
+    setHiddenInventoryItems(storageService.getHiddenInventoryItems());
+    refreshData();
+    
+    if (nowHidden) {
+      await customAlert(`Đã ẩn linh kiện "${displayName}". Số lượng đã được loại trừ khỏi ô tồn ${locName}.`);
+    } else {
+      await customAlert(`Đã bỏ ẩn linh kiện "${displayName}". Số lượng đã được cộng lại vào ô tồn ${locName}.`);
+    }
   };
 
   const [showManualAddModal, setShowManualAddModal] = useState<{stageId: StageId, location: 'IN' | 'OUT'} | null>(null);
@@ -7282,7 +7327,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
   const stageSummaries = useMemo(() => {
     return STAGES.map(stage => {
-      const stageItems = inventory.filter(item => item.stageId === stage.id);
+      // Exclude hidden parts from stage summary calculations
+      const stageItems = inventory.filter(item => item.stageId === stage.id && !storageService.isItemHidden(item, hiddenInventoryItems));
       
       const formatQty = (val: number) => parseFloat(val.toFixed(4));
       
@@ -7307,7 +7353,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         scrap: formatQty(scrapQty),
       };
     });
-  }, [inventory, parts]);
+  }, [inventory, parts, hiddenInventoryItems]);
 
   const activeStageConfig = activeChartTab !== 'MECHANICAL' ? STAGE_CHART_CONFIGS[activeChartTab] : null;
 
@@ -7509,6 +7555,28 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                     <Edit2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                   <button 
+                    onClick={() => setShowHiddenItems(!showHiddenItems)}
+                    className={cn(
+                      "flex items-center justify-center gap-1.5 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl border font-bold uppercase text-[11px] sm:text-xs tracking-wider transition-all shadow-2xs active:scale-95 shrink-0 cursor-pointer",
+                      showHiddenItems
+                        ? "bg-amber-500 text-white border-amber-600 hover:bg-amber-600"
+                        : "bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200"
+                    )}
+                    title={showHiddenItems ? "Đang hiện linh kiện ẩn (bấm để ẩn)" : "Xem và quản lý các linh kiện đã ẩn"}
+                  >
+                    {showHiddenItems ? <Eye size={15} /> : <EyeOff size={15} />}
+                    <span className="hidden sm:inline">{showHiddenItems ? 'Đang hiện đã ẩn' : 'Hiện đã ẩn'}</span>
+                    <span className="sm:hidden">{showHiddenItems ? 'Đang hiện' : 'Hiện ẩn'}</span>
+                    {stageHiddenCount > 0 && (
+                      <span className={cn(
+                        "px-1.5 py-0.2 rounded-full text-[10px] font-black",
+                        showHiddenItems ? "bg-white text-amber-700" : "bg-amber-500 text-white"
+                      )}>
+                        {stageHiddenCount}
+                      </span>
+                    )}
+                  </button>
+                  <button 
                     onClick={() => {
                       if (selectedStageDetail) {
                         setDefectModal({ partId: '', stageId: selectedStageDetail });
@@ -7528,6 +7596,24 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                   </button>
                 </div>
               </div>
+
+              {stageHiddenCount > 0 && (
+                <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-amber-50 border-2 border-amber-300 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs sm:text-sm text-amber-950 font-medium">
+                  <div className="flex items-center gap-2">
+                    <EyeOff size={18} className="text-amber-600 shrink-0" />
+                    <span>
+                      Đang ẩn <b>{stageHiddenCount}</b> linh kiện tại công đoạn này (đã loại trừ khỏi ô tổng tồn IN/OUT).
+                      {showHiddenItems ? " (Các linh kiện đã ẩn đang được hiển thị bên dưới với nhãn màu cam)" : " (Bấm 'Hiện đã ẩn' để xem hoặc bỏ ẩn)"}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setShowHiddenItems(!showHiddenItems)}
+                    className="text-xs font-bold text-amber-800 hover:text-amber-950 underline shrink-0 cursor-pointer"
+                  >
+                    {showHiddenItems ? "Thu gọn lại" : "Hiển thị để quản lý"}
+                  </button>
+                </div>
+              )}
 
               {selectedStageDetail === 'DCLR' && (
                 <div className="mb-4 sm:mb-8 p-3.5 sm:p-6 bg-red-50 border border-red-200 rounded-xl sm:rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-3 sm:gap-6 shadow-2xs">
@@ -8075,6 +8161,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         {inventory
                           .filter(item => item.stageId === selectedStageDetail && item.location === 'IN' && item.quantity > 0)
                           .filter(item => {
+                            const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
+                            if (isHidden && !showHiddenItems) return false;
                             const partStr = item.partId;
                             const part = parts.find(p => p.id === partStr || p.name === partStr);
                             const originalPart = item.originalPartId ? parts.find(p => p.id === item.originalPartId || p.name === item.originalPartId) : null;
@@ -8096,11 +8184,15 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                             const ageInfo = ageBatches.length > 0 ? ageBatches[0].ageInfo : null;
                             const itemKey = `IN-${item.partId}-${item.originalPartId}`;
                             const isExpanded = expandedInventoryKeys.has(itemKey);
+                            const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
 
                             return (
                               <React.Fragment key={`${item.partId}-${item.originalPartId}-${idx}`}>
                                 <tr 
-                                  className="hover:bg-white transition-colors cursor-pointer"
+                                  className={cn(
+                                    "transition-colors cursor-pointer",
+                                    isHidden ? "bg-amber-50/70 hover:bg-amber-100/70 border-l-4 border-amber-500" : "hover:bg-white"
+                                  )}
                                   onClick={() => {
                                     const next = new Set(expandedInventoryKeys);
                                     if (next.has(itemKey)) next.delete(itemKey);
@@ -8118,6 +8210,13 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                         </span>
                                       )}
                                     </div>
+                                    {isHidden && (
+                                      <div className="mt-1">
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black uppercase">
+                                          <EyeOff size={11} /> Đã ẩn (không cộng vào tồn IN)
+                                        </span>
+                                      </div>
+                                    )}
                                     {ageInfo && (
                                       <div className={`text-xs mt-1 font-bold ${ageInfo.colorClass} flex items-center gap-1`}>
                                         {ageInfo.text}
@@ -8126,18 +8225,35 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     )}
                                   </td>
                                   <td className="p-4 text-right">
-                                  <div className="flex items-center justify-end gap-3">
-                                    <span className="font-mono font-bold text-xl">{displayQty}</span>
-                                    <span className="text-xs font-mono opacity-40 uppercase mr-4">{displayUnit}</span>
+                                  <div className="flex items-center justify-end gap-2 sm:gap-3">
+                                    <span className={cn("font-mono font-bold text-xl", isHidden && "text-amber-800 line-through opacity-70")}>{displayQty}</span>
+                                    <span className="text-xs font-mono opacity-40 uppercase mr-2 sm:mr-3">{displayUnit}</span>
                                     <button 
-                                      onClick={() => setDefectModal({ partId: item.partId, stageId: selectedStageDetail, location: 'IN' })}
-                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleItemHide(item);
+                                      }}
+                                      className={cn(
+                                        "p-2 rounded-lg transition-colors cursor-pointer",
+                                        isHidden ? "text-amber-700 bg-amber-100 hover:bg-amber-200" : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                                      )}
+                                      title={isHidden ? "Bỏ ẩn (cộng lại vào tồn IN)" : "Ẩn linh kiện này (không cộng vào tồn IN)"}
+                                    >
+                                      {isHidden ? <Eye size={16} /> : <EyeOff size={16} />}
+                                    </button>
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setDefectModal({ partId: item.partId, stageId: selectedStageDetail, location: 'IN' });
+                                      }}
+                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
                                       title="Báo lỗi (NG)"
                                     >
                                       <AlertCircle size={16} />
                                     </button>
                                     <button 
-                                      onClick={async () => {
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
                                         const ok = await checkAdminPermission('chỉnh sửa số lượng tồn kho');
                                         if (!ok) return;
                                         const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId}:`, String(qty));
@@ -8155,7 +8271,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                       <Edit2 size={16} />
                                     </button>
                                     <button 
-                                      onClick={async () => {
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
                                         const ok = await checkAdminPermission('xóa linh kiện tồn kho');
                                         if (!ok) return;
                                         if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho IN)?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
@@ -8189,6 +8306,26 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                             </React.Fragment>
                           );
                           })}
+                        {inventory
+                          .filter(item => item.stageId === selectedStageDetail && item.location === 'IN' && item.quantity > 0)
+                          .filter(item => {
+                            const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
+                            if (isHidden && !showHiddenItems) return false;
+                            const partStr = item.partId;
+                            const part = parts.find(p => p.id === partStr || p.name === partStr);
+                            const originalPart = item.originalPartId ? parts.find(p => p.id === item.originalPartId || p.name === item.originalPartId) : null;
+                            const searchLower = searchTerm.toLowerCase();
+                            return item.partId.toLowerCase().includes(searchLower) || 
+                                   (part && part.name.toLowerCase().includes(searchLower)) ||
+                                   (item.originalPartId && item.originalPartId.toLowerCase().includes(searchLower)) ||
+                                   (originalPart && originalPart.name.toLowerCase().includes(searchLower));
+                          }).length === 0 && (
+                            <tr>
+                              <td colSpan={2} className="p-8 text-center text-xs font-mono text-gray-400 italic">
+                                Không có linh kiện tồn trong kho IN
+                              </td>
+                            </tr>
+                          )}
                       </tbody>
                     </table>
                   </div>
@@ -8240,6 +8377,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                 return false;
                               }
                             }
+                            const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
+                            if (isHidden && !showHiddenItems) return false;
                             const partStr = item.partId;
                             const part = parts.find(p => p.id === partStr || p.name === partStr);
                             const originalPart = item.originalPartId ? parts.find(p => p.id === item.originalPartId || p.name === item.originalPartId) : null;
@@ -8261,11 +8400,15 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                             const ageInfo = ageBatches.length > 0 ? ageBatches[0].ageInfo : null;
                             const itemKey = `OUT-${item.partId}-${item.originalPartId}`;
                             const isExpanded = expandedInventoryKeys.has(itemKey);
+                            const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
 
                             return (
                               <React.Fragment key={`${item.partId}-${item.originalPartId}-${idx}`}>
                                 <tr 
-                                  className="hover:bg-white transition-colors cursor-pointer"
+                                  className={cn(
+                                    "transition-colors cursor-pointer",
+                                    isHidden ? "bg-amber-50/70 hover:bg-amber-100/70 border-l-4 border-amber-500" : "hover:bg-white"
+                                  )}
                                   onClick={() => {
                                     const next = new Set(expandedInventoryKeys);
                                     if (next.has(itemKey)) next.delete(itemKey);
@@ -8283,6 +8426,13 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                         </span>
                                       )}
                                     </div>
+                                    {isHidden && (
+                                      <div className="mt-1">
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black uppercase">
+                                          <EyeOff size={11} /> Đã ẩn (không cộng vào tồn OUT)
+                                        </span>
+                                      </div>
+                                    )}
                                     {ageInfo && (
                                       <div className={`text-xs mt-1 font-bold ${ageInfo.colorClass} flex items-center gap-1`}>
                                         {ageInfo.text}
@@ -8291,18 +8441,35 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     )}
                                   </td>
                                 <td className="p-4 text-right">
-                                  <div className="flex items-center justify-end gap-3">
-                                    <span className="font-mono font-bold text-xl text-[#F27D26]">{displayQty}</span>
-                                    <span className="text-xs font-mono opacity-40 uppercase mr-4">{displayUnit}</span>
+                                  <div className="flex items-center justify-end gap-2 sm:gap-3">
+                                    <span className={cn("font-mono font-bold text-xl", isHidden ? "text-amber-800 line-through opacity-70" : "text-[#F27D26]")}>{displayQty}</span>
+                                    <span className="text-xs font-mono opacity-40 uppercase mr-2 sm:mr-3">{displayUnit}</span>
                                     <button 
-                                      onClick={() => setDefectModal({ partId: item.partId, stageId: selectedStageDetail, location: 'OUT' })}
-                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleItemHide(item);
+                                      }}
+                                      className={cn(
+                                        "p-2 rounded-lg transition-colors cursor-pointer",
+                                        isHidden ? "text-amber-700 bg-amber-100 hover:bg-amber-200" : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                                      )}
+                                      title={isHidden ? "Bỏ ẩn (cộng lại vào tồn OUT)" : "Ẩn linh kiện này (không cộng vào tồn OUT)"}
+                                    >
+                                      {isHidden ? <Eye size={16} /> : <EyeOff size={16} />}
+                                    </button>
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setDefectModal({ partId: item.partId, stageId: selectedStageDetail, location: 'OUT' });
+                                      }}
+                                      className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
                                       title="Báo lỗi (NG)"
                                     >
                                       <AlertCircle size={16} />
                                     </button>
                                     <button 
-                                      onClick={async () => {
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
                                         const ok = await checkAdminPermission('chỉnh sửa số lượng tồn kho');
                                         if (!ok) return;
                                         const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId}:`, String(qty));
@@ -8320,7 +8487,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                       <Edit2 size={16} />
                                     </button>
                                     <button 
-                                      onClick={async () => {
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
                                         const ok = await checkAdminPermission('xóa linh kiện tồn kho');
                                         if (!ok) return;
                                         if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho OUT)?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
@@ -8361,6 +8529,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                               const partObj = parts.find(p => p.id === item.partId || p.name === item.partId);
                               if (isLaserScrapItem(item.partId, partObj?.name)) return false;
                             }
+                            const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
+                            if (isHidden && !showHiddenItems) return false;
                             const partStr = item.partId;
                             const part = parts.find(p => p.id === partStr || p.name === partStr);
                             const originalPart = item.originalPartId ? parts.find(p => p.id === item.originalPartId || p.name === item.originalPartId) : null;
@@ -8399,6 +8569,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         {inventory
                           .filter(item => item.stageId === selectedStageDetail && item.location === 'DEFECT' && item.quantity > 0)
                           .filter(item => {
+                            const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
+                            if (isHidden && !showHiddenItems) return false;
                             const partStr = item.partId;
                             const part = parts.find(p => p.id === partStr || p.name === partStr);
                             const originalPart = item.originalPartId ? parts.find(p => p.id === item.originalPartId || p.name === item.originalPartId) : null;
@@ -8420,11 +8592,15 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                             const ageInfo = ageBatches.length > 0 ? ageBatches[0].ageInfo : null;
                             const itemKey = `DEFECT-${item.partId}-${item.originalPartId}`;
                             const isExpanded = expandedInventoryKeys.has(itemKey);
+                            const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
 
                             return (
                               <React.Fragment key={`${item.partId}-${item.originalPartId}-${idx}`}>
                                 <tr 
-                                  className="hover:bg-white transition-colors cursor-pointer"
+                                  className={cn(
+                                    "transition-colors cursor-pointer",
+                                    isHidden ? "bg-amber-50/70 hover:bg-amber-100/70 border-l-4 border-amber-500" : "hover:bg-white"
+                                  )}
                                   onClick={() => {
                                     const next = new Set(expandedInventoryKeys);
                                     if (next.has(itemKey)) next.delete(itemKey);
@@ -8442,6 +8618,13 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                         </span>
                                       )}
                                     </div>
+                                    {isHidden && (
+                                      <div className="mt-1">
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black uppercase">
+                                          <EyeOff size={11} /> Đã ẩn (không cộng vào tồn lỗi)
+                                        </span>
+                                      </div>
+                                    )}
                                     {ageInfo && (
                                       <div className={`text-xs mt-1 font-bold ${ageInfo.colorClass} flex items-center gap-1`}>
                                         {ageInfo.text}
@@ -8450,11 +8633,25 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     )}
                                   </td>
                                 <td className="p-4 text-right">
-                                  <div className="flex items-center justify-end gap-3">
-                                    <span className="font-mono font-bold text-xl text-red-600">{displayQty}</span>
-                                    <span className="text-xs font-mono opacity-40 uppercase mr-4 text-gray-900">{displayUnit}</span>
+                                  <div className="flex items-center justify-end gap-2 sm:gap-3">
+                                    <span className={cn("font-mono font-bold text-xl", isHidden ? "text-amber-800 line-through opacity-70" : "text-red-600")}>{displayQty}</span>
+                                    <span className="text-xs font-mono opacity-40 uppercase mr-2 sm:mr-3 text-gray-900">{displayUnit}</span>
                                     <button 
-                                      onClick={async () => {
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleItemHide(item);
+                                      }}
+                                      className={cn(
+                                        "p-2 rounded-lg transition-colors cursor-pointer",
+                                        isHidden ? "text-amber-700 bg-amber-100 hover:bg-amber-200" : "text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                                      )}
+                                      title={isHidden ? "Bỏ ẩn (cộng lại vào tồn lỗi)" : "Ẩn linh kiện này (không cộng vào tồn lỗi)"}
+                                    >
+                                      {isHidden ? <Eye size={16} /> : <EyeOff size={16} />}
+                                    </button>
+                                    <button 
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
                                         const ok = await checkAdminPermission('sửa tồn kho lỗi');
                                         if (!ok) return;
                                         const newQty = await customPrompt(`Nhập số lượng tồn mới cho ${item.partId} (Lỗi):`, String(qty));
@@ -8472,7 +8669,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                       <Edit2 size={16} />
                                     </button>
                                     <button 
-                                      onClick={async () => {
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
                                         const ok = await checkAdminPermission('xóa linh kiện tồn kho lỗi');
                                         if (!ok) return;
                                         if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho lỗi của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name}?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
@@ -8506,7 +8704,19 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                             </React.Fragment>
                           );
                           })}
-                        {inventory.filter(item => item.stageId === selectedStageDetail && item.location === 'DEFECT' && item.quantity > 0).length === 0 && (
+                        {inventory.filter(item => {
+                          if (item.stageId !== selectedStageDetail || item.location !== 'DEFECT' || item.quantity <= 0) return false;
+                          const isHidden = storageService.isItemHidden(item, hiddenInventoryItems);
+                          if (isHidden && !showHiddenItems) return false;
+                          const partStr = item.partId;
+                          const part = parts.find(p => p.id === partStr || p.name === partStr);
+                          const originalPart = item.originalPartId ? parts.find(p => p.id === item.originalPartId || p.name === item.originalPartId) : null;
+                          const searchLower = searchTerm.toLowerCase();
+                          return item.partId.toLowerCase().includes(searchLower) || 
+                                 (part && part.name.toLowerCase().includes(searchLower)) ||
+                                 (item.originalPartId && item.originalPartId.toLowerCase().includes(searchLower)) ||
+                                 (originalPart && originalPart.name.toLowerCase().includes(searchLower));
+                        }).length === 0 && (
                           <tr>
                             <td colSpan={2} className="p-8 text-center text-gray-400 italic text-sm">Không có hàng lỗi tại công đoạn này.</td>
                           </tr>

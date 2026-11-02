@@ -156,7 +156,7 @@ export async function checkAndHandleSystemReset(client = supabase): Promise<{
   }
 }
 
-import { setRemoteHydrated } from './storage';
+import { setRemoteHydrated, clearCache } from './storage';
 import { ProductionOrder, InventoryItem, Transaction, GlazingPlan } from './types';
 
 function mapDbPoToPo(dbRow: any): ProductionOrder {
@@ -343,6 +343,8 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
       const mappedPlans = gpRes.data.map(mapDbPlanToPlan);
       localStorage.setItem('wip_glazing_plans', JSON.stringify(mappedPlans));
     }
+
+    clearCache();
 
     return {
       success: true,

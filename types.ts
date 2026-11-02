@@ -26,6 +26,15 @@ export interface InventoryItem {
   lastUpdated?: number; // Timestamp when inventory stock was added or updated
 }
 
+export interface HiddenInventoryItem {
+  stageId: StageId;
+  location: 'IN' | 'OUT' | 'DEFECT';
+  partId: string;
+  originalPartId?: string;
+  hiddenAt: number;
+  hiddenBy?: string;
+}
+
 export interface Transaction {
   id: string;
   type: 'STAGE_OUT' | 'STAGE_IN' | 'DEFECT' | 'DISPOSAL';
