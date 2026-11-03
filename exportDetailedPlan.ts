@@ -178,21 +178,54 @@ export const exportDetailedProductionPlan = (
     }
   });
 
-  // Sheet Sơn: lấy từ tab Lắp ráp (DCLR)
-  const dclrNorms = storageService.getNorms().filter(n => n.stageId === 'DCLR');
-  const dclrNormsMap = new Map<string, number>();
-  dclrNorms.forEach(n => {
+  // Sheet Sơn: lấy từ tab định mức chữ "Sơn" (stageId === 'PAINTING' trong Định mức năng suất)
+  const paintingNorms = storageService.getNorms().filter(n => n.stageId === 'PAINTING');
+  const paintingNormsMap = new Map<string, number>();
+  paintingNorms.forEach(n => {
     if (n.partId && n.secondsPerUnit > 0) {
-      dclrNormsMap.set(n.partId.trim().toUpperCase(), n.secondsPerUnit);
+      paintingNormsMap.set(n.partId.trim().toUpperCase(), n.secondsPerUnit);
+      const pt = parts.find(p => p.id.toUpperCase() === n.partId.trim().toUpperCase());
+      if (pt && pt.name) {
+        paintingNormsMap.set(pt.name.trim().toUpperCase(), n.secondsPerUnit);
+      }
     }
   });
 
-  // Sheet Dán Kính: lấy từ tab Dán Kính (GLAZING) trong Định mức năng suất
+  // Dự phòng thêm từ tab HSQĐ Sơn nếu người dùng cài đặt ở tab HSQĐ Sơn
+  const paintingHSQD = storageService.getPaintingHSQD();
+  const paintingHSQDMap = new Map<string, number>();
+  paintingHSQD.forEach(n => {
+    if (n.hsqd > 0) {
+      if (n.partId) paintingHSQDMap.set(n.partId.trim().toUpperCase(), n.hsqd);
+      if (n.partName) paintingHSQDMap.set(n.partName.trim().toUpperCase(), n.hsqd);
+    }
+  });
+
+  // Sheet Dán Kính: lấy từ tab định mức chữ "HSQĐ dán kính 2" (storageService.getGlazingStageHSQD())
+  const glazingStageHSQD = storageService.getGlazingStageHSQD();
+  const glazingStageHSQDMap = new Map<string, number>();
+  glazingStageHSQD.forEach(n => {
+    if (n.hsqd > 0) {
+      if (n.partId) glazingStageHSQDMap.set(n.partId.trim().toUpperCase(), n.hsqd);
+      if (n.partName) glazingStageHSQDMap.set(n.partName.trim().toUpperCase(), n.hsqd);
+    }
+  });
+
+  // Dự phòng thêm nếu có định mức dán kính cũ
   const glazingNorms = storageService.getNorms().filter(n => n.stageId === 'GLAZING');
   const glazingNormsMap = new Map<string, number>();
   glazingNorms.forEach(n => {
     if (n.partId && n.secondsPerUnit > 0) {
       glazingNormsMap.set(n.partId.trim().toUpperCase(), n.secondsPerUnit);
+    }
+  });
+
+  // Dự phòng DCLR
+  const dclrNorms = storageService.getNorms().filter(n => n.stageId === 'DCLR');
+  const dclrNormsMap = new Map<string, number>();
+  dclrNorms.forEach(n => {
+    if (n.partId && n.secondsPerUnit > 0) {
+      dclrNormsMap.set(n.partId.trim().toUpperCase(), n.secondsPerUnit);
     }
   });
 
@@ -223,40 +256,50 @@ export const exportDetailedProductionPlan = (
     }
 
     if (stageId === 'GLAZING') {
-      // 1. Tra cứu trực tiếp theo mã/tên trong tab Dán Kính của Định mức năng suất
-      if (glazingNormsMap.has(pId)) return glazingNormsMap.get(pId)!;
-      if (glazingNormsMap.has(pName)) return glazingNormsMap.get(pName)!;
+      // 1. Ưu tiên tra cứu từ tab "HSQĐ Dán Kính 2" (storageService.getGlazingStageHSQD())
+      if (glazingStageHSQDMap.has(pId)) return glazingStageHSQDMap.get(pId)!;
+      if (glazingStageHSQDMap.has(pName)) return glazingStageHSQDMap.get(pName)!;
 
       const cleanId = pId.replace(/^GLZ-OUT-/i, '').replace(/\s*-\s*DÁN KÍNH$/i, '').trim().toUpperCase();
-      if (cleanId && glazingNormsMap.has(cleanId)) return glazingNormsMap.get(cleanId)!;
+      if (cleanId && glazingStageHSQDMap.has(cleanId)) return glazingStageHSQDMap.get(cleanId)!;
 
       const pt = parts.find(p => p.id.toUpperCase() === pId || p.name.toUpperCase() === pName || (cleanId && (p.id.toUpperCase() === cleanId || p.name.toUpperCase() === cleanId)));
       if (pt) {
-        if (glazingNormsMap.has(pt.id.toUpperCase())) return glazingNormsMap.get(pt.id.toUpperCase())!;
-        if (glazingNormsMap.has(pt.name.toUpperCase())) return glazingNormsMap.get(pt.name.toUpperCase())!;
+        if (glazingStageHSQDMap.has(pt.id.toUpperCase())) return glazingStageHSQDMap.get(pt.id.toUpperCase())!;
+        if (glazingStageHSQDMap.has(pt.name.toUpperCase())) return glazingStageHSQDMap.get(pt.name.toUpperCase())!;
       }
 
-      for (const norm of glazingNorms) {
-        if (norm.partId.toUpperCase().trim() === pId || (cleanId && norm.partId.toUpperCase().trim() === cleanId)) {
-          return norm.secondsPerUnit;
-        }
-        const np = parts.find(p => p.id === norm.partId);
-        if (np && (np.name.toUpperCase().trim() === pName || np.name.toUpperCase().trim() === cleanId || np.name.toUpperCase().trim() === pId)) {
-          return norm.secondsPerUnit;
+      for (const item of glazingStageHSQD) {
+        if (item.partId && item.hsqd > 0) {
+          if (item.partId.toUpperCase().trim() === pId || (cleanId && item.partId.toUpperCase().trim() === cleanId)) {
+            return item.hsqd;
+          }
+          if (item.partName && (item.partName.toUpperCase().trim() === pName || item.partName.toUpperCase().trim() === cleanId)) {
+            return item.hsqd;
+          }
         }
       }
 
       if (modelId) {
         const mId = modelId.trim().toUpperCase();
-        if (glazingNormsMap.has(mId)) return glazingNormsMap.get(mId)!;
+        if (glazingStageHSQDMap.has(mId)) return glazingStageHSQDMap.get(mId)!;
         const mPart = parts.find(p => p.id.toUpperCase() === mId || p.name.toUpperCase() === mId);
         if (mPart) {
-          if (glazingNormsMap.has(mPart.id.toUpperCase())) return glazingNormsMap.get(mPart.id.toUpperCase())!;
-          if (glazingNormsMap.has(mPart.name.toUpperCase())) return glazingNormsMap.get(mPart.name.toUpperCase())!;
+          if (glazingStageHSQDMap.has(mPart.id.toUpperCase())) return glazingStageHSQDMap.get(mPart.id.toUpperCase())!;
+          if (glazingStageHSQDMap.has(mPart.name.toUpperCase())) return glazingStageHSQDMap.get(mPart.name.toUpperCase())!;
         }
       }
 
-      // Dự phòng nếu người dùng đã lưu ở DCLR
+      // Dự phòng nếu có trong glazingNorms (tab Dán Kính cũ)
+      if (glazingNormsMap.has(pId)) return glazingNormsMap.get(pId)!;
+      if (glazingNormsMap.has(pName)) return glazingNormsMap.get(pName)!;
+      if (cleanId && glazingNormsMap.has(cleanId)) return glazingNormsMap.get(cleanId)!;
+      if (pt) {
+        if (glazingNormsMap.has(pt.id.toUpperCase())) return glazingNormsMap.get(pt.id.toUpperCase())!;
+        if (glazingNormsMap.has(pt.name.toUpperCase())) return glazingNormsMap.get(pt.name.toUpperCase())!;
+      }
+
+      // Dự phòng nếu có trong dclrNorms
       if (dclrNormsMap.has(pId)) return dclrNormsMap.get(pId)!;
       if (dclrNormsMap.has(pName)) return dclrNormsMap.get(pName)!;
       if (cleanId && dclrNormsMap.has(cleanId)) return dclrNormsMap.get(cleanId)!;
@@ -268,22 +311,61 @@ export const exportDetailedProductionPlan = (
       return 1;
     }
 
-    // PAINTING -> Lấy HSQĐ tab Lắp ráp (DCLR)
-    if (dclrNormsMap.has(pId)) return dclrNormsMap.get(pId)!;
-    if (dclrNormsMap.has(pName)) return dclrNormsMap.get(pName)!;
-    const cleanId = pId.replace(/^GLZ-OUT-/i, '').replace(/\s*-\s*DÁN KÍNH$/i, '').trim().toUpperCase();
-    if (cleanId && dclrNormsMap.has(cleanId)) return dclrNormsMap.get(cleanId)!;
-    const pt = parts.find(p => p.id.toUpperCase() === pId || p.name.toUpperCase() === pName || (cleanId && (p.id.toUpperCase() === cleanId || p.name.toUpperCase() === cleanId)));
-    if (pt) {
-      if (dclrNormsMap.has(pt.id.toUpperCase())) return dclrNormsMap.get(pt.id.toUpperCase())!;
-      if (dclrNormsMap.has(pt.name.toUpperCase())) return dclrNormsMap.get(pt.name.toUpperCase())!;
-    }
-    for (const norm of dclrNorms) {
-      const np = parts.find(p => p.id === norm.partId);
-      if (np && (np.name.toUpperCase().trim() === pName || np.name.toUpperCase().trim() === cleanId)) {
-        return norm.secondsPerUnit;
+    // PAINTING: Lấy HSQĐ từ tab định mức chữ "Sơn" (paintingNorms), phụ thêm từ paintingHSQDMap
+    if (stageId === 'PAINTING') {
+      if (paintingNormsMap.has(pId)) return paintingNormsMap.get(pId)!;
+      if (paintingNormsMap.has(pName)) return paintingNormsMap.get(pName)!;
+
+      const cleanId = pId.replace(/\s*-\s*SƠN$/i, '').replace(/\s*-\s*S$/i, '').replace(/^PAINT-OUT-/i, '').trim().toUpperCase();
+      if (cleanId && paintingNormsMap.has(cleanId)) return paintingNormsMap.get(cleanId)!;
+
+      const pt = parts.find(p => p.id.toUpperCase() === pId || p.name.toUpperCase() === pName || (cleanId && (p.id.toUpperCase() === cleanId || p.name.toUpperCase() === cleanId)));
+      if (pt) {
+        if (paintingNormsMap.has(pt.id.toUpperCase())) return paintingNormsMap.get(pt.id.toUpperCase())!;
+        if (paintingNormsMap.has(pt.name.toUpperCase())) return paintingNormsMap.get(pt.name.toUpperCase())!;
       }
+
+      for (const norm of paintingNorms) {
+        if (norm.partId.toUpperCase().trim() === pId || (cleanId && norm.partId.toUpperCase().trim() === cleanId)) {
+          return norm.secondsPerUnit;
+        }
+        const np = parts.find(p => p.id === norm.partId);
+        if (np && (np.name.toUpperCase().trim() === pName || np.name.toUpperCase().trim() === cleanId || np.name.toUpperCase().trim() === pId)) {
+          return norm.secondsPerUnit;
+        }
+      }
+
+      if (modelId) {
+        const mId = modelId.trim().toUpperCase();
+        if (paintingNormsMap.has(mId)) return paintingNormsMap.get(mId)!;
+        const mPart = parts.find(p => p.id.toUpperCase() === mId || p.name.toUpperCase() === mId);
+        if (mPart) {
+          if (paintingNormsMap.has(mPart.id.toUpperCase())) return paintingNormsMap.get(mPart.id.toUpperCase())!;
+          if (paintingNormsMap.has(mPart.name.toUpperCase())) return paintingNormsMap.get(mPart.name.toUpperCase())!;
+        }
+      }
+
+      // Dự phòng từ tab HSQĐ Sơn (paintingHSQD)
+      if (paintingHSQDMap.has(pId)) return paintingHSQDMap.get(pId)!;
+      if (paintingHSQDMap.has(pName)) return paintingHSQDMap.get(pName)!;
+      if (cleanId && paintingHSQDMap.has(cleanId)) return paintingHSQDMap.get(cleanId)!;
+      if (pt) {
+        if (paintingHSQDMap.has(pt.id.toUpperCase())) return paintingHSQDMap.get(pt.id.toUpperCase())!;
+        if (paintingHSQDMap.has(pt.name.toUpperCase())) return paintingHSQDMap.get(pt.name.toUpperCase())!;
+      }
+
+      // Dự phòng cũ từ DCLR nếu chưa có
+      if (dclrNormsMap.has(pId)) return dclrNormsMap.get(pId)!;
+      if (dclrNormsMap.has(pName)) return dclrNormsMap.get(pName)!;
+      if (cleanId && dclrNormsMap.has(cleanId)) return dclrNormsMap.get(cleanId)!;
+      if (pt) {
+        if (dclrNormsMap.has(pt.id.toUpperCase())) return dclrNormsMap.get(pt.id.toUpperCase())!;
+        if (dclrNormsMap.has(pt.name.toUpperCase())) return dclrNormsMap.get(pt.name.toUpperCase())!;
+      }
+
+      return 1;
     }
+
     return 1;
   };
 
@@ -686,14 +768,14 @@ export const exportDetailedProductionPlan = (
       const people = plannedWorkersCount;
 
       // 2. Năng lực sản xuất dây chuyền 8h thay đổi cách tính theo số người định biên của từng sheet:
-      // - Sheet Cắt Laser: Lấy (số người định biên Laser) × 720
+      // - Sheet Cắt Laser: Lấy (số người định biên Laser) × 500
       // - Sheet Chấn/Dập: Lấy 172,7 × (số người định biên Chấn/Dập)
       // - Sheet Hàn: Lấy 77,2 × (số người định biên Hàn)
       // - Sheet Sơn: Lấy 127,5 × (số người định biên Sơn)
       // - Sheet Dán Kính: Lấy 242 × (số người định biên Dán Kính)
       let capacity = 0;
       if (stageInfo.id === 'LASER') {
-        capacity = Math.round(people * 720);
+        capacity = Math.round(people * 500);
       } else if (stageInfo.id === 'BENDING') {
         capacity = Math.round(172.7 * people);
       } else if (stageInfo.id === 'WELDING') {
