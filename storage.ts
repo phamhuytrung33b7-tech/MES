@@ -2703,78 +2703,79 @@ export const storageService = {
           return str.trim();
         };
 
-        const matchPartFlexible = (strA: string, strB: string): boolean => {
+        const targetClean = cleanPartStr(cleanId) || cleanPartStr(partId);
+
+        // Strict/Variant part matcher to prevent loose string inclusion false positives
+        const isPartMatch = (strA: string, strB: string): boolean => {
           if (!strA || !strB) return false;
           if (isSamePartOrVariant(strA, strB, parts)) return true;
           const cA = cleanPartStr(strA);
           const cB = cleanPartStr(strB);
           if (cA === cB) return true;
 
-          const resolveParts = (term: string) => {
-            const c = cleanPartStr(term);
-            return parts.filter(p => {
-              const pId = cleanPartStr(p.id);
-              const pName = cleanPartStr(p.name);
-              const pCode = p.code ? cleanPartStr(p.code) : '';
-              return pId === c || pName === c || (pCode && pCode === c) ||
-                (c.length > 3 && (pId.includes(c) || c.includes(pId) || pName.includes(c) || c.includes(pName)));
-            });
-          };
-
-          const partsA = resolveParts(strA);
-          const partsB = resolveParts(strB);
-
-          if (partsA.length > 0 && partsB.length > 0) {
-            return partsA.some(pa => partsB.some(pb => pa.id === pb.id));
-          }
-
-          if (cA.length >= 4 && cB.length >= 4) {
-            if (cA.includes(cB) || cB.includes(cA)) return true;
-          }
+          // Catalog ID / Name exact match
+          const pA = parts.find(p => cleanPartStr(p.id) === cA || cleanPartStr(p.name) === cA);
+          const pB = parts.find(p => cleanPartStr(p.id) === cB || cleanPartStr(p.name) === cB);
+          if (pA && pB && pA.id === pB.id) return true;
 
           return false;
         };
 
-        // Find ingredients defined in BOM V2 for this Level 1 result part
-        const ingredients = bomV2.filter(b => {
-          if (!matchPartFlexible(b.resultPartId, partId) && !matchPartFlexible(b.resultPartId, cleanId)) {
+        // Filter BOM V2 definitions for this Level 1 result part
+        let matchedBom = bomV2.filter(b => {
+          if (!isPartMatch(b.resultPartId, partId) && !isPartMatch(b.resultPartId, cleanId) && !isPartMatch(b.resultPartId, targetClean)) {
             return false;
           }
-          const matchingPart = parts.find(p => matchPartFlexible(p.id, b.ingredientPartId));
+          const matchingPart = parts.find(p => isPartMatch(p.id, b.ingredientPartId) || isPartMatch(p.name, b.ingredientPartId));
           return !matchingPart?.skipWelding;
         });
 
-        if (ingredients.length > 0) {
+        // Filter by applicable model if known from PO
+        if (currentModelId && matchedBom.length > 0) {
+          const cleanModel = cleanPartStr(currentModelId);
+          const modelSpecific = matchedBom.filter(b => b.applicableModel && cleanPartStr(b.applicableModel) === cleanModel);
+          if (modelSpecific.length > 0) {
+            matchedBom = modelSpecific;
+          }
+        }
+
+        if (matchedBom.length > 0) {
           const inventory = this.getInventory();
 
-          // Deduct/Check ingredients grouped by component part ID
-          const ingredientMap = new Map<string, { ing: import('./types').BOMDefinitionV2; totalNeeded: number }>();
-          for (const ing of ingredients) {
-            const key = ing.ingredientPartId.trim();
-            const qtyForThis = quantity * ing.quantity;
-            const existing = ingredientMap.get(key);
+          // Deduct/Check ingredients grouped by CANONICAL component part ID (to prevent double counting)
+          const ingredientMap = new Map<string, { ing: import('./types').BOMDefinitionV2; canonicalId: string; totalNeeded: number }>();
+
+          for (const ing of matchedBom) {
+            const ingPartObj = parts.find(p => isPartMatch(p.id, ing.ingredientPartId) || isPartMatch(p.name, ing.ingredientPartId));
+            const canonicalId = ingPartObj ? ingPartObj.id : cleanPartStr(ing.ingredientPartId);
+            const ratio = Number(ing.quantity) || 1;
+            const qtyForThis = quantity * ratio;
+
+            const existing = ingredientMap.get(canonicalId);
             if (existing) {
-              existing.totalNeeded += qtyForThis;
+              // If duplicate BOM V2 rows for the exact same canonical component exist, keep max ratio instead of summing duplicates
+              existing.totalNeeded = Math.max(existing.totalNeeded, qtyForThis);
             } else {
-              ingredientMap.set(key, { ing, totalNeeded: qtyForThis });
+              ingredientMap.set(canonicalId, { ing, canonicalId, totalNeeded: qtyForThis });
             }
           }
 
           // 1. First Pass: Check stock for ALL required ingredients in WELDING_IN
-          for (const { ing, totalNeeded } of ingredientMap.values()) {
-            const effectiveIngId = this.getEffectivePartId(ing.ingredientPartId, 'WELDING', poId);
+          for (const { ing, canonicalId, totalNeeded } of ingredientMap.values()) {
+            const effectiveIngId = this.getEffectivePartId(canonicalId, 'WELDING', poId);
 
             const matchingStocks = inventory.filter(i => {
               if (i.stageId !== 'WELDING' || i.location !== 'IN') return false;
-              return matchPartFlexible(i.partId, effectiveIngId) || 
-                     matchPartFlexible(i.partId, ing.ingredientPartId) ||
-                     (i.originalPartId && (matchPartFlexible(i.originalPartId, effectiveIngId) || matchPartFlexible(i.originalPartId, ing.ingredientPartId)));
+              return isPartMatch(i.partId, canonicalId) ||
+                     isPartMatch(i.partId, effectiveIngId) || 
+                     isPartMatch(i.partId, ing.ingredientPartId) ||
+                     (i.originalPartId && (isPartMatch(i.originalPartId, canonicalId) || isPartMatch(i.originalPartId, effectiveIngId)));
             });
 
             const totalStock = matchingStocks.reduce((sum, i) => sum + i.quantity, 0);
 
             if (totalStock < totalNeeded) {
-              const ingPartObj = parts.find(p => matchPartFlexible(p.id, ing.ingredientPartId));
+              const ingPartObj = parts.find(p => isPartMatch(p.id, canonicalId) || isPartMatch(p.id, ing.ingredientPartId));
               const ingDisplayName = ingPartObj ? `${ingPartObj.name} (${ingPartObj.id})` : ing.ingredientPartId;
               const ingUnit = ingPartObj?.unit || 'cái';
               const missingQty = totalNeeded - totalStock;
@@ -2783,13 +2784,14 @@ export const storageService = {
           }
 
           // 2. Second Pass: Deduct required quantities from WELDING_IN
-          for (const { ing, totalNeeded } of ingredientMap.values()) {
-            const effectiveIngId = this.getEffectivePartId(ing.ingredientPartId, 'WELDING', poId);
+          for (const { ing, canonicalId, totalNeeded } of ingredientMap.values()) {
+            const effectiveIngId = this.getEffectivePartId(canonicalId, 'WELDING', poId);
             const matchingStocks = inventory.filter(i => {
               if (i.stageId !== 'WELDING' || i.location !== 'IN') return false;
-              return matchPartFlexible(i.partId, effectiveIngId) || 
-                     matchPartFlexible(i.partId, ing.ingredientPartId) ||
-                     (i.originalPartId && (matchPartFlexible(i.originalPartId, effectiveIngId) || matchPartFlexible(i.originalPartId, ing.ingredientPartId)));
+              return isPartMatch(i.partId, canonicalId) ||
+                     isPartMatch(i.partId, effectiveIngId) || 
+                     isPartMatch(i.partId, ing.ingredientPartId) ||
+                     (i.originalPartId && (isPartMatch(i.originalPartId, canonicalId) || isPartMatch(i.originalPartId, effectiveIngId)));
             });
 
             let remainingToDeduct = totalNeeded;
