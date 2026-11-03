@@ -2705,6 +2705,7 @@ export const storageService = {
 
         const matchPartFlexible = (strA: string, strB: string): boolean => {
           if (!strA || !strB) return false;
+          if (isSamePartOrVariant(strA, strB, parts)) return true;
           const cA = cleanPartStr(strA);
           const cB = cleanPartStr(strB);
           if (cA === cB) return true;
@@ -2727,31 +2728,19 @@ export const storageService = {
             return partsA.some(pa => partsB.some(pb => pa.id === pb.id));
           }
 
-          if (cA.length >= 5 && cB.length >= 5) {
+          if (cA.length >= 4 && cB.length >= 4) {
             if (cA.includes(cB) || cB.includes(cA)) return true;
           }
 
           return false;
         };
 
-        const matchModelFlexible = (appModel?: string, currentModel?: string): boolean => {
-          if (!appModel || appModel.trim() === '') return true;
-          if (!currentModel || currentModel.trim() === '') return true;
-          const cleanApp = cleanPartStr(appModel);
-          const cleanCurr = cleanPartStr(currentModel);
-          if (cleanApp === cleanCurr) return true;
-          if (cleanApp.includes(cleanCurr) || cleanCurr.includes(cleanApp)) return true;
-          return false;
-        };
-
         // Find ingredients defined in BOM V2 for this Level 1 result part
-        const allIngredients = bomV2.filter(b => 
-          matchPartFlexible(b.resultPartId, partId) && 
-          matchModelFlexible(b.applicableModel, currentModelId)
-        );
-
-        const ingredients = allIngredients.filter(ing => {
-          const matchingPart = parts.find(p => matchPartFlexible(p.id, ing.ingredientPartId));
+        const ingredients = bomV2.filter(b => {
+          if (!matchPartFlexible(b.resultPartId, partId) && !matchPartFlexible(b.resultPartId, cleanId)) {
+            return false;
+          }
+          const matchingPart = parts.find(p => matchPartFlexible(p.id, b.ingredientPartId));
           return !matchingPart?.skipWelding;
         });
 
@@ -2787,8 +2776,9 @@ export const storageService = {
             if (totalStock < totalNeeded) {
               const ingPartObj = parts.find(p => matchPartFlexible(p.id, ing.ingredientPartId));
               const ingDisplayName = ingPartObj ? `${ingPartObj.name} (${ingPartObj.id})` : ing.ingredientPartId;
-              const ingUnit = ingPartObj?.unit || 'bộ';
-              throw new Error(`Lỗi thiếu linh kiện thành phần khi nhập kho HÀN (BOM v2):\n\nLinh kiện thành phần: "${ingDisplayName}"\nCần tiêu hao tại WELDING_IN: ${totalNeeded} ${ingUnit}\nTồn kho hiện có tại WELDING_IN: ${totalStock} ${ingUnit}.\n\nThao tác bị hủy! Vui lòng nhập kho IN cho linh kiện thành phần trước khi thực hiện nhập kho Hàn.`);
+              const ingUnit = ingPartObj?.unit || 'cái';
+              const missingQty = totalNeeded - totalStock;
+              throw new Error(`Lỗi thiếu linh kiện thành phần khi nhập kho HÀN (BOM v2):\n\nLinh kiện thành phần: "${ingDisplayName}"\n• Cần tiêu hao tại KHO_IN Hàn: ${totalNeeded} ${ingUnit}\n• Tồn kho hiện có tại KHO_IN Hàn: ${totalStock} ${ingUnit}\n• Còn thiếu: ${missingQty} ${ingUnit}\n\nThao tác bị hủy! Vui lòng nhập kho IN cho linh kiện thành phần trước khi thực hiện nhập kho Hàn.`);
             }
           }
 
@@ -3385,23 +3375,49 @@ export const storageService = {
     const effectiveId = this.getEffectivePartId(cleanId, stageId, poId);
     
     const partsInCatalog = this.getParts();
-    const partInCatalogForEffectiveId = partsInCatalog.find(p => p.id.toUpperCase() === effectiveId.toUpperCase());
-    const effectivePartName = partInCatalogForEffectiveId ? partInCatalogForEffectiveId.name.toUpperCase().trim() : '';
+
+    const cleanPartStr = (s: string): string => {
+      if (!s) return '';
+      let str = s.normalize('NFC').trim().toUpperCase();
+      str = str.replace(/\s*-\s*(H|CD|S|C|GLZ|OUT|IN)$/i, '');
+      str = str.replace(/-(H|CD|S|C|GLZ|OUT|IN)$/i, '');
+      return str.trim();
+    };
+
+    const cleanPartId = cleanPartStr(cleanId);
+    const cleanEffId = cleanPartStr(effectiveId);
 
     const matchingStocks = inventory.filter(i => {
-      const itPartId = i.partId.toUpperCase().trim();
-      const targetId = effectiveId.toUpperCase();
-      const matchesPart = itPartId === targetId || (effectivePartName && itPartId === effectivePartName);
-      return matchesPart && i.stageId === stageId && i.location === location;  // Fix: Check specific location
+      if (i.stageId !== stageId || i.location !== location) return false;
+      if (i.quantity <= 0) return false;
+
+      // 1. Direct or Variant match
+      if (isSamePartOrVariant(i.partId, cleanId, partsInCatalog)) return true;
+      if (isSamePartOrVariant(i.partId, effectiveId, partsInCatalog)) return true;
+      if (i.originalPartId && isSamePartOrVariant(i.originalPartId, cleanId, partsInCatalog)) return true;
+      if (i.originalPartId && isSamePartOrVariant(i.originalPartId, effectiveId, partsInCatalog)) return true;
+
+      // 2. Clean base code match (e.g., 04-28-08-SHA8896L-0011)
+      const cleanIPart = cleanPartStr(i.partId);
+      const cleanIOrig = i.originalPartId ? cleanPartStr(i.originalPartId) : '';
+
+      if (cleanIPart === cleanPartId || cleanIPart === cleanEffId) return true;
+      if (cleanIOrig && (cleanIOrig === cleanPartId || cleanIOrig === cleanEffId)) return true;
+
+      return false;
     });
+
     const totalStock = matchingStocks.reduce((sum, item) => sum + item.quantity, 0);
 
     if (stageId !== 'GLAZING' && totalStock < quantity) {
-      const part = this.getParts().find(p => p.id === effectiveId);
-      throw new Error(`Lỗi: Số lượng báo lỗi (${quantity}) lớn hơn tổng tồn kho IN của ${part?.name || effectiveId} tại ${STAGES.find(s => s.id === stageId)?.name} (Hiện có ${totalStock})`);
+      const part = partsInCatalog.find(p => isSamePartOrVariant(p.id, cleanId, partsInCatalog));
+      const partDisplayName = part?.name || cleanId;
+      const stageName = STAGES.find(s => s.id === stageId)?.name || stageId;
+      const missingQty = quantity - totalStock;
+      throw new Error(`Lỗi: Số lượng báo lỗi (${quantity}) lớn hơn tổng tồn kho ${location} của "${partDisplayName}" tại ${stageName} (Hiện có ${totalStock}, thiếu ${missingQty})`);
     }
 
-    // 2. Inventory movement: Deduct from IN, Add to DEFECT
+    // 2. Inventory movement: Deduct from source location (IN/OUT), Add to DEFECT
     let remainingToDeduct = quantity;
     let deductedFromOriginalId: string | undefined;
 
@@ -3410,7 +3426,9 @@ export const storageService = {
     for (const stock of matchingStocks) {
       if (remainingToDeduct <= 0) break;
       const toTake = Math.min(stock.quantity, remainingToDeduct);
-      this.updateInventory(effectiveId, stageId, location, -toTake, stock.originalPartId);
+      // Deduct from the exact stock item part ID
+      this.updateInventory(stock.partId, stageId, location, -toTake, stock.originalPartId);
+      // Add to DEFECT location
       this.updateInventory(effectiveId, stageId, 'DEFECT', toTake, stock.originalPartId);
       deductedFromOriginalId = stock.originalPartId;
       remainingToDeduct -= toTake;

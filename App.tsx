@@ -1076,11 +1076,12 @@ export default function App() {
     }
   };
 
-  const handleManualInbound = (partId: string, stageId: StageId, location: 'IN' | 'OUT', qty: number, poId?: string) => {
+  const handleManualInbound = async (partId: string, stageId: StageId, location: 'IN' | 'OUT', qty: number, poId?: string) => {
     try {
-      storageService.recordManualInbound(partId, stageId, location, qty, poId);
+      const res = await storageService.recordManualInbound(partId, stageId, location, qty, poId);
       setSuccess('Nhập kho thủ công thành công!');
       refreshData();
+      return res;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Đã xảy ra lỗi');
       throw err;
@@ -10551,16 +10552,18 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
     );
   }, [selectedStage, productionOrders]);
 
-  const filteredParts = parts.filter((p: any) => {
-    if (selectedPoId) {
-      const selectedPo = allAvailablePos.find(po => po.id === selectedPoId);
-      if (selectedPo && p.id !== selectedPo.partId) return false;
-    } else {
-      const hasAvailablePo = allAvailablePos.some(po => po.partId === p.id);
-      if (!hasAvailablePo) return false;
-    }
-    return p.level === 1 && !p.skipWelding;
-  });
+  const filteredParts = useMemo(() => {
+    return parts.filter((p: any) => {
+      if (selectedPoId) {
+        const selectedPo = allAvailablePos.find(po => po.id === selectedPoId);
+        if (selectedPo && p.id !== selectedPo.partId) return false;
+      } else {
+        const hasAvailablePo = allAvailablePos.some(po => po.partId === p.id);
+        if (!hasAvailablePo) return false;
+      }
+      return p.level === 1 && !p.skipWelding;
+    });
+  }, [parts, selectedPoId, allAvailablePos]);
 
   const availablePos = allAvailablePos.filter(p => p.partId === manualPart);
 
@@ -10593,7 +10596,7 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
   const isOverPo = Boolean(selectedPo && manualQty > 0 && (selectedPo.producedQuantity + manualQty > selectedPo.targetQuantity));
   const overAmount = isOverPo && selectedPo ? (selectedPo.producedQuantity + manualQty - selectedPo.targetQuantity) : 0;
 
-  const handleManualSubmit = (e: React.FormEvent) => {
+  const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isOverPo) {
       alert(`Số lượng nhập kho (${manualQty}) sẽ vượt quá số lượng mục tiêu của PO [${selectedPo?.id}] (${selectedPo?.targetQuantity}).\nHiện đã làm: ${selectedPo?.producedQuantity}.\nHệ thống KHÔNG cho phép nhập vượt quá PO!`);
@@ -10602,25 +10605,27 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
     if (manualPart && manualQty > 0) {
       try {
         const part = parts.find((p: any) => p.id === manualPart);
-        onManualInbound(manualPart, selectedStage, targetLocation, manualQty, selectedPoId);
+        await onManualInbound(manualPart, selectedStage, 'OUT', manualQty, selectedPoId);
         setLastScanned({
-          partId: getProcessValue(manualPart, part, selectedStage, targetLocation),
+          partId: getProcessValue(manualPart, part, selectedStage, 'OUT'),
           quantity: manualQty,
-          partName: getProcessValue(part?.name, part, selectedStage, targetLocation),
+          partName: getProcessValue(part?.name, part, selectedStage, 'OUT'),
           status: 'success',
           isManual: true,
-          poId: selectedPoId
+          poId: selectedPoId,
+          location: 'OUT'
         });
         setManualQty(0);
       } catch (err) {
         const part = parts.find((p: any) => p.id === manualPart);
         setLastScanned({
-          partId: getProcessValue(manualPart, part, selectedStage, targetLocation),
+          partId: getProcessValue(manualPart, part, selectedStage, 'OUT'),
           quantity: manualQty,
-          partName: getProcessValue(part?.name, part, selectedStage, targetLocation),
+          partName: getProcessValue(part?.name, part, selectedStage, 'OUT'),
           status: 'error',
           isManual: true,
-          errorMsg: err instanceof Error ? err.message : 'Lỗi không xác định'
+          errorMsg: err instanceof Error ? err.message : 'Lỗi không xác định',
+          location: 'OUT'
         });
       }
     }
@@ -10640,7 +10645,7 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
           </div>
           <div>
             <h3 className="text-xl font-bold uppercase tracking-tight">Nhập kho Hàn</h3>
-            <p className="text-sm text-gray-500">Nhập linh kiện (IN) hoặc kết quả hàn (OUT) thủ công</p>
+            <p className="text-sm text-gray-500">Nhập kết quả hàn (OUT) thủ công</p>
           </div>
         </div>
 
@@ -10654,10 +10659,8 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
             </div>
             <div className="space-y-4">
               <label className="text-sm font-bold uppercase tracking-widest opacity-50">Vị trí nhập:</label>
-              <div className="flex bg-gray-100 p-1 rounded-xl h-[68px]">
-                <div className="flex-1 rounded-lg font-bold text-sm uppercase bg-[#F27D26] text-white shadow-sm flex items-center justify-center">
-                  Kho OUT (Thành phẩm)
-                </div>
+              <div className="w-full p-5 rounded-xl border-2 border-orange-200 font-bold text-lg bg-orange-50 text-orange-600 uppercase flex items-center justify-center">
+                KHO OUT (THÀNH PHẨM)
               </div>
             </div>
           </div>
@@ -10678,7 +10681,9 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
           )}
 
           <div className="space-y-4">
-            <label className="text-sm font-bold uppercase tracking-widest opacity-50">Chọn mã thành phẩm:</label>
+            <label className="text-sm font-bold uppercase tracking-widest opacity-50">
+              Chọn mã thành phẩm:
+            </label>
             <SearchableSelect 
               options={filteredParts.map((p: any) => ({ 
                 id: p.id, 
@@ -10727,10 +10732,10 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
           ) : (
             <button 
               type="submit"
-              disabled={!selectedPoId || isOverPo}
+              disabled={!selectedPoId || isOverPo || !manualPart || manualQty <= 0}
               className={cn(
                 "w-full py-6 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-4 active:scale-[0.98] transition-all shadow-lg text-xl",
-                (!selectedPoId || isOverPo) 
+                (!selectedPoId || isOverPo || !manualPart || manualQty <= 0) 
                   ? "bg-gray-300 text-gray-500 cursor-not-allowed" 
                   : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200"
               )}
@@ -10764,11 +10769,11 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
                 <h3 className="text-xl font-bold">
                   {lastScanned.status === 'success' ? 'Nhập kho thành công!' : 'Lỗi nhập kho!'}
                 </h3>
-                <p className="text-gray-500 text-sm">
+                <div className="text-gray-600 text-sm whitespace-pre-line leading-relaxed">
                   {lastScanned.status === 'success' 
                     ? 'Thông tin linh kiện vừa nhập tay:' 
                     : lastScanned.errorMsg}
-                </p>
+                </div>
               </div>
               
               {lastScanned.partId && (
@@ -10893,7 +10898,7 @@ function LaserInboundView({ parts, onManualInbound, setDefectModal, productionOr
   const isOverPo = Boolean(targetLocation === 'OUT' && selectedPo && manualQty > 0 && (selectedPo.producedQuantity + manualQty > selectedPo.targetQuantity));
   const overAmount = isOverPo && selectedPo ? (selectedPo.producedQuantity + manualQty - selectedPo.targetQuantity) : 0;
 
-  const handleManualSubmit = (e: React.FormEvent) => {
+  const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isOverPo) {
       alert(`Số lượng nhập kho Laser (${manualQty}) sẽ vượt quá số lượng mục tiêu của PO [${selectedPo?.id}] (${selectedPo?.targetQuantity}).\nHiện đã làm: ${selectedPo?.producedQuantity}.\nHệ thống KHÔNG cho phép nhập vượt quá PO!`);
@@ -10902,7 +10907,7 @@ function LaserInboundView({ parts, onManualInbound, setDefectModal, productionOr
     if (manualPart && manualQty > 0) {
       try {
         const part = parts.find((p: any) => p.id === manualPart);
-        onManualInbound(manualPart, selectedStage, targetLocation, manualQty, selectedPoId);
+        await onManualInbound(manualPart, selectedStage, targetLocation, manualQty, selectedPoId);
         setLastScanned({
           partId: getProcessValue(manualPart, part, selectedStage, targetLocation),
           quantity: manualQty,
