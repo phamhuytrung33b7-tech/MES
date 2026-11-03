@@ -7005,23 +7005,41 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     // Lọc giao dịch trong 35 ngày qua
     const recent35DaysTxs = transactions.filter(t => t.timestamp >= thirtyFiveDaysAgoMs);
 
-    // Helper tìm BOM theo mã linh kiện
+    // Helper tìm BOM theo mã linh kiện chuẩn xác (khử hậu tố - CẮT LASER, - H, - CD, v.v.)
     const findBOMForPart = (pId: string) => {
-      const clean = (pId || '')
-        .trim()
-        .toUpperCase()
-        .replace(/^LSR-OUT-/i, '')
-        .replace(/\s*-\s*CẮT LASER$/i, '')
-        .split(' - ')[0]
-        .trim();
-      const partObj = parts.find(p => p.id === pId || p.name === pId);
-      const cleanObjId = partObj ? partObj.id.trim().toUpperCase() : '';
-      const cleanObjName = partObj ? partObj.name.trim().toUpperCase() : '';
+      if (!pId) return undefined;
+      const cleanStr = (s: string) => {
+        if (!s) return '';
+        let str = s.normalize('NFC').trim().toUpperCase();
+        str = str.replace(/^LSR-OUT-/i, '');
+        str = str.replace(/\s*-\s*(CẮT LASER|LASER|H|CD|S|C|GLZ|OUT|IN)$/i, '');
+        str = str.replace(/-(CẮT LASER|LASER|H|CD|S|C|GLZ|OUT|IN)$/i, '');
+        return str.split(' - ')[0].trim();
+      };
 
-      return bom.find(b => {
-        const child = (b.childPartId || '').trim().toUpperCase();
-        return child === clean || child === pId.trim().toUpperCase() || child === cleanObjId || child === cleanObjName;
+      const targetClean = cleanStr(pId);
+      const partObj = parts.find(p => p.id === pId || p.name === pId || cleanStr(p.id) === targetClean || cleanStr(p.name) === targetClean);
+      const cleanObjId = partObj ? cleanStr(partObj.id) : '';
+      const cleanObjName = partObj ? cleanStr(partObj.name) : '';
+
+      let match = bom.find(b => {
+        if (!b || !b.childPartId) return false;
+        const bChildClean = cleanStr(b.childPartId);
+        if (bChildClean === targetClean) return true;
+        if (cleanObjId && bChildClean === cleanObjId) return true;
+        if (cleanObjName && bChildClean === cleanObjName) return true;
+        return false;
       });
+
+      if (!match && targetClean.length > 3) {
+        match = bom.find(b => {
+          if (!b || !b.childPartId) return false;
+          const bChildClean = cleanStr(b.childPartId);
+          return (bChildClean.length > 3 && (bChildClean.includes(targetClean) || targetClean.includes(bChildClean)));
+        });
+      }
+
+      return match;
     };
 
     // Helper kiểm tra mã phế liệu
@@ -7074,10 +7092,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     recent35DaysTxs.forEach(t => {
       if (isScrap(t.partId) || isRawSheetPart(t.partId)) return;
 
-      // Linh kiện hoàn thành cắt và nhập vào KHO_OUT Cắt Laser
-      const isProducedAtLaser = t.stageId === 'LASER' && t.location === 'OUT' && (
-        t.type === 'STAGE_IN' || t.type === 'STAGE_OUT'
-      );
+      // Linh kiện hoàn thành cắt và nhập vào KHO_OUT Cắt Laser (chỉ đếm STAGE_IN tại OUT hoặc STAGE_OUT trực tiếp)
+      const isProducedAtLaser = t.stageId === 'LASER' && t.location === 'OUT' && t.type === 'STAGE_IN';
 
       if (isProducedAtLaser) {
         const stats = getOrInitStats(t.partId, t.originalPartId);
@@ -7218,11 +7234,69 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     if (laserYieldPoFilter !== 'ALL') {
       const targetPO = productionOrders.find(po => po.id === laserYieldPoFilter);
       if (targetPO) {
+        // Tính số lượng cho riêng PO được chọn:
+        // Ưu tiên số lượng theo giao dịch thực tế của PO này trong 35 ngày qua
+        const poTxs = recent35DaysTxs.filter(t => t.poId === targetPO.id && t.stageId === 'LASER' && t.location === 'OUT' && t.type === 'STAGE_IN');
+        const poTxQty = poTxs.reduce((sum, t) => sum + (t.quantity || 0), 0);
+        const poQty = poTxQty > 0 ? poTxQty : (targetPO.producedQuantity || targetPO.targetQuantity || 0);
+
         const targetClean = (targetPO.partId || '').trim().toUpperCase();
-        filteredOutDetails = outDetails.filter(d => {
+        const matchedDetails = outDetails.filter(d => {
           const dClean = (d.partId || '').trim().toUpperCase();
           return dClean.includes(targetClean) || targetClean.includes(dClean);
         });
+
+        if (matchedDetails.length > 0) {
+          filteredOutDetails = matchedDetails.map(d => {
+            const bomDef = findBOMForPart(d.partId);
+            const compWeightPerUnit = bomDef?.componentWeight || d.compWeightPerUnit || 0;
+            const scrapWeightPerUnit = bomDef?.scrapWeight || d.scrapWeightPerUnit || 0;
+            const itemGoodWeight = poQty * compWeightPerUnit;
+            const itemBomScrapWeight = poQty * scrapWeightPerUnit;
+            const itemTheoreticalTotal = itemGoodWeight + itemBomScrapWeight;
+            const itemBomYield = itemTheoreticalTotal > 0 ? (itemGoodWeight / itemTheoreticalTotal) * 100 : 0;
+            return {
+              ...d,
+              quantity: poQty,
+              itemGoodWeight,
+              itemBomScrapWeight,
+              itemTheoreticalTotal,
+              itemBomYield,
+            };
+          });
+        } else if (targetPO.partId) {
+          const partId = targetPO.partId;
+          const partObj = parts.find(p => p.id === partId || p.name === partId);
+          const bomDef = findBOMForPart(partId);
+          const compWeightPerUnit = bomDef?.componentWeight || 0;
+          const scrapWeightPerUnit = bomDef?.scrapWeight || 0;
+          const parentSheetId = bomDef?.parentPartId || '';
+          const parentPart = parts.find(p => p.id === parentSheetId);
+          const itemGoodWeight = poQty * compWeightPerUnit;
+          const itemBomScrapWeight = poQty * scrapWeightPerUnit;
+          const itemTheoreticalTotal = itemGoodWeight + itemBomScrapWeight;
+          const itemBomYield = itemTheoreticalTotal > 0 ? (itemGoodWeight / itemTheoreticalTotal) * 100 : 0;
+
+          filteredOutDetails = [{
+            partId,
+            partName: partObj?.name || partId,
+            originalPartId: undefined,
+            quantity: poQty,
+            producedTxsQty: poTxQty,
+            exportedTxsQty: 0,
+            currentStockQty: 0,
+            unit: partObj?.unit || 'Bộ',
+            parentSheetId,
+            parentSheetName: parentPart?.name || parentSheetId,
+            compWeightPerUnit,
+            scrapWeightPerUnit,
+            itemGoodWeight,
+            itemBomScrapWeight,
+            itemTheoreticalTotal,
+            itemBomYield,
+            hasBOM: !!bomDef,
+          }];
+        }
 
         filteredDefectDetails = defectDetails.filter(d => {
           const dClean = (d.partId || '').trim().toUpperCase();
@@ -7235,11 +7309,10 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     const W_good = filteredOutDetails.reduce((sum, d) => sum + d.itemGoodWeight, 0);
 
     // 2. Tổng khối lượng phế định mức (W_bom_scrap)
-    // ĐỒNG BỘ 100% với Khu vực thu hồi phế liệu tôn (SX) PL-TON-SX (Ảnh 1) khi xem toàn bộ kho
+    // Luôn tính tổng khối lượng phế định mức từ chi tiết các mã linh kiện (calculatedBomScrap)
+    // để các thẻ KPI khớp 100% với bảng bóc tách chi tiết và file xuất Excel!
     const calculatedBomScrap = filteredOutDetails.reduce((sum, d) => sum + d.itemBomScrapWeight, 0);
-    const W_bom_scrap = (laserYieldPoFilter === 'ALL')
-      ? (scrapInStock > 0 ? scrapInStock : calculatedBomScrap)
-      : calculatedBomScrap;
+    const W_bom_scrap = calculatedBomScrap;
 
     // 3. Khối lượng phế NG / lỗi thực tế (W_ng) lấy từ dữ liệu KHO_NG Cắt Laser (Đồng bộ 100% với Ảnh 3)
     const W_ng = filteredDefectDetails.reduce((sum, d) => sum + d.weightKg, 0);
@@ -7261,6 +7334,9 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     // Tỷ lệ phế liệu định mức (% so với tổng cấp phát)
     const bomScrapRate = W_total_input > 0 ? (W_bom_scrap / W_total_input) * 100 : 0;
 
+    // Đếm mã linh kiện chưa cài BOM
+    const missingBomCount = filteredOutDetails.filter(d => !d.hasBOM || (d.compWeightPerUnit === 0 && d.scrapWeightPerUnit === 0)).length;
+
     return {
       W_good,
       W_bom_scrap,
@@ -7271,6 +7347,8 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       ngRate,
       bomScrapRate,
       scrapInStock,
+      missingBomCount,
+      totalPartsCount: filteredOutDetails.length,
       dateRangeStr,
       thirtyFiveDaysAgoStr,
       todayStr,
@@ -7281,6 +7359,16 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       totalDefectQty: filteredDefectDetails.reduce((sum, d) => sum + d.quantity, 0),
     };
   }, [inventory, parts, laserScrapItems, laserYieldPoFilter, transactions]);
+
+  useEffect(() => {
+    if (laserYieldReport && laserYieldReport.W_bom_scrap > 0 && laserYieldPoFilter === 'ALL') {
+      const plItem = inventory.find(i => i.stageId === 'LASER' && i.partId === 'PL-TON-SX');
+      if (plItem && Math.abs(plItem.quantity - laserYieldReport.W_bom_scrap) > 0.001) {
+        storageService.setInventoryQuantity('PL-TON-SX', 'LASER', plItem.location, laserYieldReport.W_bom_scrap, plItem.originalPartId);
+        refreshData();
+      }
+    }
+  }, [laserYieldReport.W_bom_scrap, laserYieldPoFilter, refreshData]);
 
   const exportLaserYieldReportExcel = () => {
     const wb = XLSX.utils.book_new();
@@ -7296,20 +7384,22 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       [''],
       ['CHỈ SỐ KPI CHÍNH', 'GIÁ TRỊ', 'ĐƠN VỊ', 'CÔNG THỨC / Ý NGHĨA'],
       ['1. Tổng khối lượng linh kiện tốt (W_good)', laserYieldReport.W_good.toFixed(4), 'KG', 'Tổng KL sản phẩm đạt theo định mức linh kiện (Kg) trong 35 ngày'],
-      ['2. Tổng khối lượng phế định mức (W_bom_scrap)', laserYieldReport.W_bom_scrap.toFixed(4), 'KG', 'Tổng KL phế liệu sinh ra theo định mức (PL-TON-SX) trong 35 ngày'],
+      ['2. Tổng khối lượng phế định mức (W_bom_scrap)', laserYieldReport.W_bom_scrap.toFixed(4), 'KG', 'Tổng KL phế liệu tính theo định mức BOM từ chi tiết linh kiện sản xuất'],
+      ['   (Phế liệu hiện tồn kho PL-TON-SX)', laserYieldReport.scrapInStock.toFixed(4), 'KG', 'Khối lượng phế liệu thực tế ghi nhận tại Khu vực thu hồi phế liệu tôn (SX)'],
       ['3. Khối lượng phế NG / lỗi thực tế (W_ng)', laserYieldReport.W_ng.toFixed(4), 'KG', 'Tổng KL lỗi ghi nhận từ KHO_NG và Báo lỗi nhanh trong 35 ngày'],
       ['4. Tổng tôn cấp phát đầu vào (W_total_input)', laserYieldReport.W_total_input.toFixed(4), 'KG', 'W_good + W_bom_scrap + W_ng'],
       ['5. Tỷ lệ cắt tôn chuẩn (BOM Yield %)', `${laserYieldReport.bomYield.toFixed(2)}%`, '%', '[W_good / (W_good + W_bom_scrap)] * 100% (Thu hồi lý thuyết định mức)'],
       ['6. Tỷ lệ cắt tôn thực tế (Actual Yield %)', `${laserYieldReport.actualYield.toFixed(2)}%`, '%', '[W_good / W_total_input] * 100% (Thu hồi thực tế sau lỗi)'],
       ['7. Tỷ lệ hao hụt lỗi (NG Rate %)', `${laserYieldReport.ngRate.toFixed(2)}%`, '%', '[W_ng / W_total_input] * 100% (Tỷ lệ hàng lỗi phế phẩm)'],
       ['8. Tỷ lệ phế liệu định mức (% BOM Scrap)', `${laserYieldReport.bomScrapRate.toFixed(2)}%`, '%', '[W_bom_scrap / W_total_input] * 100%'],
+      ['9. Thống kê BOM linh kiện', `${laserYieldReport.missingBomCount} / ${laserYieldReport.totalPartsCount}`, 'Mã chưa có BOM', 'Số mã linh kiện chưa cài đặt định mức BOM Tôn'],
       [''],
       ['CHI TIẾT LINH KIỆN ĐÃ SẢN XUẤT TẠI KHO OUT CẮT LASER (35 NGÀY QUA)'],
       ['Mã linh kiện', 'Tên linh kiện', 'Mã tôn tấm (BOM)', 'SL Tích lũy (35 ngày)', 'Đã xuất kho', 'Tồn OUT hiện tại', 'Đơn vị', 'KL Linh kiện (kg/cái)', 'KL Phế (kg/cái)', 'W_good (kg)', 'W_bom_scrap (kg)', 'Tỷ lệ thu hồi BOM (%)'],
       ...laserYieldReport.outDetails.map(d => [
         d.partId,
         d.partName,
-        d.parentSheetId || '(Chưa có BOM)',
+        d.hasBOM ? (d.parentSheetId || 'Có BOM') : '⚠️ Chưa cài BOM',
         d.quantity,
         d.exportedTxsQty || 0,
         d.currentStockQty || 0,
@@ -8054,7 +8144,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         <div className="text-[10px] font-bold font-mono uppercase text-amber-700 tracking-wider">Tổng khối lượng phế liệu</div>
                         <div className="flex items-baseline gap-1.5 justify-end">
                           <span className="text-2xl sm:text-3xl font-black font-mono text-amber-600">
-                            {laserScrapItems.reduce((sum, item) => sum + item.quantity, 0).toFixed(4)}
+                            {laserYieldReport.W_bom_scrap.toFixed(4)}
                           </span>
                           <span className="text-xs font-bold font-mono uppercase text-amber-800">KG</span>
                         </div>
@@ -8069,6 +8159,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         const part = parts.find(p => p.id === item.partId || p.name === item.partId);
                         const ageBatches = getInventoryBatches(item, transactions);
                         const ageInfo = ageBatches.length > 0 ? ageBatches[0].ageInfo : null;
+                        const itemDisplayQty = laserScrapItems.length === 1 ? laserYieldReport.W_bom_scrap : item.quantity;
 
                         return (
                           <div key={idx} className="bg-white p-3.5 rounded-xl border border-amber-200 shadow-2xs flex justify-between items-center gap-3 hover:border-amber-300 transition-colors">
@@ -8090,7 +8181,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                             <div className="flex items-center gap-1.5 shrink-0">
                               <div className="text-right mr-1">
                                 <div className="text-lg font-black font-mono text-amber-600">
-                                  {item.quantity.toFixed(4)}
+                                  {itemDisplayQty.toFixed(4)}
                                 </div>
                                 <div className="text-[10px] font-mono text-gray-400 uppercase font-bold">KG</div>
                               </div>
