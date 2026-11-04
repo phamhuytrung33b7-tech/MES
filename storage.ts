@@ -1932,7 +1932,9 @@ export const storageService = {
 
     const [y, m, d] = dateStr.split('-').map(Number);
     const startMs = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
-    const endMs = new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+    // Ca Đêm của ngày dateStr kéo dài từ 19:00 ngày dateStr đến 06:00 sáng ngày hôm sau (d + 1)
+    // Lấy đến 12:00 trưa ngày hôm sau để bao gồm trọn vẹn Ca Đêm
+    const endMs = new Date(y, m - 1, d + 1, 12, 0, 0, 0).getTime();
 
     if (!isSupabaseConfigured) {
       const localTxs = this.getTransactions().filter(t => t.timestamp >= startMs && t.timestamp <= endMs);

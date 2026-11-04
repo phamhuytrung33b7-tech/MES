@@ -5147,16 +5147,40 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   start.setHours(0, 0, 0, 0);
   const startMs = start.getTime();
 
-  const end = new Date(dateStr);
-  end.setHours(23, 59, 59, 999);
-  const endMs = end.getTime();
+  const nextDateObj = new Date(sY, sM - 1, sD + 1);
+  const nextDateStr = `${nextDateObj.getFullYear()}-${String(nextDateObj.getMonth() + 1).padStart(2, '0')}-${String(nextDateObj.getDate()).padStart(2, '0')}`;
 
-  const labels = glazingLabelsOverride && glazingLabelsOverride.length > 0 ? glazingLabelsOverride : storageService.getLabels();
+  // Ca Đêm của ngày dateStr kéo dài từ 19h ngày dateStr đến 06:00 sáng ngày hôm sau (nextDateStr)
+  const productionEndMs = new Date(sY, sM - 1, sD + 1, 6, 0, 0, 0).getTime();
+  const dayEndMs = new Date(sY, sM - 1, sD, 23, 59, 59, 999).getTime();
 
-  const rangeTx = transactions.filter(t => 
+  const getTxInfo = (timestamp: number) => {
+    const dt = new Date(timestamp);
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = String(dt.getDate()).padStart(2, '0');
+    return {
+      dateStr: `${y}-${m}-${d}`,
+      hour: dt.getHours()
+    };
+  };
+
+  const glzLabels = (glazingLabelsOverride && glazingLabelsOverride.length > 0 ? glazingLabelsOverride : storageService.getLabels())
+    .filter(l => l.type === 'STAGE_OUT' && l.stageId === 'GLAZING' && !(l as any).kpiRecorded);
+  const combinedTxs = [...transactions];
+  if (glzLabels.length > 0) {
+    const existingIds = new Set(transactions.map(t => t.id));
+    glzLabels.forEach(l => {
+      if (!existingIds.has(l.id)) {
+        combinedTxs.push(l);
+      }
+    });
+  }
+
+  const rangeTx = combinedTxs.filter(t => 
     (t.type === 'STAGE_OUT' && t.location === 'IN') ||
     (t.type === 'STAGE_IN' && t.location === 'OUT') // Năng lực sản xuất includes this
-  ).filter(t => t.timestamp >= startMs && t.timestamp <= endMs);
+  ).filter(t => t.timestamp >= startMs && t.timestamp <= productionEndMs);
 
   const wb = XLSX.utils.book_new();
 
@@ -5244,14 +5268,14 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     const stageAllOrders = storageService.getProductionOrders().filter(o => o.stageId === stageInfo.id);
     const stageDayOrders = stageAllOrders.filter(o => {
       const dt = o.expectedCompletionTime || o.plannedStartTime || o.createdAt;
-      return dt >= startMs && dt <= endMs;
+      return dt >= startMs && dt <= dayEndMs;
     });
 
     const glazingPlans = storageService.getGlazingPlans();
     const glazingPlanNorms = storageService.getGlazingPlanNorms();
     const glazingDayPlans = glazingPlans.filter(p => {
       const dt = p.expectedCompletionTime || p.targetCompletionTime || p.plannedStartTime || p.createdAt;
-      return dt >= startMs && dt <= endMs;
+      return dt >= startMs && dt <= dayEndMs;
     });
 
     shifts.forEach(shift => {
@@ -5262,13 +5286,21 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
       let shiftTx = stageTx;
       if (isDay) {
         shiftTx = stageTx.filter(t => {
-          const H = new Date(t.timestamp).getHours();
-          return H >= 6 && H < 19;
+          const { dateStr: tDate, hour: H } = getTxInfo(t.timestamp);
+          return tDate === dateStr && H >= 6 && H < 19;
         });
       } else if (shift.id === 'NIGHT') {
         shiftTx = stageTx.filter(t => {
-          const H = new Date(t.timestamp).getHours();
-          return (H >= 19 && H < 24) || (H >= 0 && H < 6);
+          const { dateStr: tDate, hour: H } = getTxInfo(t.timestamp);
+          // Ca Đêm: 19h ngày dateStr đến 06:00 sáng ngày hôm sau (nextDateStr), tuyệt đối không lùi sang ngày trước
+          return (tDate === dateStr && H >= 19) || (tDate === nextDateStr && H < 6);
+        });
+      } else if (isAllDay) {
+        shiftTx = stageTx.filter(t => {
+          const { dateStr: tDate, hour: H } = getTxInfo(t.timestamp);
+          const inDay = tDate === dateStr && H >= 6 && H < 19;
+          const inNight = (tDate === dateStr && H >= 19) || (tDate === nextDateStr && H < 6);
+          return inDay || inNight;
         });
       }
 
@@ -5277,37 +5309,48 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
 
       shiftTx.forEach(t => {
         partTotals.set(t.partId, (partTotals.get(t.partId) || 0) + (t.quantity || 0));
-        const H = new Date(t.timestamp).getHours();
+        const { dateStr: tDate, hour: H } = getTxInfo(t.timestamp);
         let slotIndex = -1;
         if (isAllDay) {
-          if (H >= 6 && H < 8) slotIndex = 0;
-          else if (H >= 8 && H < 10) slotIndex = 1;
-          else if (H >= 10 && H < 12) slotIndex = 2;
-          else if (H === 12) slotIndex = 2; // Khung nghỉ trưa gộp vào 10h-12h
-          else if (H >= 13 && H < 15) slotIndex = 3;
-          else if (H >= 15 && H < 17) slotIndex = 4;
-          else if (H >= 17 && H < 19) slotIndex = 5;
-          else if (H >= 19 && H < 21) slotIndex = 6;
-          else if (H >= 21 && H < 23) slotIndex = 7;
-          else if (H >= 23 || H === 0) slotIndex = 8; // 23h-0h và giờ nghỉ đêm 0h-1h gộp vào 23h-0h
-          else if (H >= 1 && H < 3) slotIndex = 9;
-          else if (H >= 3 && H < 5) slotIndex = 10;
-          else if (H >= 5 && H < 6) slotIndex = 11;
+          if (tDate === dateStr) {
+            if (H >= 6 && H < 8) slotIndex = 0;
+            else if (H >= 8 && H < 10) slotIndex = 1;
+            else if (H >= 10 && H < 12) slotIndex = 2;
+            else if (H === 12) slotIndex = 2; // Khung nghỉ trưa gộp vào 10h-12h
+            else if (H >= 13 && H < 15) slotIndex = 3;
+            else if (H >= 15 && H < 17) slotIndex = 4;
+            else if (H >= 17 && H < 19) slotIndex = 5;
+            else if (H >= 19 && H < 21) slotIndex = 6;
+            else if (H >= 21 && H < 23) slotIndex = 7;
+            else if (H >= 23) slotIndex = 8; // 23h-0h
+          } else if (tDate === nextDateStr) {
+            if (H === 0) slotIndex = 8; // 23h-0h và giờ nghỉ đêm 0h-1h gộp vào 23h-0h
+            else if (H >= 1 && H < 3) slotIndex = 9;
+            else if (H >= 3 && H < 5) slotIndex = 10;
+            else if (H >= 5 && H < 6) slotIndex = 11;
+          }
         } else if (isDay) {
-          if (H >= 6 && H < 8) slotIndex = 0;
-          else if (H >= 8 && H < 10) slotIndex = 1;
-          else if (H >= 10 && H < 12) slotIndex = 2;
-          else if (H === 12) slotIndex = 2; // Khung nghỉ trưa gộp vào 10h-12h
-          else if (H >= 13 && H < 15) slotIndex = 3;
-          else if (H >= 15 && H < 17) slotIndex = 4;
-          else if (H >= 17 && H < 19) slotIndex = 5;
+          if (tDate === dateStr) {
+            if (H >= 6 && H < 8) slotIndex = 0;
+            else if (H >= 8 && H < 10) slotIndex = 1;
+            else if (H >= 10 && H < 12) slotIndex = 2;
+            else if (H === 12) slotIndex = 2; // Khung nghỉ trưa gộp vào 10h-12h
+            else if (H >= 13 && H < 15) slotIndex = 3;
+            else if (H >= 15 && H < 17) slotIndex = 4;
+            else if (H >= 17 && H < 19) slotIndex = 5;
+          }
         } else {
-          if (H >= 19 && H < 21) slotIndex = 0;
-          else if (H >= 21 && H < 23) slotIndex = 1;
-          else if (H >= 23 || H === 0) slotIndex = 2; // 23h-0h và giờ nghỉ đêm 0h-1h gộp vào 23h-0h
-          else if (H >= 1 && H < 3) slotIndex = 3;
-          else if (H >= 3 && H < 5) slotIndex = 4;
-          else if (H >= 5 && H < 6) slotIndex = 5;
+          // Ca Đêm
+          if (tDate === dateStr) {
+            if (H >= 19 && H < 21) slotIndex = 0;
+            else if (H >= 21 && H < 23) slotIndex = 1;
+            else if (H >= 23) slotIndex = 2; // 23h-0h
+          } else if (tDate === nextDateStr) {
+            if (H === 0) slotIndex = 2; // 23h-0h và giờ nghỉ đêm 0h-1h gộp vào 23h-0h
+            else if (H >= 1 && H < 3) slotIndex = 3;
+            else if (H >= 3 && H < 5) slotIndex = 4;
+            else if (H >= 5 && H < 6) slotIndex = 5;
+          }
         }
 
         if (slotIndex !== -1) {
@@ -6708,7 +6751,21 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
     const targetStages = ['LASER', 'BENDING', 'WELDING', 'PAINTING', 'GLAZING'];
     
-    
+    const [sY, sM, sD] = chartDate.split('-').map(Number);
+    const nextDateObj = new Date(sY, sM - 1, sD + 1);
+    const nextDateStr = `${nextDateObj.getFullYear()}-${String(nextDateObj.getMonth() + 1).padStart(2, '0')}-${String(nextDateObj.getDate()).padStart(2, '0')}`;
+
+    const getTxInfo = (timestamp: number) => {
+      const dt = new Date(timestamp);
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, '0');
+      const d = String(dt.getDate()).padStart(2, '0');
+      return {
+        dateStr: `${y}-${m}-${d}`,
+        hour: dt.getHours()
+      };
+    };
+
     // Filter transactions by date and type STAGE_OUT (location IN -> processing done)
     const txFilterFn = (t: any) => {
       // "Năng lực sản xuất" logic: When something leaves 'IN' at a stage (moves to OUT),
@@ -6720,12 +6777,14 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       if (!isProducedAtStage) return false;
       if (!targetStages.includes(t.stageId)) return false;
       
-      const txDateObj = new Date(t.timestamp);
-      const offset = txDateObj.getTimezoneOffset();
-      const localDate = new Date(txDateObj.getTime() - (offset*60*1000));
-      const txDate = localDate.toISOString().split('T')[0];
+      const { dateStr: txDate, hour } = getTxInfo(t.timestamp);
       
-      return txDate === chartDate;
+      if (activeChartShift === 'DAY') {
+        return txDate === chartDate && hour >= 6 && hour < 19;
+      } else {
+        // Ca Đêm: 19h ngày chartDate đến 06:00 sáng ngày hôm sau (nextDateStr), tuyệt đối không lùi sang ngày hôm trước
+        return (txDate === chartDate && hour >= 19) || (txDate === nextDateStr && hour < 6);
+      }
     };
 
     // Use on-demand Supabase daily data in RAM if available for selected chartDate, otherwise fallback to props
@@ -6737,10 +6796,12 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     const effectiveLabels = (dailyData && dailyData.date === chartDate) ? dailyData.glazingLabels : labels;
     const glazingLabels = effectiveLabels.filter(l => {
        if (l.type !== 'STAGE_OUT' || l.stageId !== 'GLAZING' || (l as any).kpiRecorded) return false;
-       const txDateObj = new Date(l.timestamp);
-       const offset = txDateObj.getTimezoneOffset();
-       const localDate = new Date(txDateObj.getTime() - (offset*60*1000));
-       return localDate.toISOString().split('T')[0] === chartDate;
+       const { dateStr: txDate, hour } = getTxInfo(l.timestamp);
+       if (activeChartShift === 'DAY') {
+         return txDate === chartDate && hour >= 6 && hour < 19;
+       } else {
+         return (txDate === chartDate && hour >= 19) || (txDate === nextDateStr && hour < 6);
+       }
     });
 
     const laserHSQDArray = storageService.getLaserHSQD();
@@ -6800,19 +6861,31 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
         slotData.details[stageName] = [];
       });
 
-      const slotTxs = productionTransactions.filter(t => {
-        const hour = new Date(t.timestamp).getHours();
-        if (slot.label === '10h-12h') return hour >= 10 && hour <= 12; // Nghỉ trưa gộp vào 10h-12h
-        if (slot.label === '23h-0h') return hour === 23 || hour === 0; // Nghỉ đêm gộp vào 23h-0h
-        return hour >= slot.start && hour < slot.end;
-      });
-      
-      const slotGlazingLabels = glazingLabels.filter(t => {
-        const hour = new Date(t.timestamp).getHours();
-        if (slot.label === '10h-12h') return hour >= 10 && hour <= 12;
-        if (slot.label === '23h-0h') return hour === 23 || hour === 0;
-        return hour >= slot.start && hour < slot.end;
-      });
+      const matchSlot = (timestamp: number) => {
+        const { dateStr: txDate, hour } = getTxInfo(timestamp);
+        if (activeChartShift === 'DAY') {
+          if (txDate !== chartDate) return false;
+          if (slot.label === '6h-8h') return hour >= 6 && hour < 8;
+          if (slot.label === '8h-10h') return hour >= 8 && hour < 10;
+          if (slot.label === '10h-12h') return hour >= 10 && hour <= 12; // Nghỉ trưa gộp vào 10h-12h
+          if (slot.label === '13h-15h') return hour >= 13 && hour < 15;
+          if (slot.label === '15h-17h') return hour >= 15 && hour < 17;
+          if (slot.label === '17h-19h') return hour >= 17 && hour < 19;
+          return hour >= slot.start && hour < slot.end;
+        } else {
+          // Ca Đêm
+          if (slot.label === '19h-21h') return txDate === chartDate && hour >= 19 && hour < 21;
+          if (slot.label === '21h-23h') return txDate === chartDate && hour >= 21 && hour < 23;
+          if (slot.label === '23h-0h') return (txDate === chartDate && hour >= 23) || (txDate === nextDateStr && hour === 0);
+          if (slot.label === '1h-3h') return txDate === nextDateStr && hour >= 1 && hour < 3;
+          if (slot.label === '3h-5h') return txDate === nextDateStr && hour >= 3 && hour < 5;
+          if (slot.label === '5h-6h') return txDate === nextDateStr && hour >= 5 && hour < 6;
+          return false;
+        }
+      };
+
+      const slotTxs = productionTransactions.filter(t => matchSlot(t.timestamp));
+      const slotGlazingLabels = glazingLabels.filter(t => matchSlot(t.timestamp));
 
       let laserConverted = 0;
       let sonConverted = 0; // Tính theo HSQĐ Sơn riêng (Tab HSQĐ Sơn) cho tab riêng Sơn
