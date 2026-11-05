@@ -5387,19 +5387,12 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
     };
   };
 
-  const glzLabels = (glazingLabelsOverride && glazingLabelsOverride.length > 0 ? glazingLabelsOverride : storageService.getLabels())
-    .filter(l => l.type === 'STAGE_OUT' && l.stageId === 'GLAZING' && !(l as any).kpiRecorded);
-  const combinedTxs = [...transactions];
-  if (glzLabels.length > 0) {
-    const existingIds = new Set(transactions.map(t => t.id));
-    glzLabels.forEach(l => {
-      if (!existingIds.has(l.id)) {
-        combinedTxs.push(l);
-      }
-    });
-  }
+  // NSLĐ chỉ tính từ sản lượng đã làm (STAGE_OUT thực tế). Không tính các transaction nhãn in (GLZ-, LBL-, qrData)
+  const validTxs = transactions.filter(t => 
+    !(t.stageId === 'GLAZING' && (t.id?.startsWith('GLZ-') || t.id?.startsWith('LBL-') || (t as any).qrData || (t.planId && (t as any).printed)))
+  );
 
-  const rangeTx = combinedTxs.filter(t => 
+  const rangeTx = validTxs.filter(t => 
     (t.type === 'STAGE_OUT' && t.location === 'IN') ||
     (t.type === 'STAGE_IN' && t.location === 'OUT') // Năng lực sản xuất includes this
   ).filter(t => t.timestamp >= startMs && t.timestamp <= productionEndMs);
@@ -5884,7 +5877,8 @@ const exportProductionReportRange = (transactions: Transaction[], parts: Part[],
   const rangeTx = transactions.filter(t => 
     ((t.type === 'STAGE_OUT' && t.location === 'IN') ||
      (t.type === 'STAGE_IN' && t.location === 'OUT')) && 
-    t.timestamp >= startMs && t.timestamp <= endMs
+    t.timestamp >= startMs && t.timestamp <= endMs &&
+    !(t.stageId === 'GLAZING' && (t.id?.startsWith('GLZ-') || t.id?.startsWith('LBL-') || (t as any).qrData || (t.planId && (t as any).printed)))
   );
 
   const wb = XLSX.utils.book_new();
@@ -6998,6 +6992,11 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
 
       if (!isProducedAtStage) return false;
       if (!targetStages.includes(t.stageId)) return false;
+
+      // TUYỆT ĐỐI KHÔNG tính nhãn in vào NSLĐ Dán kính (chỉ tính khi bấm "LƯU SẢN LƯỢNG")
+      if (t.stageId === 'GLAZING' && (t.id?.startsWith('GLZ-') || t.id?.startsWith('LBL-') || t.qrData || (t.planId && t.printed))) {
+        return false;
+      }
       
       const { dateStr: txDate, hour } = getTxInfo(t.timestamp);
       
@@ -7107,7 +7106,6 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       };
 
       const slotTxs = productionTransactions.filter(t => matchSlot(t.timestamp));
-      const slotGlazingLabels = glazingLabels.filter(t => matchSlot(t.timestamp));
 
       let laserConverted = 0;
       let sonConverted = 0; // Tính theo HSQĐ Sơn riêng (Tab HSQĐ Sơn) cho tab riêng Sơn
@@ -7170,41 +7168,6 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
             hsqd: itemHsqd,
             hsqdMech: itemHsqdMech,
             partId: t.partId 
-          });
-        }
-      });
-      
-      // Handle GLAZING using labels to match export exactly
-      slotGlazingLabels.forEach(t => {
-        const stageName = 'Dán Kính';
-        slotData[stageName] += (t.quantity || 0);
-        
-        const part = parts.find((p: any) => p.id === t.partId);
-        const partName = part ? part.name : (t.partName || t.partId);
-        const unit = part?.unit || 'cái';
-        
-        const hsqdMech = glazingHSQD(t.partId); // Tab HSQĐ Dán Kính 1 (Xưởng CK)
-        const itemHsqd = getGlazingStageHSQD(t.partId); // Tab HSQĐ Dán Kính 2 (Công đoạn)
-        danKinhConvertedMechanical += ((t.quantity || 0) * hsqdMech);
-        danKinhConvertedStage += ((t.quantity || 0) * itemHsqd);
-
-        const existingDetail = slotData.details[stageName].find((d: any) => d.partName === partName);
-        if (existingDetail) {
-          existingDetail.quantity += (t.quantity || 0);
-          if ((!existingDetail.hsqd || existingDetail.hsqd === 0) && itemHsqd > 0) {
-            existingDetail.hsqd = itemHsqd;
-          }
-          if ((!existingDetail.hsqdMech || existingDetail.hsqdMech === 0) && hsqdMech > 0) {
-            existingDetail.hsqdMech = hsqdMech;
-          }
-        } else {
-          slotData.details[stageName].push({ 
-            partName, 
-            quantity: (t.quantity || 0), 
-            unit,
-            hsqd: itemHsqd,
-            hsqdMech: hsqdMech,
-            partId: t.partId
           });
         }
       });
@@ -13992,18 +13955,18 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                             </div>
 
                             <div className="space-y-2 mb-3">
-                              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-0.5">Thành phần & Tiến độ in</div>
+                              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-0.5">Thành phần & Tiến độ kế hoạch (SL đã làm)</div>
                               <div className="space-y-1">
                                 {components.map((c, i) => {
-                                  const printed = (plan.printedQuantities || {})[c.id] || 0;
+                                  const produced = (plan.producedQuantities || {})[c.id] || 0;
                                   const target = plan.targetQuantity;
-                                  const compProgress = Math.min(100, (printed / target) * 100);
+                                  const compProgress = Math.min(100, (produced / target) * 100);
                                   
                                   return (
                                     <div key={i} className="flex flex-col bg-gray-50 px-2.5 py-1.5 rounded-lg gap-1">
                                       <div className="flex justify-between items-center text-[11px] sm:text-xs">
                                         <span className="font-medium text-gray-700 truncate mr-2">{c.partName}</span>
-                                        <span className="font-bold text-blue-700 whitespace-nowrap">{printed}/{target}</span>
+                                        <span className="font-bold text-blue-700 whitespace-nowrap">{produced}/{target}</span>
                                       </div>
                                       <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
                                         <div 
@@ -14104,21 +14067,38 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
               {planSubTab === 'COMPLETED' && (
                 <div className="space-y-4">
                   {completedGlazingPlans.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {completedGlazingPlans.map((plan) => {
-                       const modelName = parts.find((p: any) => p.id === plan.modelId)?.name || plan.modelId;
-                       return (
-                         <div key={plan.id} className="bg-green-50 border-2 border-green-100 rounded-2xl p-5 hover:border-green-200 transition-all group flex flex-col justify-between opacity-80 hover:opacity-100">
-                           <div className="flex justify-between items-start mb-4">
-                             <div>
-                               <div className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-1">{plan.id}</div>
-                               <h5 className="font-bold text-gray-900 leading-tight">{modelName}</h5>
-                               <div className="mt-1 text-xs text-green-700 font-medium">Đã in đủ: {plan.targetQuantity} MÁY</div>
-                             </div>
-                             <div className="px-3 py-1 rounded-full text-[10px] bg-green-100 text-green-700 font-black uppercase tracking-widest flex items-center gap-1">
-                               <CheckCircle2 size={12}/> XONG
-                             </div>
-                           </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {completedGlazingPlans.map((plan) => {
+                        const modelName = parts.find((p: any) => p.id === plan.modelId)?.name || plan.modelId;
+                        const components = glazingPlanNorms.filter(n => n.appliedModel === plan.modelId);
+                        return (
+                          <div key={plan.id} className="bg-green-50 border-2 border-green-100 rounded-2xl p-5 hover:border-green-200 transition-all group flex flex-col justify-between opacity-80 hover:opacity-100">
+                            <div>
+                              <div className="flex justify-between items-start mb-3">
+                                <div>
+                                  <div className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-1">{plan.id}</div>
+                                  <h5 className="font-bold text-gray-900 leading-tight">{modelName}</h5>
+                                  <div className="mt-1 text-xs text-green-700 font-medium">Đã hoàn thành: {plan.targetQuantity} MÁY</div>
+                                </div>
+                                <div className="px-3 py-1 rounded-full text-[10px] bg-green-100 text-green-700 font-black uppercase tracking-widest flex items-center gap-1 shrink-0">
+                                  <CheckCircle2 size={12}/> XONG
+                                </div>
+                              </div>
+
+                              {components.length > 0 && (
+                                <div className="space-y-1 mb-3">
+                                  {components.map((c, i) => {
+                                    const produced = (plan.producedQuantities || {})[c.id] || 0;
+                                    return (
+                                      <div key={i} className="flex justify-between items-center text-[11px] text-green-800 bg-green-100/60 px-2 py-0.5 rounded">
+                                        <span className="truncate mr-2 font-medium">{c.partName}</span>
+                                        <span className="font-bold whitespace-nowrap">{produced}/{plan.targetQuantity}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
                            <div className="flex justify-between items-center border-t border-green-200 pt-3 mt-4">
                              <div className="flex flex-col">
                                <span className="text-[9px] font-black text-gray-500 uppercase tracking-widest pl-1">Target</span>
@@ -14257,10 +14237,9 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                           refreshData();
                         }}
                         onPrint={(labelTx: any, printQty: number) => {
+                          // Chỉ lưu nhãn in (QR label) và cập nhật số lượng đã in trên kế hoạch.
+                          // TUYỆT ĐỐI KHÔNG lưu vào transactions (NSLĐ chỉ được tính khi bấm "LƯU SẢN LƯỢNG").
                           storageService.saveLabel(labelTx);
-                          // Lưu vào cả transactions (lưu 35 ngày) để Báo cáo sản lượng & Biểu đồ năng suất xem được trọn vẹn 35 ngày
-                          const txList = storageService.getTransactions();
-                          storageService.saveTransactions([labelTx, ...txList]);
                           storageService.updateGlazingPlanPrinted(plan.id, norm.id, printQty);
                           setGlazingPlans(storageService.getGlazingPlans());
                           onPrint(labelTx);

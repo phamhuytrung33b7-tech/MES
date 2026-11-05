@@ -2143,7 +2143,9 @@ export const storageService = {
             defectCategory: r.defect_category || undefined,
             kpiRecorded: Boolean(r.kpi_recorded)
           }));
-          allTxs.push(...mapped);
+          // Lọc bỏ mọi transaction nhãn in dán kính để đảm bảo không bị tính double vào NSLĐ
+          const validTxs = mapped.filter(t => !(t.stageId === 'GLAZING' && (t.id?.startsWith('GLZ-') || t.id?.startsWith('LBL-') || t.qrData || (t.planId && t.printed))));
+          allTxs.push(...validTxs);
           if (data.length < PAGE_SIZE) {
             hasMore = false;
           } else {
@@ -2188,7 +2190,10 @@ export const storageService = {
       return { transactions: allTxs, glazingLabels };
     } catch (err: any) {
       console.warn('[Supabase Report] fetchTransactionsForSingleDay fallback to local:', err?.message || err);
-      const localTxs = this.getTransactions().filter(t => t.timestamp >= startMs && t.timestamp <= endMs);
+      const localTxs = this.getTransactions().filter(t => 
+        t.timestamp >= startMs && t.timestamp <= endMs &&
+        !(t.stageId === 'GLAZING' && (t.id?.startsWith('GLZ-') || t.id?.startsWith('LBL-') || t.qrData || (t.planId && t.printed)))
+      );
       const localLabels = this.getLabels().filter(l => l.timestamp >= startMs && l.timestamp <= endMs && l.type === 'STAGE_OUT' && l.stageId === 'GLAZING');
       return { transactions: localTxs, glazingLabels: localLabels };
     }
@@ -2272,7 +2277,9 @@ export const storageService = {
             defectCategory: r.defect_category || undefined,
             kpiRecorded: Boolean(r.kpi_recorded)
           }));
-          allTxs.push(...mapped);
+          // Lọc bỏ mọi transaction nhãn in dán kính để đảm bảo không bị tính double vào NSLĐ
+          const validTxs = mapped.filter(t => !(t.stageId === 'GLAZING' && (t.id?.startsWith('GLZ-') || t.id?.startsWith('LBL-') || t.qrData || (t.planId && t.printed))));
+          allTxs.push(...validTxs);
           if (data.length < PAGE_SIZE) {
             hasMore = false;
           } else {
@@ -2330,7 +2337,10 @@ export const storageService = {
       return { transactions: allTxs, glazingLabels: allLabels };
     } catch (err: any) {
       console.warn('[Supabase Report] fetchTransactionsForDateRange fallback to local:', err?.message || err);
-      const localTxs = this.getTransactions().filter(t => t.timestamp >= startMs && t.timestamp <= endMs);
+      const localTxs = this.getTransactions().filter(t => 
+        t.timestamp >= startMs && t.timestamp <= endMs &&
+        !(t.stageId === 'GLAZING' && (t.id?.startsWith('GLZ-') || t.id?.startsWith('LBL-') || t.qrData || (t.planId && t.printed)))
+      );
       const localLabels = this.getLabels().filter(l => l.timestamp >= startMs && l.timestamp <= endMs && l.type === 'STAGE_OUT' && l.stageId === 'GLAZING');
       return { transactions: localTxs, glazingLabels: localLabels };
     }
@@ -2375,7 +2385,11 @@ export const storageService = {
       const stagesResult: Chart35DaySummaryItem['stages'] = {};
 
       (['LASER', 'BENDING', 'WELDING', 'PAINTING', 'GLAZING'] as StageId[]).forEach(stage => {
-        const stageTxs = dayTxs.filter(t => t.stageId === stage && (t.type === 'STAGE_OUT' || t.type === 'EXPORT'));
+        const stageTxs = dayTxs.filter(t => {
+          if (t.stageId !== stage || (t.type !== 'STAGE_OUT' && t.type !== 'EXPORT')) return false;
+          if (stage === 'GLAZING' && (t.id?.startsWith('GLZ-') || t.id?.startsWith('LBL-') || (t as any).qrData || (t.planId && (t as any).printed))) return false;
+          return true;
+        });
         let produced = 0;
         let spqd = 0;
 
