@@ -99,7 +99,7 @@ function queueConfigPersist(key: string, value: any) {
   isRemoteHydrated = true;
   pendingConfigSaves.set(key, value);
   if (!configSaveTimer) {
-    configSaveTimer = setTimeout(flushPendingConfigSaves, 400);
+    configSaveTimer = setTimeout(flushPendingConfigSaves, 700);
   }
 }
 
@@ -196,23 +196,46 @@ async function deletePOFromSupabase(id: string) {
   }
 }
 
-// WRITE-THROUGH: Cập nhật đúng 1 item tồn kho thay vì đẩy toàn bộ bảng
-async function persistSingleInventoryItemToSupabase(item: InventoryItem) {
+// WRITE-THROUGH: Gom nhóm và gom lô (Batch & Debounce) cập nhật tồn kho thay vì gọi từng request riêng rẽ
+let pendingInventorySaves = new Map<string, InventoryItem>();
+let inventorySaveTimer: any = null;
+
+function queueSingleInventoryPersist(item: InventoryItem) {
   if (!isSupabaseConfigured || !item) return;
   isRemoteHydrated = true;
+  const key = `${item.partId}_${item.stageId}_${item.location}_${item.originalPartId || ''}`;
+  pendingInventorySaves.set(key, item);
+  if (!inventorySaveTimer) {
+    inventorySaveTimer = setTimeout(flushPendingInventorySaves, 400);
+  }
+}
+
+async function flushPendingInventorySaves() {
+  inventorySaveTimer = null;
+  if (!isSupabaseConfigured || pendingInventorySaves.size === 0) return;
+  const items = Array.from(pendingInventorySaves.values());
+  pendingInventorySaves.clear();
   try {
-    const dbRow = {
+    const dbRows = items.map(item => ({
       id: `${item.partId}_${item.stageId}_${item.location}_${item.originalPartId || ''}`,
       part_id: item.partId,
       original_part_id: item.originalPartId || '',
       stage_id: item.stageId,
       location: item.location,
       quantity: Math.round(Number(item.quantity || 0) * 10000) / 10000
-    };
-    await supabase.from('wip_inventory').upsert(dbRow, { onConflict: 'id' });
+    }));
+    for (let i = 0; i < dbRows.length; i += 150) {
+      const chunk = dbRows.slice(i, i + 150);
+      const { error } = await supabase.from('wip_inventory').upsert(chunk, { onConflict: 'id' });
+      if (error) throw error;
+    }
   } catch (err: any) {
-    quietWarn('persistSingleInventoryItem', 'persistSingleInventoryItem error:', err);
+    quietWarn('flushPendingInventorySaves', 'flushPendingInventorySaves error:', err);
   }
+}
+
+async function persistSingleInventoryItemToSupabase(item: InventoryItem) {
+  queueSingleInventoryPersist(item);
 }
 
 // Dùng cho trường hợp người dùng bấm nút thủ công "Đẩy dữ liệu lên Supabase"
@@ -469,70 +492,12 @@ export function isSamePartOrVariant(partA: string, partB: string, partsList: any
 async function deleteInventoryFromSupabase(partId: string, stageId: StageId, location: string, originalPartId?: string) {
   if (!isSupabaseConfigured || !partId) return;
   try {
-    let partsList: any[] = [];
-    if (cache[STORAGE_KEYS.PARTS]) {
-      partsList = cache[STORAGE_KEYS.PARTS];
-    } else {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEYS.PARTS);
-        if (raw) partsList = JSON.parse(raw);
-      } catch {}
-    }
-
-    const { allVariants } = getPartVariants(partId, partsList);
-    const searchTokens = getPartSearchTokens(partId, partsList);
-    const origVariants = originalPartId ? getPartVariants(originalPartId, partsList).allVariants : [''];
-
-    const deletePromises: Promise<any>[] = [];
-
-    // Stage ID aliases (e.g., PAINTING and Sơn, WELDING and Hàn, BENDING and Chấn/Dập)
-    const stageAliases = Array.from(new Set([
-      stageId,
-      stageId.toUpperCase(),
-      stageId.toLowerCase(),
-      ...(stageId === 'PAINTING' ? ['Sơn', 'SON', 'sơn'] : []),
-      ...(stageId === 'WELDING' ? ['Hàn', 'HAN', 'hàn'] : []),
-      ...(stageId === 'BENDING' ? ['Chấn', 'Dập', 'CHẤN', 'DẬP'] : []),
-      ...(stageId === 'LASER' ? ['Laser', 'Cắt Laser', 'LASER'] : []),
-      ...(stageId === 'GLAZING' ? ['Dán kính', 'DÁN KÍNH', 'GLAZING'] : []),
-    ]));
-
-    // 1. Delete by synthetic IDs strictly for this location and stageAliases
-    const rowIds: string[] = [];
-    allVariants.forEach(v => {
-      stageAliases.forEach(s => {
-        rowIds.push(`${v}_${s}_${location}_`);
-        rowIds.push(`${v}_${s}_${location}`);
-        origVariants.forEach(o => {
-          if (o) {
-            rowIds.push(`${v}_${s}_${location}_${o}`);
-          }
-        });
-      });
-    });
-
-    for (let i = 0; i < rowIds.length; i += 100) {
-      const chunk = rowIds.slice(i, i + 100);
-      deletePromises.push(Promise.resolve(supabase.from('wip_inventory').delete().in('id', chunk)));
-    }
-
-    // 2. Delete strictly scoped to (stage_id, location, part_id)
-    for (let i = 0; i < allVariants.length; i += 100) {
-      const chunk = allVariants.slice(i, i + 100);
-      stageAliases.forEach(s => {
-        deletePromises.push(
-          Promise.resolve(
-            supabase.from('wip_inventory')
-              .delete()
-              .eq('stage_id', s)
-              .eq('location', location)
-              .in('part_id', chunk)
-          )
-        );
-      });
-    }
-
-    await Promise.allSettled(deletePromises);
+    const rowId = `${partId}_${stageId}_${location}_${originalPartId || ''}`;
+    // Single targeted DELETE query instead of dozens of permutated queries
+    await supabase
+      .from('wip_inventory')
+      .delete()
+      .or(`id.eq.${rowId},and(part_id.eq.${partId},stage_id.eq.${stageId},location.eq.${location})`);
   } catch (err: any) {
     quietWarn('deleteInventory', 'deleteInventory error:', err);
   }
@@ -553,9 +518,10 @@ let txSaveTimer: any = null;
 function queueTransactionInsert(tx: Transaction) {
   if (!isSupabaseConfigured || !tx || !tx.id) return;
   isRemoteHydrated = true;
+  clearReportCache();
   pendingTxs.push(tx);
   if (!txSaveTimer) {
-    txSaveTimer = setTimeout(flushPendingTransactions, 300);
+    txSaveTimer = setTimeout(flushPendingTransactions, 600);
   }
 }
 
@@ -654,7 +620,7 @@ function queueLabelInsert(label: Transaction) {
   isRemoteHydrated = true;
   pendingLabels.push(label);
   if (!labelSaveTimer) {
-    labelSaveTimer = setTimeout(flushPendingLabels, 300);
+    labelSaveTimer = setTimeout(flushPendingLabels, 600);
   }
 }
 
@@ -762,6 +728,19 @@ export function isGlazingPlanFullyCompleted(
       return prod >= target && print >= target;
     });
   }
+}
+
+// IN-MEMORY TTL CACHE: Giảm tải Log Ingestion cho Supabase Free Tier bằng cách lưu đệm kết quả query báo cáo
+const singleDayTxCache = new Map<string, { data: { transactions: Transaction[]; glazingLabels: Transaction[] }; expiry: number }>();
+const rangeTxCache = new Map<string, { data: { transactions: Transaction[]; glazingLabels: Transaction[] }; expiry: number }>();
+
+export function clearReportCache(dateStr?: string) {
+  if (dateStr) {
+    singleDayTxCache.delete(dateStr);
+  } else {
+    singleDayTxCache.clear();
+  }
+  rangeTxCache.clear();
 }
 
 export const storageService = {
@@ -2080,6 +2059,10 @@ export const storageService = {
     return [];
   },
 
+  clearReportCache(dateStr?: string) {
+    clearReportCache(dateStr);
+  },
+
   /**
    * 1. BÁO CÁO THEO TỪNG NGÀY TRONG QUÁ KHỨ (Xem chi tiết theo giờ của 1 ngày - Ảnh 1)
    * Query Supabase lấy dữ liệu từ 00:00:00 đến 23:59:59 của ngày dateStr.
@@ -2089,6 +2072,12 @@ export const storageService = {
   async fetchTransactionsForSingleDay(dateStr: string): Promise<{ transactions: Transaction[]; glazingLabels: Transaction[] }> {
     if (!dateStr) {
       return { transactions: [], glazingLabels: [] };
+    }
+
+    // Kiểm tra bộ nhớ cache (TTL 3 phút) để loại bỏ hoàn toàn các lượt gọi API trùng lặp
+    const cached = singleDayTxCache.get(dateStr);
+    if (cached && Date.now() < cached.expiry) {
+      return cached.data;
     }
 
     const [y, m, d] = dateStr.split('-').map(Number);
@@ -2187,7 +2176,9 @@ export const storageService = {
         console.warn('[Supabase Report] qr_labels query error:', lErr);
       }
 
-      return { transactions: allTxs, glazingLabels };
+      const result = { transactions: allTxs, glazingLabels };
+      singleDayTxCache.set(dateStr, { data: result, expiry: Date.now() + 180000 });
+      return result;
     } catch (err: any) {
       console.warn('[Supabase Report] fetchTransactionsForSingleDay fallback to local:', err?.message || err);
       const localTxs = this.getTransactions().filter(t => 
@@ -2208,6 +2199,13 @@ export const storageService = {
   async fetchTransactionsForDateRange(startDateStr: string, endDateStr: string): Promise<{ transactions: Transaction[]; glazingLabels: Transaction[] }> {
     if (!startDateStr || !endDateStr) {
       throw new Error('Vui lòng chọn đầy đủ Từ ngày và Đến ngày!');
+    }
+
+    // Kiểm tra bộ nhớ cache (TTL 3 phút) cho quãng ngày báo cáo
+    const cacheKey = `${startDateStr}_${endDateStr}`;
+    const cached = rangeTxCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiry) {
+      return cached.data;
     }
 
     const [sY, sM, sD] = startDateStr.split('-').map(Number);
@@ -2334,7 +2332,9 @@ export const storageService = {
         }
       }
 
-      return { transactions: allTxs, glazingLabels: allLabels };
+      const result = { transactions: allTxs, glazingLabels: allLabels };
+      rangeTxCache.set(cacheKey, { data: result, expiry: Date.now() + 180000 });
+      return result;
     } catch (err: any) {
       console.warn('[Supabase Report] fetchTransactionsForDateRange fallback to local:', err?.message || err);
       const localTxs = this.getTransactions().filter(t => 
@@ -2772,7 +2772,6 @@ export const storageService = {
     newInventory.push(itemToSave);
 
     this.saveInventory(newInventory);
-    await deleteInventoryFromSupabase(partId, stageId, location);
     await persistSingleInventoryItemToSupabase(itemToSave);
   },
 
@@ -2871,9 +2870,6 @@ export const storageService = {
     newInventory.push(itemToSave);
 
     this.saveInventory(newInventory);
-
-    // 2. Eradicate any legacy variant/suffix rows in Supabase before saving clean row
-    await deleteInventoryFromSupabase(partId, stageId, location, originalPartId);
     await persistSingleInventoryItemToSupabase(itemToSave);
   },
 
@@ -3676,9 +3672,6 @@ export const storageService = {
     };
     transactions.unshift(newTransaction);
     this.saveTransactions(transactions);
-
-    // Đồng bộ lập tức giao dịch mới lên Supabase
-    await persistTransactionsToSupabase([newTransaction]);
 
     return newTransaction;
   },
@@ -5767,7 +5760,8 @@ export const storageService = {
     await Promise.allSettled([
       flushPendingConfigSaves(),
       flushPendingTransactions(),
-      flushPendingLabels()
+      flushPendingLabels(),
+      flushPendingInventorySaves()
     ]);
   },
 
@@ -5832,9 +5826,11 @@ export const storageService = {
           pendingConfigSaves.clear();
           pendingTxs = [];
           pendingLabels = [];
+          pendingInventorySaves.clear();
           if (configSaveTimer) { clearTimeout(configSaveTimer); configSaveTimer = null; }
           if (txSaveTimer) { clearTimeout(txSaveTimer); txSaveTimer = null; }
           if (labelSaveTimer) { clearTimeout(labelSaveTimer); labelSaveTimer = null; }
+          if (inventorySaveTimer) { clearTimeout(inventorySaveTimer); inventorySaveTimer = null; }
 
           // Xóa sạch LocalStorage trên máy trạm
           localStorage.clear();
@@ -5869,55 +5865,41 @@ export const storageService = {
         .from('system_configs')
         .select('key, value');
 
-      // 2. Fetch active production_orders với phân trang song song & sắp xếp created_at desc (Không bị cắt 1000 dòng!)
+      // 2. Fetch active production_orders theo trang (không dùng count (*) gây tốn log Supabase)
       const fetchPOs = (async () => {
-        const { count: totalPoCount } = await supabase
-          .from('production_orders')
-          .select('*', { count: 'exact', head: true });
-
-        const total = totalPoCount || 0;
         const poPageSize = 1000;
-        const pagePromises = [];
-        for (let from = 0; from < Math.max(total, 1); from += poPageSize) {
-          pagePromises.push(
-            supabase
-              .from('production_orders')
-              .select('id, master_po_id, part_id, stage_id, target_quantity, produced_quantity, exported_quantity, status, created_at, completed_at, planned_start_time, lead_time, expected_completion_time, note, is_odd_po, excel_required_date')
-              .order('created_at', { ascending: false })
-              .range(from, from + poPageSize - 1)
-          );
-        }
-        const pages = await Promise.all(pagePromises);
         const rows: any[] = [];
-        pages.forEach(p => {
-          if (!p.error && p.data) rows.push(...p.data);
-        });
+        let from = 0;
+        while (true) {
+          const { data, error } = await supabase
+            .from('production_orders')
+            .select('id, master_po_id, part_id, stage_id, target_quantity, produced_quantity, exported_quantity, status, created_at, completed_at, planned_start_time, lead_time, expected_completion_time, note, is_odd_po, excel_required_date')
+            .order('created_at', { ascending: false })
+            .range(from, from + poPageSize - 1);
+          if (error || !data || data.length === 0) break;
+          rows.push(...data);
+          if (data.length < poPageSize) break;
+          from += poPageSize;
+        }
         return rows;
       })();
 
-      // 3. Fetch wip_inventory với phân trang song song
+      // 3. Fetch wip_inventory theo trang (không dùng count (*) gây tốn log Supabase)
       const fetchInv = (async () => {
         try {
-          const { count: totalInvCount } = await supabase
-            .from('wip_inventory')
-            .select('*', { count: 'exact', head: true });
-
-          const total = totalInvCount || 0;
           const invPageSize = 1000;
-          const pagePromises = [];
-          for (let from = 0; from < Math.max(total, 1); from += invPageSize) {
-            pagePromises.push(
-              supabase
-                .from('wip_inventory')
-                .select('part_id, original_part_id, stage_id, location, quantity')
-                .range(from, from + invPageSize - 1)
-            );
-          }
-          const pages = await Promise.all(pagePromises);
           const rows: any[] = [];
-          pages.forEach(p => {
-            if (!p.error && p.data) rows.push(...p.data);
-          });
+          let from = 0;
+          while (true) {
+            const { data, error } = await supabase
+              .from('wip_inventory')
+              .select('part_id, original_part_id, stage_id, location, quantity')
+              .range(from, from + invPageSize - 1);
+            if (error || !data || data.length === 0) break;
+            rows.push(...data);
+            if (data.length < invPageSize) break;
+            from += invPageSize;
+          }
           return rows;
         } catch (e) {
           console.error('[Supabase] Error fetching wip_inventory:', e);
@@ -5925,32 +5907,25 @@ export const storageService = {
         }
       })();
 
-      // 4. Fetch wip_transactions (35 ngày gần nhất) với phân trang song song (Không bị cắt 1000 dòng!)
+      // 4. Fetch wip_transactions (35 ngày gần nhất) theo trang (không dùng count (*) gây tốn log Supabase)
       const fetchTxs = (async () => {
         try {
-          const { count: totalTxCount } = await supabase
-            .from('wip_transactions')
-            .select('*', { count: 'exact', head: true })
-            .gte('timestamp', cutoff35d);
-
-          const total = totalTxCount || 0;
           const txPageSize = 1000;
-          const pagePromises = [];
-          for (let from = 0; from < Math.max(total, 1); from += txPageSize) {
-            pagePromises.push(
-              supabase
-                .from('wip_transactions')
-                .select('id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded')
-                .gte('timestamp', cutoff35d)
-                .order('timestamp', { ascending: false })
-                .range(from, from + txPageSize - 1)
-            );
-          }
-          const pages = await Promise.all(pagePromises);
           const rows: any[] = [];
-          pages.forEach(p => {
-            if (!p.error && p.data) rows.push(...p.data);
-          });
+          let from = 0;
+          while (true) {
+            const { data, error } = await supabase
+              .from('wip_transactions')
+              .select('id, type, part_id, part_name, original_part_id, quantity, stage_id, location, timestamp, qr_data, source_stage_id, target_stage_id, po_id, plan_id, printed, defect_reason, defect_category, kpi_recorded')
+              .gte('timestamp', cutoff35d)
+              .order('timestamp', { ascending: false })
+              .range(from, from + txPageSize - 1);
+            if (error || !data || data.length === 0) break;
+            rows.push(...data);
+            if (data.length < txPageSize) break;
+            from += txPageSize;
+            if (from >= 10000) break;
+          }
           return rows;
         } catch (e) {
           console.error('[Supabase] Error fetching wip_transactions:', e);

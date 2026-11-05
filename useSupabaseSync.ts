@@ -268,55 +268,41 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
     const fetchConfigs = client.from('system_configs').select('key, value');
 
     const fetchPOs = (async () => {
-      const { count: totalPoCount } = await client
-        .from('production_orders')
-        .select('*', { count: 'exact', head: true });
-
-      const total = totalPoCount || 0;
       const poPageSize = 1000;
-      const pagePromises = [];
-      for (let from = 0; from < Math.max(total, 1); from += poPageSize) {
-        pagePromises.push(
-          client
-            .from('production_orders')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .range(from, from + poPageSize - 1)
-        );
-      }
-      const pages = await Promise.all(pagePromises);
       const allRows: any[] = [];
-      pages.forEach(p => {
-        if (!p.error && p.data) allRows.push(...p.data);
-      });
+      let from = 0;
+      while (true) {
+        const { data, error } = await client
+          .from('production_orders')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .range(from, from + poPageSize - 1);
+        if (error || !data || data.length === 0) break;
+        allRows.push(...data);
+        if (data.length < poPageSize) break;
+        from += poPageSize;
+      }
       return allRows;
     })();
 
     const fetchInv = client.from('wip_inventory').select('*');
     const fetchTxs = (async () => {
-      const { count: totalTxCount } = await client
-        .from('wip_transactions')
-        .select('*', { count: 'exact', head: true })
-        .gte('timestamp', cutoff35d);
-
-      const total = totalTxCount || 0;
       const txPageSize = 1000;
-      const pagePromises = [];
-      for (let from = 0; from < Math.max(total, 1); from += txPageSize) {
-        pagePromises.push(
-          client
-            .from('wip_transactions')
-            .select('*')
-            .gte('timestamp', cutoff35d)
-            .order('timestamp', { ascending: false })
-            .range(from, from + txPageSize - 1)
-        );
-      }
-      const pages = await Promise.all(pagePromises);
       const allRows: any[] = [];
-      pages.forEach(p => {
-        if (!p.error && p.data) allRows.push(...p.data);
-      });
+      let from = 0;
+      while (true) {
+        const { data, error } = await client
+          .from('wip_transactions')
+          .select('*')
+          .gte('timestamp', cutoff35d)
+          .order('timestamp', { ascending: false })
+          .range(from, from + txPageSize - 1);
+        if (error || !data || data.length === 0) break;
+        allRows.push(...data);
+        if (data.length < txPageSize) break;
+        from += txPageSize;
+        if (from >= 10000) break;
+      }
       return allRows;
     })();
     const fetchPlans = client.from('glazing_plans')

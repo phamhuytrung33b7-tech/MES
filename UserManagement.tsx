@@ -395,6 +395,11 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
                                 ✦ Xem QR mọi CĐ
                               </span>
                             )}
+                            {user.canAddInventory && (
+                              <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold border border-emerald-200" title="Được quyền thêm và điều chỉnh tồn kho linh kiện các công đoạn">
+                                ✦ Thêm tồn LK
+                              </span>
+                            )}
                             {user.canApproveOddPO && (
                               <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded-md font-bold border border-amber-200" title="Được quyền phê duyệt PO lẻ">
                                 ✦ Duyệt PO lẻ
@@ -575,6 +580,7 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
   const [canApproveOddPO, setCanApproveOddPO] = useState<boolean>(initialData?.canApproveOddPO ?? false);
   const [canViewOwnStageExportedLabels, setCanViewOwnStageExportedLabels] = useState<boolean>(initialData?.canViewOwnStageExportedLabels ?? true);
   const [canViewAllStageLabels, setCanViewAllStageLabels] = useState<boolean>(initialData?.canViewAllStageLabels ?? (initialData?.role === 'ADMIN' ? true : false));
+  const [canAddInventory, setCanAddInventory] = useState<boolean>(initialData?.canAddInventory ?? (initialData?.role === 'ADMIN' ? true : false));
   const [allowedViews, setAllowedViews] = useState<View[]>(() => {
     if (initialData?.allowedViews) return [...initialData.allowedViews];
     return ['dashboard', 'produce', 'inbound'];
@@ -626,6 +632,7 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
       canApproveOddPO: role === 'ADMIN' ? true : canApproveOddPO,
       canViewOwnStageExportedLabels: role === 'ADMIN' ? true : canViewOwnStageExportedLabels,
       canViewAllStageLabels: role === 'ADMIN' ? true : canViewAllStageLabels,
+      canAddInventory: role === 'ADMIN' ? true : canAddInventory,
       isActive,
     });
   };
@@ -850,6 +857,31 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+            </label>
+          </div>
+
+          {/* Quyền thêm tồn kho linh kiện các công đoạn */}
+          <div className="flex items-center justify-between p-3.5 bg-emerald-50/80 rounded-xl border border-emerald-200">
+            <div>
+              <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                <PackagePlus size={16} className="text-emerald-600" />
+                <span>Thêm tồn linh kiện các công đoạn</span>
+              </span>
+              <p className="text-[11px] text-emerald-700 mt-0.5">
+                {role === 'ADMIN' 
+                  ? 'Quản trị viên (Admin) luôn có toàn quyền thêm và sửa tồn kho tất cả các công đoạn' 
+                  : 'Cho phép tài khoản này (Tổ trưởng kho, Quản đốc...) thêm và chỉnh sửa số lượng tồn kho (Kho IN / Kho OUT) cho các công đoạn mà không cần mật khẩu Admin'}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+              <input
+                type="checkbox"
+                checked={role === 'ADMIN' || canAddInventory}
+                disabled={role === 'ADMIN'}
+                onChange={(e) => setCanAddInventory(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
             </label>
           </div>
 

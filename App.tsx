@@ -6543,6 +6543,7 @@ const STAGE_CHART_CONFIGS: Record<string, {
 function DashboardView({ inventory, parts, transactions, labels, refreshData, setDefectModal, dclrNorms, dclrNormsMap, glazingHSQD, currentUser }: any) {
   const activeUser = currentUser || storageService.getCurrentUser();
   const isAdmin = activeUser?.role === 'ADMIN';
+  const canAddInventory = isAdmin || Boolean(activeUser?.canAddInventory);
   const [selectedStageDetail, setSelectedStageDetail] = useState<StageId | null>(null);
   const [expandedInventoryKeys, setExpandedInventoryKeys] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
@@ -6680,13 +6681,16 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   };
 
   const checkAdminPermission = async (actionName: string): Promise<boolean> => {
-    const currentUser = storageService.getCurrentUser();
-    if (currentUser?.role === 'ADMIN') {
+    const user = activeUser || storageService.getCurrentUser();
+    if (user?.role === 'ADMIN') {
       return true;
     }
-    const pwd = await customPrompt(`Chỉ Quản trị viên (Admin) mới có quyền ${actionName}.\nVui lòng nhập mật khẩu Quản trị viên:`, '', true);
+    if ((actionName === 'thêm tồn kho' || actionName === 'chỉnh sửa số lượng tồn kho') && (user?.role === 'ADMIN' || user?.canAddInventory)) {
+      return true;
+    }
+    const pwd = await customPrompt(`Chỉ Quản trị viên (Admin) hoặc tài khoản được cấp quyền mới có quyền ${actionName}.\nVui lòng nhập mật khẩu Quản trị viên:`, '', true);
     if (pwd === null) return false;
-    if (storageService.verifyAdminPassword(pwd, currentUser)) {
+    if (storageService.verifyAdminPassword(pwd, user)) {
       return true;
     }
     await customAlert('Mật khẩu Quản trị viên không chính xác! Bạn không có quyền thực hiện thao tác này.');
@@ -8503,7 +8507,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                       <div className="w-3 h-3 rounded-full bg-blue-500" />
                       <h3 className="font-mono text-base font-bold uppercase tracking-widest opacity-80">KHO_IN (Chờ sản xuất)</h3>
                     </div>
-                    {isAdmin && ['LASER', 'BENDING', 'WELDING', 'PAINTING'].includes(selectedStageDetail!) && (
+                    {canAddInventory && ['LASER', 'BENDING', 'WELDING', 'PAINTING', 'GLAZING'].includes(selectedStageDetail!) && (
                       <button 
                         onClick={async () => {
                           const ok = await checkAdminPermission('thêm tồn kho');
@@ -8620,7 +8624,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     >
                                       <AlertCircle size={16} />
                                     </button>
-                                    {isAdmin && (
+                                    {canAddInventory && (
                                       <>
                                         <button 
                                           onClick={async (e) => {
@@ -8641,21 +8645,23 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                         >
                                           <Edit2 size={16} />
                                         </button>
-                                        <button 
-                                          onClick={async (e) => {
-                                            e.stopPropagation();
-                                            const ok = await checkAdminPermission('xóa linh kiện tồn kho');
-                                            if (!ok) return;
-                                            if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho IN)?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
-                                              await storageService.deleteInventoryItem(item.partId, selectedStageDetail, 'IN', item.originalPartId);
-                                              refreshData();
-                                            }
-                                          }}
-                                          className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
-                                          title="Xóa tồn kho"
-                                        >
-                                          <Trash2 size={16} />
-                                        </button>
+                                        {isAdmin && (
+                                          <button 
+                                            onClick={async (e) => {
+                                              e.stopPropagation();
+                                              const ok = await checkAdminPermission('xóa linh kiện tồn kho');
+                                              if (!ok) return;
+                                              if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho IN)?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
+                                                await storageService.deleteInventoryItem(item.partId, selectedStageDetail, 'IN', item.originalPartId);
+                                                refreshData();
+                                              }
+                                            }}
+                                            className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
+                                            title="Xóa tồn kho"
+                                          >
+                                            <Trash2 size={16} />
+                                          </button>
+                                        )}
                                       </>
                                     )}
                                   </div>
@@ -8718,7 +8724,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                         )}
                       </h3>
                     </div>
-                    {isAdmin && ['LASER', 'BENDING', 'WELDING', 'PAINTING'].includes(selectedStageDetail!) && (
+                    {canAddInventory && ['LASER', 'BENDING', 'WELDING', 'PAINTING', 'GLAZING'].includes(selectedStageDetail!) && (
                       <button 
                         onClick={async () => {
                           const ok = await checkAdminPermission('thêm tồn kho');
@@ -8842,7 +8848,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                     >
                                       <AlertCircle size={16} />
                                     </button>
-                                    {isAdmin && (
+                                    {canAddInventory && (
                                       <>
                                         <button 
                                           onClick={async (e) => {
@@ -8863,21 +8869,23 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
                                         >
                                           <Edit2 size={16} />
                                         </button>
-                                        <button 
-                                          onClick={async (e) => {
-                                            e.stopPropagation();
-                                            const ok = await checkAdminPermission('xóa linh kiện tồn kho');
-                                            if (!ok) return;
-                                            if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho OUT)?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
-                                              await storageService.deleteInventoryItem(item.partId, selectedStageDetail, 'OUT', item.originalPartId);
-                                              refreshData();
-                                            }
-                                          }}
-                                          className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
-                                          title="Xóa tồn kho"
-                                        >
-                                          <Trash2 size={16} />
-                                        </button>
+                                        {isAdmin && (
+                                          <button 
+                                            onClick={async (e) => {
+                                              e.stopPropagation();
+                                              const ok = await checkAdminPermission('xóa linh kiện tồn kho');
+                                              if (!ok) return;
+                                              if (await customConfirm(`Bạn có chắc chắn muốn xóa tồn kho của ${item.partId} tại ${STAGES.find(s => s.id === selectedStageDetail)?.name} (Kho OUT)?\n\nDữ liệu sẽ được xóa ngay lập tức trên máy chủ Supabase!`)) {
+                                                await storageService.deleteInventoryItem(item.partId, selectedStageDetail, 'OUT', item.originalPartId);
+                                                refreshData();
+                                              }
+                                            }}
+                                            className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-colors cursor-pointer"
+                                            title="Xóa tồn kho"
+                                          >
+                                            <Trash2 size={16} />
+                                          </button>
+                                        )}
                                       </>
                                     )}
                                   </div>
@@ -13081,8 +13089,14 @@ function GlazingComponentPrintCard({ norm, plan, idx, onPrint, onRecordProductio
 
 function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDefectModal, refreshData, labels, onPrint, aggregatedGlazingOut }: any) {
   const inventory = globalInventory || [];
+  const currentUser = storageService.getCurrentUser();
+  const canAddInventory = currentUser?.role === 'ADMIN' || Boolean(currentUser?.canAddInventory);
   const [activeTab, setActiveTab] = useState<'INVENTORY' | 'INBOUND' | 'OUTBOUND' | 'QUICK_PRINT' | 'PLANNING' | 'CONFIG'>('INVENTORY');
   const [showEditInventoryModal, setShowEditInventoryModal] = useState<{ partId: string, quantity: number, stageId: any, location: any } | null>(null);
+  const [showGlazingAddModal, setShowGlazingAddModal] = useState(false);
+  const [glazingAddPartId, setGlazingAddPartId] = useState('');
+  const [glazingAddPartSearch, setGlazingAddPartSearch] = useState('');
+  const [glazingAddQty, setGlazingAddQty] = useState('');
   const [editPassword, setEditPassword] = useState("");
   const [configs, setConfigs] = useState<import('./types').GlazingConfig[]>([]);
   const [outConfigs, setOutConfigs] = useState<import('./types').GlazingOutConfig[]>([]);
@@ -13097,7 +13111,10 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
   };
 
   const handleEditInventory = () => {
-    if (editPassword === 'admin123') {
+    const user = currentUser || storageService.getCurrentUser();
+    const canBypass = user?.role === 'ADMIN' || user?.canAddInventory;
+    const isPwValid = canBypass || editPassword === 'admin123' || (storageService.verifyAdminPassword && storageService.verifyAdminPassword(editPassword, user));
+    if (isPwValid) {
       if (showEditInventoryModal) {
         const { partId, stageId, location, quantity } = showEditInventoryModal;
         storageService.setAbsoluteInventory(partId, stageId, location, quantity);
@@ -14474,10 +14491,20 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
 
         {activeTab === 'INVENTORY' && (
           <div>
-            <h3 className="text-sm sm:text-base md:text-lg font-bold uppercase mb-3 sm:mb-4 flex items-center gap-2">
-              <Boxes size={18} className="text-blue-600" />
-              <span>Tồn kho IN Dán Kính</span>
-            </h3>
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <h3 className="text-sm sm:text-base md:text-lg font-bold uppercase flex items-center gap-2">
+                <Boxes size={18} className="text-blue-600" />
+                <span>Tồn kho IN Dán Kính</span>
+              </h3>
+              {canAddInventory && (
+                <button
+                  onClick={() => setShowGlazingAddModal(true)}
+                  className="text-xs bg-blue-100 text-blue-600 hover:bg-blue-200 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                >
+                  <Plus size={14} /> Thêm tồn
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-4">
               {inventory.filter(i => i.location === 'IN' && i.stageId === 'GLAZING' && i.quantity > 0).map((i, idx) => (
                 <div key={`${i.partId}-${idx}`} className="bg-white p-3 sm:p-4 rounded-xl border border-gray-200 shadow-2xs flex justify-between items-center hover:border-blue-300 transition-all">
@@ -14898,18 +14925,24 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                     className="w-full p-4 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-lg font-bold"
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold uppercase opacity-50">Mật khẩu xác nhận (Admin)</label>
-                  <input 
-                    type="password"
-                    autoComplete="off"
-                    value={editPassword}
-                    onChange={e => setEditPassword(e.target.value)}
-                    className="w-full p-4 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-lg"
-                    placeholder="Nhập mật khẩu..."
-                    onKeyDown={(e) => e.key === 'Enter' && handleEditInventory()}
-                  />
-                </div>
+                {!(currentUser?.role === 'ADMIN' || currentUser?.canAddInventory) ? (
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase opacity-50">Mật khẩu xác nhận (Admin)</label>
+                    <input 
+                      type="password"
+                      autoComplete="off"
+                      value={editPassword}
+                      onChange={e => setEditPassword(e.target.value)}
+                      className="w-full p-4 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-lg"
+                      placeholder="Nhập mật khẩu..."
+                      onKeyDown={(e) => e.key === 'Enter' && handleEditInventory()}
+                    />
+                  </div>
+                ) : (
+                  <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700 font-medium">
+                    ✓ Tài khoản của bạn có quyền chỉnh sửa tồn kho trực tiếp.
+                  </div>
+                )}
               </div>
               <div className="flex gap-3 pt-2">
                 <button 
@@ -14920,13 +14953,106 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
                 </button>
                 <button 
                   onClick={handleEditInventory}
-                  disabled={showEditInventoryModal.quantity < 0 || !editPassword}
+                  disabled={showEditInventoryModal.quantity < 0 || (!(currentUser?.role === 'ADMIN' || currentUser?.canAddInventory) && !editPassword)}
                   className="flex-1 py-4 bg-blue-600 text-white rounded-lg font-bold text-sm uppercase hover:bg-blue-700 transition-all shadow-lg disabled:opacity-50"
                 >
                   Cập nhật
                 </button>
               </div>
             </motion.div>
+          </div>
+        )}
+
+        {/* Modal Thêm Tồn Kho IN Dán Kính */}
+        {showGlazingAddModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+            <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+              <div className="flex items-center justify-between border-b pb-3">
+                <h3 className="font-bold text-base uppercase flex items-center gap-2 text-blue-600">
+                  <Plus size={18} /> Thêm tồn kho IN Dán Kính
+                </h3>
+                <button onClick={() => setShowGlazingAddModal(false)} className="text-gray-400 hover:text-gray-600">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-bold uppercase text-gray-500 mb-1 block">Chọn hoặc nhập mã linh kiện</label>
+                  <input
+                    type="text"
+                    placeholder="Tìm theo mã hoặc tên..."
+                    value={glazingAddPartSearch}
+                    onChange={(e) => {
+                      setGlazingAddPartSearch(e.target.value);
+                      setGlazingAddPartId(e.target.value);
+                    }}
+                    className="w-full p-2.5 border rounded-lg text-sm mb-2"
+                  />
+                  <div className="max-h-40 overflow-y-auto border rounded-lg divide-y bg-gray-50">
+                    {parts
+                      .filter((p: any) => !glazingAddPartSearch || p.id?.toLowerCase().includes(glazingAddPartSearch.toLowerCase()) || (p.name && p.name.toLowerCase().includes(glazingAddPartSearch.toLowerCase())))
+                      .slice(0, 20)
+                      .map((p: any) => (
+                        <div
+                          key={p.id}
+                          onClick={() => {
+                            setGlazingAddPartId(p.id);
+                            setGlazingAddPartSearch(`${p.id} - ${p.name || ''}`);
+                          }}
+                          className={`p-2 text-xs cursor-pointer hover:bg-blue-50 transition-colors ${glazingAddPartId === p.id ? 'bg-blue-100 font-bold text-blue-700' : ''}`}
+                        >
+                          <div className="font-mono">{p.id}</div>
+                          <div className="text-gray-500 truncate">{p.name}</div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-bold uppercase text-gray-500 mb-1 block">Số lượng</label>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Nhập số lượng..."
+                    value={glazingAddQty}
+                    onChange={(e) => setGlazingAddQty(e.target.value)}
+                    className="w-full p-2.5 border rounded-lg text-sm"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => setShowGlazingAddModal(false)}
+                  className="flex-1 py-2.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-bold text-gray-700"
+                >
+                  Hủy
+                </button>
+                <button
+                  onClick={async () => {
+                    const raw = glazingAddPartId || glazingAddPartSearch.trim();
+                    const targetId = raw.includes(' - ') ? raw.split(' - ')[0].trim() : raw.trim();
+                    const qty = Number(glazingAddQty);
+                    if (!targetId || isNaN(qty) || qty <= 0) {
+                      await customAlert('Vui lòng chọn linh kiện và nhập số lượng hợp lệ (> 0).');
+                      return;
+                    }
+                    try {
+                      await storageService.recordManualInbound(targetId, 'GLAZING', 'IN', qty, undefined, true);
+                      await customAlert(`Thành công! Đã thêm ${qty} tồn kho cho "${targetId}" tại Dán Kính (IN).`);
+                      setShowGlazingAddModal(false);
+                      setGlazingAddPartId('');
+                      setGlazingAddPartSearch('');
+                      setGlazingAddQty('');
+                      refreshData();
+                    } catch (err: any) {
+                      await customAlert(err?.message || 'Lỗi thêm tồn kho');
+                    }
+                  }}
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold"
+                >
+                  Xác nhận thêm
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

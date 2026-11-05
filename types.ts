@@ -263,6 +263,7 @@ export interface UserAccount {
   canApproveOddPO?: boolean;
   canViewOwnStageExportedLabels?: boolean; // Cho phép xem tem QR do chính công đoạn mình xuất đi (mặc định: true)
   canViewAllStageLabels?: boolean; // Cho phép xem nhãn QR của tất cả các công đoạn (như Admin)
+  canAddInventory?: boolean; // Cho phép thêm và điều chỉnh tồn kho linh kiện các công đoạn mà không cần mật khẩu Admin
   isActive: boolean;
   createdAt: number;
   lastLoginAt?: number;
