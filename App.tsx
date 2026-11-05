@@ -269,25 +269,69 @@ function getProcessValue(value: string | undefined, part: Part | undefined, stag
   return `${value} - ${suffix}`;
 }
 
+export interface SearchableSelectOption {
+  id: string;
+  label: string;
+  category?: 'STANDARD' | 'RMA' | 'ODD' | 'REPAIR' | string;
+  badge?: string;
+  isFifo?: boolean;
+  dateStr?: string;
+  model?: string;
+  remaining?: number;
+  current?: number;
+  target?: number;
+}
+
+export const getPoCategory = (po: any): 'STANDARD' | 'RMA' | 'ODD' | 'REPAIR' => {
+  if (!po) return 'STANDARD';
+  if (po.id?.startsWith('REPAIR') || (po.note && po.note.includes('Bù'))) {
+    return 'REPAIR';
+  }
+  if (po.isRMA || po.id?.startsWith('PO-RMA') || po.id?.startsWith('RMA') || (po.note && po.note.toUpperCase().includes('RMA'))) {
+    return 'RMA';
+  }
+  if (po.isOddPO || po.id?.startsWith('PO-LE') || (po.note && (po.note.includes('Tồn Lẻ') || po.note.includes('Dư Lẻ')))) {
+    return 'ODD';
+  }
+  return 'STANDARD';
+};
+
 function SearchableSelect({ 
   options, 
   value, 
   onChange, 
   placeholder = "Gõ từ khóa tìm linh kiện / PO...", 
-  className = "" 
+  className = "",
+  tabs,
+  activeTab: externalActiveTab,
+  onTabChange,
+  showFifoNotice = false
 }: { 
-  options: { id: string, label: string }[], 
+  options: (SearchableSelectOption | { id: string; label: string })[], 
   value: string, 
   onChange: (val: string) => void,
   placeholder?: string,
-  className?: string
+  className?: string,
+  tabs?: { id: string; label: string; count?: number; color?: string }[],
+  activeTab?: string,
+  onTabChange?: (tabId: string) => void,
+  showFifoNotice?: boolean
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [internalTab, setInternalTab] = useState<string>(externalActiveTab || (tabs && tabs[0]?.id) || 'ALL');
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const currentTab = externalActiveTab !== undefined ? externalActiveTab : internalTab;
+
+  useEffect(() => {
+    if (externalActiveTab !== undefined) {
+      setInternalTab(externalActiveTab);
+    }
+  }, [externalActiveTab]);
 
   // 1. Debounce mechanism (200ms delay) to prevent UI lag during typing
   useEffect(() => {
@@ -297,29 +341,40 @@ function SearchableSelect({
     return () => clearTimeout(timer);
   }, [search]);
 
+  // Filter options by current active tab (if tabs are provided)
+  const tabFilteredOptions = useMemo(() => {
+    if (!tabs || tabs.length === 0 || !currentTab || currentTab === 'ALL') {
+      return options as SearchableSelectOption[];
+    }
+    return (options as SearchableSelectOption[]).filter(opt => opt.category === currentTab);
+  }, [options, tabs, currentTab]);
+
   // 2. Pre-index options in RAM memory ONCE when options change (0ms string allocation per keystroke)
   const preindexedOptions = useMemo(() => {
-    const searchableItems = options.map(opt => ({
+    const searchableItems = tabFilteredOptions.map(opt => ({
       id: opt.id,
       label: opt.label,
-      code: opt.id
+      code: opt.id,
+      model: opt.model || ''
     }));
-    return buildSearchIndex(searchableItems, ['id', 'label', 'code']);
-  }, [options]);
+    return buildSearchIndex(searchableItems, ['id', 'label', 'code', 'model']);
+  }, [tabFilteredOptions]);
 
   // 3. Fast search lookup over pre-indexed RAM cache
   const filteredOptions = useMemo(() => {
-    if (!debouncedSearch.trim()) return options;
+    if (!debouncedSearch.trim()) return tabFilteredOptions;
     const matchedItems = searchIndexedItems(debouncedSearch, preindexedOptions);
-    return matchedItems.map(item => ({ id: item.id, label: item.label }));
-  }, [options, preindexedOptions, debouncedSearch]);
+    return matchedItems.map(item => {
+      return tabFilteredOptions.find(o => o.id === item.id) || { id: item.id, label: item.label };
+    });
+  }, [tabFilteredOptions, preindexedOptions, debouncedSearch]);
 
   const selectedOption = useMemo(() => options.find(opt => opt.id === value), [options, value]);
   const displayedOptions = useMemo(() => filteredOptions.slice(0, 80), [filteredOptions]);
 
   useEffect(() => {
     setHighlightedIndex(0);
-  }, [search]);
+  }, [search, currentTab]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -374,9 +429,35 @@ function SearchableSelect({
       >
         <div className="flex items-center gap-2.5 truncate min-w-0 pr-2">
           <Search size={18} className="text-blue-600 shrink-0" />
-          <span className={selectedOption ? "text-gray-900 truncate" : "text-gray-400 font-normal truncate"}>
-            {selectedOption ? selectedOption.label : placeholder}
-          </span>
+          {selectedOption ? (
+            <div className="flex items-center gap-2 truncate">
+              {(selectedOption as SearchableSelectOption).category === 'REPAIR' && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-red-100 text-red-700 shrink-0">
+                  🛠️ Bù
+                </span>
+              )}
+              {(selectedOption as SearchableSelectOption).category === 'RMA' && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-purple-100 text-purple-700 shrink-0">
+                  ⚡ RMA
+                </span>
+              )}
+              {(selectedOption as SearchableSelectOption).category === 'ODD' && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-amber-100 text-amber-800 shrink-0">
+                  📋 Dư lẻ
+                </span>
+              )}
+              {(selectedOption as SearchableSelectOption).isFifo && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 shrink-0">
+                  ⚡ FIFO
+                </span>
+              )}
+              <span className="text-gray-900 truncate">
+                {selectedOption.label}
+              </span>
+            </div>
+          ) : (
+            <span className="text-gray-400 font-normal truncate">{placeholder}</span>
+          )}
         </div>
         <ChevronDown size={20} className={cn("text-gray-400 transition-transform shrink-0", isOpen && "rotate-180")} />
       </div>
@@ -388,10 +469,10 @@ function SearchableSelect({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.98 }}
             transition={{ duration: 0.15 }}
-            className="absolute z-[120] left-0 right-0 mt-2 bg-white border-2 border-blue-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[380px] sm:max-h-[420px]"
+            className="absolute z-[120] left-0 right-0 mt-2 bg-white border-2 border-blue-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[380px] sm:max-h-[440px]"
           >
             {/* Search Input Header */}
-            <div className="p-3 border-b border-gray-100 bg-gray-50/90 backdrop-blur-xs sticky top-0 z-10">
+            <div className="p-3 border-b border-gray-100 bg-gray-50/95 backdrop-blur-xs sticky top-0 z-10 space-y-2">
               <div className="relative flex items-center">
                 <Search size={18} className="absolute left-3.5 text-blue-600 shrink-0" />
                 <input 
@@ -402,7 +483,7 @@ function SearchableSelect({
                   onChange={(e) => setSearch(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="Gõ từ khóa không dấu (VD: 'sha 766', 'tan tu', '001')..."
-                  className="w-full pl-10 pr-9 py-3 rounded-xl border-2 border-blue-400 bg-white text-sm sm:text-base font-bold outline-none focus:ring-4 ring-blue-500/20 shadow-xs placeholder:text-gray-400 placeholder:font-normal"
+                  className="w-full pl-10 pr-9 py-2.5 sm:py-3 rounded-xl border-2 border-blue-400 bg-white text-xs sm:text-base font-bold outline-none focus:ring-4 ring-blue-500/20 shadow-xs placeholder:text-gray-400 placeholder:font-normal"
                 />
                 {search && (
                   <button
@@ -414,16 +495,72 @@ function SearchableSelect({
                   </button>
                 )}
               </div>
-              <div className="flex justify-between items-center mt-2 px-1 text-[11px] font-bold text-gray-500">
-                <span>Gợi ý ({filteredOptions.length} kết quả)</span>
-                <span className="text-blue-600 font-mono text-[10px]">Tự động sắp xếp theo độ khớp</span>
+
+              {/* TABS (Ảnh 2: Phân tab PO Bù, Dư lẻ, Chính đỡ loạn) */}
+              {tabs && tabs.length > 0 && (
+                <div className="flex bg-gray-200/80 p-1 rounded-xl gap-1 overflow-x-auto no-scrollbar">
+                  {tabs.map(tab => {
+                    const isTabActive = currentTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setInternalTab(tab.id);
+                          if (onTabChange) onTabChange(tab.id);
+                        }}
+                        className={cn(
+                          "px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-lg font-bold text-[11px] sm:text-xs transition-all shrink-0 cursor-pointer flex items-center gap-1.5 whitespace-nowrap",
+                          isTabActive
+                            ? (tab.id === 'REPAIR' 
+                                ? "bg-white text-red-600 shadow-sm" 
+                                : tab.id === 'RMA'
+                                  ? "bg-white text-purple-700 shadow-sm"
+                                  : tab.id === 'ODD'
+                                    ? "bg-white text-amber-700 shadow-sm"
+                                    : tab.id === 'STANDARD'
+                                      ? "bg-white text-blue-700 shadow-sm"
+                                      : "bg-white text-gray-900 shadow-sm")
+                            : "text-gray-600 hover:text-gray-900 hover:bg-white/40"
+                        )}
+                      >
+                        <span>{tab.label}</span>
+                        {typeof tab.count === 'number' && (
+                          <span className={cn(
+                            "px-1.5 py-0.2 rounded-full text-[10px] font-mono",
+                            isTabActive
+                              ? (tab.id === 'REPAIR' ? "bg-red-100 text-red-700" : tab.id === 'RMA' ? "bg-purple-100 text-purple-700" : tab.id === 'ODD' ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-700")
+                              : "bg-gray-300/70 text-gray-600"
+                          )}>
+                            {tab.count}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="flex justify-between items-center px-1 text-[11px] font-bold text-gray-500">
+                <div className="flex items-center gap-1.5">
+                  <span>Gợi ý ({filteredOptions.length} kết quả)</span>
+                  {showFifoNotice && (
+                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
+                      ⚡ FIFO: Cũ nhất lên đầu
+                    </span>
+                  )}
+                </div>
+                <span className="text-blue-600 font-mono text-[10px]">
+                  {search ? 'Tự động sắp xếp theo độ khớp' : 'Ưu tiên FIFO cũ nhất'}
+                </span>
               </div>
             </div>
 
             {/* Suggestions List */}
-            <div className="overflow-y-auto flex-1 divide-y divide-gray-100">
+            <div className="overflow-y-auto flex-1 divide-y divide-gray-100 max-h-[300px]">
               {displayedOptions.length > 0 ? (
-                displayedOptions.map((opt, idx) => {
+                displayedOptions.map((opt: any, idx) => {
                   const isSelected = value === opt.id;
                   const isHighlighted = idx === highlightedIndex;
 
@@ -433,7 +570,7 @@ function SearchableSelect({
                       onClick={() => handleSelect(opt.id)}
                       onMouseEnter={() => setHighlightedIndex(idx)}
                       className={cn(
-                        "p-3.5 px-4 cursor-pointer transition-colors flex items-center justify-between gap-3 text-left",
+                        "p-3 sm:p-3.5 px-4 cursor-pointer transition-colors flex items-center justify-between gap-3 text-left",
                         isSelected
                           ? "bg-blue-50 text-blue-900 font-bold"
                           : isHighlighted
@@ -442,12 +579,48 @@ function SearchableSelect({
                       )}
                     >
                       <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                          {opt.category === 'REPAIR' && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-red-100 text-red-700 border border-red-200">
+                              🛠️ Kế hoạch bù
+                            </span>
+                          )}
+                          {opt.category === 'RMA' && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-purple-100 text-purple-700 border border-purple-200">
+                              ⚡ Kế hoạch RMA
+                            </span>
+                          )}
+                          {opt.category === 'ODD' && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-200">
+                              📋 PO Dư lẻ
+                            </span>
+                          )}
+                          {opt.category === 'STANDARD' && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-800 border border-blue-200">
+                              Sản xuất chính
+                            </span>
+                          )}
+
+                          {opt.isFifo && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1 shadow-2xs">
+                              ⚡ FIFO ƯU TIÊN (CŨ NHẤT)
+                            </span>
+                          )}
+
+                          {opt.dateStr && (
+                            <span className="text-[10px] text-gray-400 font-mono">
+                              📅 {opt.dateStr}
+                            </span>
+                          )}
+                        </div>
+
                         <div className="text-xs sm:text-sm font-bold text-gray-900 leading-snug">
                           {opt.label}
                         </div>
                         {opt.id !== opt.label && (
-                          <div className="text-[11px] font-mono text-gray-500 mt-0.5">
-                            Mã: <span className="font-bold text-blue-700">{opt.id}</span>
+                          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-gray-500 font-mono flex-wrap">
+                            <span>Mã: <strong className="text-blue-700">{opt.id}</strong></span>
+                            {opt.model && <span>| Model: <strong className="text-gray-700">{opt.model}</strong></span>}
                           </div>
                         )}
                       </div>
@@ -463,7 +636,11 @@ function SearchableSelect({
               ) : (
                 <div className="p-8 text-center text-gray-400 text-xs sm:text-sm font-medium flex flex-col items-center justify-center gap-2">
                   <AlertCircle size={24} className="text-gray-300" />
-                  <span>Không tìm thấy kết quả phù hợp với từ khóa "{search}"</span>
+                  <span>
+                    {search 
+                      ? `Không tìm thấy kết quả phù hợp với từ khóa "${search}"` 
+                      : `Không có Lệnh PO nào trong nhóm ${tabs?.find(t => t.id === currentTab)?.label || 'này'}`}
+                  </span>
                 </div>
               )}
               {filteredOptions.length > 80 && (
@@ -2641,7 +2818,8 @@ function PORollbackModal({ parts, currentUser, onClose, onRestored }: PORollback
 
 function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOddPO, currentUser }: { parts: Part[], onUpdate: () => void, productionOrders: ProductionOrder[], onNavigateToOddPO?: () => void, currentUser?: UserAccount | null }) {
   const [orders, setOrders] = useState<ProductionOrder[]>(productionOrders);
-  const [activeTab, setActiveTab] = useState<'STANDARD' | 'ODD' | 'REPAIR'>('STANDARD');
+  const [activeTab, setActiveTab] = useState<'STANDARD' | 'RMA' | 'ODD' | 'REPAIR'>('STANDARD');
+  const [isRMA, setIsRMA] = useState(false);
   const [selectedPart, setSelectedPart] = useState("");
   const [quantity, setQuantity] = useState(0);
   const [targetCompletion, setTargetCompletion] = useState("");
@@ -2847,13 +3025,29 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
     
     try {
       const endTs = targetCompletion ? new Date(targetCompletion).getTime() : Date.now();
-      const createdMaster = await storageService.createMasterPO(selectedPart, quantity, endTs);
+      const wasRMA = isRMA;
+      const createdMaster = await storageService.createMasterPO(
+        selectedPart, 
+        quantity, 
+        endTs, 
+        undefined, 
+        wasRMA ? 'PO-RMA' : 'PO', 
+        undefined, 
+        undefined, 
+        wasRMA ? 'Kế hoạch RMA' : undefined, 
+        undefined, 
+        wasRMA
+      );
       // OPTIMISTIC INSTANT UPDATE: Cập nhật giao diện ngay lập tức 0ms lag
       onUpdate();
       setSelectedPart("");
       setQuantity(0);
+      if (wasRMA) {
+        setActiveTab('RMA');
+        setIsRMA(false);
+      }
       setPoFeedback({
-        message: `✓ Đã tạo thành công Lệnh PO [${createdMaster.id}] với toàn bộ PO con sinh ra đầy đủ! Đang đồng bộ siêu tốc lên Supabase.`,
+        message: `✓ Đã tạo thành công Lệnh PO [${createdMaster.id}] (${wasRMA ? 'Kế hoạch RMA' : 'Sản xuất chính'}) với toàn bộ PO con sinh ra đầy đủ! Đang đồng bộ siêu tốc lên Supabase.`,
         type: 'success'
       });
       setTimeout(() => setPoFeedback(null), 6000);
@@ -2914,7 +3108,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
 
   const statusCounts = useMemo(() => {
     const counts = { ALL: 0, PENDING: 0, IN_PROGRESS: 0, PAUSED: 0, COMPLETED: 0 };
-    masterOrders.filter(o => activeTab === 'REPAIR' ? o.id.startsWith('REPAIR') : !o.id.startsWith('REPAIR')).forEach(master => {
+    masterOrders.filter(o => getPoCategory(o) === activeTab).forEach(master => {
       let overallStatus = master.status;
       if (master.id.startsWith('REPAIR')) {
           const subOrders = subOrdersByMasterId.get(master.id) || [];
@@ -2929,11 +3123,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
   }, [masterOrders, activeTab, subOrdersByMasterId]);
 
   const filteredMasterOrders = useMemo(() => {
-    return masterOrders.filter(o => {
-      if (activeTab === 'REPAIR') return o.id.startsWith('REPAIR');
-      if (activeTab === 'ODD') return Boolean(o.isOddPO || o.id.startsWith('PO-LE') || (o.note && (o.note.includes('Tồn Lẻ') || o.note.includes('Dư Lẻ'))));
-      return !o.id.startsWith('REPAIR') && !o.isOddPO && !o.id.startsWith('PO-LE') && !(o.note && (o.note.includes('Tồn Lẻ') || o.note.includes('Dư Lẻ')));
-    }).filter(master => {
+    return masterOrders.filter(o => getPoCategory(o) === activeTab).filter(master => {
       if (statusFilter === 'ALL') return true;
       const subOrders = subOrdersByMasterId.get(master.id) || [];
       let overallStatus = master.status;
@@ -3088,6 +3278,27 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
                 className="w-full p-5 rounded-xl border-2 border-gray-100 font-bold text-lg focus:border-blue-600 outline-none"
                 placeholder="Nhập số lượng..."
               />
+              <div className="pt-2">
+                <label className="inline-flex items-center gap-2 cursor-pointer select-none group">
+                  <input 
+                    type="checkbox"
+                    checked={isRMA}
+                    onChange={e => setIsRMA(e.target.checked)}
+                    className="w-5 h-5 rounded-md border-2 border-purple-400 text-purple-600 focus:ring-purple-500 cursor-pointer accent-purple-600"
+                  />
+                  <span className={cn(
+                    "text-xs sm:text-sm font-bold transition-colors",
+                    isRMA ? "text-purple-700 font-extrabold" : "text-gray-600 group-hover:text-gray-900"
+                  )}>
+                    Kế hoạch RMA
+                  </span>
+                  {isRMA && (
+                    <span className="text-[10px] font-black uppercase bg-purple-100 text-purple-700 border border-purple-200 px-1.5 py-0.5 rounded">
+                      Tab RMA
+                    </span>
+                  )}
+                </label>
+              </div>
             </div>
           </div>
 
@@ -3130,7 +3341,7 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
         <div className="p-8 border-b border-gray-100 flex flex-col md:flex-row justify-between items-center gap-6">
           <div className="flex flex-col gap-4">
             <h2 className="text-2xl font-bold">Danh sách Lệnh Sản Xuất</h2>
-            <div className="flex bg-gray-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar whitespace-nowrap">
+            <div className="flex bg-gray-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar whitespace-nowrap gap-1">
               <button
                 onClick={() => setActiveTab('STANDARD')}
                 className={cn(
@@ -3141,6 +3352,17 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
                 )}
               >
                 Sản xuất chính
+              </button>
+              <button
+                onClick={() => setActiveTab('RMA')}
+                className={cn(
+                  "px-3 sm:px-6 py-1.5 sm:py-2 rounded-lg font-bold text-xs sm:text-sm uppercase transition-all shrink-0 cursor-pointer",
+                  activeTab === 'RMA' 
+                    ? "bg-white text-purple-700 shadow-sm font-black" 
+                    : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                RMA
               </button>
               <button
                 onClick={() => setActiveTab('ODD')}
@@ -10141,9 +10363,44 @@ function ProduceView({
   const [targetStageId, setTargetStageId] = useState<StageId>(
     (STAGES.find(s => s.id === selectedStage)?.nextStageId || STAGES[0].id) as StageId
   );
+  const [poTab, setPoTab] = useState<'STANDARD' | 'RMA' | 'ODD' | 'REPAIR'>('STANDARD');
+
+  // Helper to get creation timestamp of PO
+  const getPoTimestamp = (po: any): number => {
+    if (po.createdAt && po.createdAt > 0) return po.createdAt;
+    if (po.masterPoId) {
+      const master = productionOrders.find((p: any) => p.id === po.masterPoId);
+      if (master?.createdAt && master.createdAt > 0) return master.createdAt;
+    }
+    if (po.plannedStartTime && po.plannedStartTime > 0) return po.plannedStartTime;
+    if (po.excelRequiredDate && po.excelRequiredDate > 0) return po.excelRequiredDate;
+    const match = po.id.match(/-(\d{2})(\d{2})-/);
+    if (match) {
+      const day = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1;
+      const yr = new Date().getFullYear();
+      return new Date(yr, month, day).getTime();
+    }
+    return 0;
+  };
+
+  // Helper to extract Model ID for a PO
+  const getPoModel = (po: any): string => {
+    if (po.masterPoId) {
+      const master = productionOrders.find((p: any) => p.id === po.masterPoId);
+      if (master?.partId) return master.partId;
+    }
+    const match = po.id.match(/^(?:PO|REPAIR)-([A-Z0-9_\-]+?)-\d{4}-/i);
+    if (match && match[1] && match[1] !== 'LE') return match[1];
+    const modelBoms = storageService.getModelBOM();
+    const b = modelBoms.find((x: any) => x.partId === po.partId);
+    if (b) return b.modelId;
+    return po.partId;
+  };
+
 
   const allAvailablePos = useMemo(() => {
-    return productionOrders.filter(p => {
+    const valid = productionOrders.filter((p: any) => {
       if (p.stageId !== selectedStage || p.status === 'COMPLETED' || p.status === 'PENDING_APPROVAL' || p.status === 'REJECTED') return false;
       
       if (sourceLocation === 'IN') {
@@ -10153,7 +10410,79 @@ function ProduceView({
         return (p.exportedQuantity || 0) < p.targetQuantity;
       }
     });
+
+    // Compute earliest timestamp per model so models with older pending POs are prioritized
+    const modelEarliestTime = new Map<string, number>();
+    valid.forEach((p: any) => {
+      const model = getPoModel(p);
+      const t = getPoTimestamp(p);
+      const prev = modelEarliestTime.get(model);
+      if (prev === undefined || (t > 0 && t < prev)) {
+        modelEarliestTime.set(model, t);
+      }
+    });
+
+    // FIFO SORTING:
+    // "Các PO trong cùng 1 model tạo lâu nhất (cũ nhất) chưa hoàn thành phải được đưa lên top đầu danh sách để làm dứt điểm, tránh trễ hạn, thay vì xếp PO mới lên trên."
+    return [...valid].sort((a: any, b: any) => {
+      const modelA = getPoModel(a);
+      const modelB = getPoModel(b);
+
+      if (modelA === modelB) {
+        // Trong cùng 1 model: PO tạo lâu nhất (cũ nhất - timestamp nhỏ nhất) được đưa lên ĐẦU!
+        const tA = getPoTimestamp(a);
+        const tB = getPoTimestamp(b);
+        if (tA !== tB) {
+          if (tA === 0) return 1;
+          if (tB === 0) return -1;
+          return tA - tB;
+        }
+        return a.id.localeCompare(b.id);
+      }
+
+      // Khác model: Model có PO tồn đọng cũ nhất được đưa lên trước
+      const modelTimeA = modelEarliestTime.get(modelA) || 0;
+      const modelTimeB = modelEarliestTime.get(modelB) || 0;
+      if (modelTimeA !== modelTimeB) {
+        if (modelTimeA === 0) return 1;
+        if (modelTimeB === 0) return -1;
+        return modelTimeA - modelTimeB;
+      }
+
+      return modelA.localeCompare(modelB);
+    });
   }, [selectedStage, sourceLocation, productionOrders]);
+
+  const poTabCounts = useMemo(() => {
+    let standard = 0;
+    let rma = 0;
+    let odd = 0;
+    let repair = 0;
+    allAvailablePos.forEach((p: any) => {
+      const cat = getPoCategory(p);
+      if (cat === 'REPAIR') repair++;
+      else if (cat === 'RMA') rma++;
+      else if (cat === 'ODD') odd++;
+      else standard++;
+    });
+    return {
+      STANDARD: standard,
+      RMA: rma,
+      ODD: odd,
+      REPAIR: repair
+    };
+  }, [allAvailablePos]);
+
+  const poTabs = useMemo(() => [
+    { id: 'STANDARD', label: 'Sản xuất chính', count: poTabCounts.STANDARD },
+    { id: 'RMA', label: 'RMA', count: poTabCounts.RMA },
+    { id: 'ODD', label: 'PO Dư Lẻ', count: poTabCounts.ODD },
+    { id: 'REPAIR', label: 'Kế hoạch bù (Repair)', count: poTabCounts.REPAIR },
+  ], [poTabCounts]);
+
+  const tabFilteredPos = useMemo(() => {
+    return allAvailablePos.filter((p: any) => getPoCategory(p) === poTab);
+  }, [allAvailablePos, poTab]);
 
   const partsMap = useMemo(() => new Map<string, any>(parts.map((p: any) => [p.id, p])), [parts]);
 
@@ -10222,17 +10551,62 @@ function ProduceView({
   }, [parts, inventory, selectedStage, sourceLocation, selectedPoId, allAvailablePos, partsMap]);
 
   const availablePoOptions = useMemo(() => {
-    return allAvailablePos.map(po => {
+    // 1. Identify which PO is the oldest unfinished PO for each model
+    const oldestPoInModel = new Set<string>();
+    const modelSeen = new Set<string>();
+    allAvailablePos.forEach((p: any) => {
+      const model = getPoModel(p);
+      if (!modelSeen.has(model)) {
+        modelSeen.add(model);
+        oldestPoInModel.add(p.id);
+      }
+    });
+
+    // 2. Identify the oldest unfinished PO for the selected part
+    let oldestPoForSelectedPart: string | null = null;
+    for (const p of allAvailablePos) {
+      if (p.partId === selectedPart) {
+        oldestPoForSelectedPart = p.id;
+        break; // First one in allAvailablePos is already the oldest due to FIFO sort!
+      }
+    }
+
+    // 3. Sort: If selectedPart is set: POs matching selectedPart come first!
+    // And within each group, strict FIFO order is preserved.
+    const sortedPos = [...allAvailablePos].sort((a: any, b: any) => {
+      if (selectedPart) {
+        const aMatch = a.partId === selectedPart;
+        const bMatch = b.partId === selectedPart;
+        if (aMatch && !bMatch) return -1;
+        if (!aMatch && bMatch) return 1;
+      }
+      return 0; // maintain relative FIFO order
+    });
+
+    return sortedPos.map((po: any) => {
       const poPart = partsMap.get(po.partId);
       const isCurrentPart = po.partId === selectedPart;
       const currentQty = sourceLocation === 'IN' ? po.producedQuantity : (po.exportedQuantity || 0);
       const rem = Math.max(0, po.targetQuantity - currentQty);
+      const isOldest = po.id === oldestPoForSelectedPart || oldestPoInModel.has(po.id);
+      const category = getPoCategory(po);
+      const ts = getPoTimestamp(po);
+      const dateStr = ts > 0 ? format(new Date(ts), 'dd/MM HH:mm') : '';
+      const model = getPoModel(po);
+
       return {
         id: po.id,
-        label: `${isCurrentPart ? '★ ' : ''}${po.id.startsWith('REPAIR') ? '🛠️ [BÙ] ' : ''}${po.id} - ${getProcessValue(poPart?.name || po.partId, poPart, selectedStage, sourceLocation)} (${currentQty}/${po.targetQuantity} - Còn: ${rem})`
+        label: `${isCurrentPart ? '★ ' : ''}${isOldest ? '⚡ ' : ''}${po.id.startsWith('REPAIR') ? '🛠️ [BÙ] ' : ''}${po.id} - ${getProcessValue(poPart?.name || po.partId, poPart, selectedStage, sourceLocation)} (${currentQty}/${po.targetQuantity} - Còn: ${rem})`,
+        category,
+        isFifo: isOldest,
+        dateStr,
+        model,
+        remaining: rem,
+        current: currentQty,
+        target: po.targetQuantity
       };
     });
-  }, [allAvailablePos, partsMap, selectedPart, selectedStage, sourceLocation]);
+  }, [allAvailablePos, partsMap, selectedPart, selectedStage, sourceLocation, productionOrders]);
 
   const filteredPartOptions = useMemo(() => {
     return filteredParts.map((p: any) => ({ 
@@ -10241,7 +10615,9 @@ function ProduceView({
     }));
   }, [filteredParts, selectedStage, sourceLocation]);
 
-  const availablePos = allAvailablePos.filter(p => p.partId === selectedPart);
+  const availablePos = useMemo(() => {
+    return tabFilteredPos.filter((p: any) => p.partId === selectedPart);
+  }, [tabFilteredPos, selectedPart]);
 
   // Check if selected part is in Glazing incoming configuration FOR THIS CURRENT STAGE
   const matchedGlazingConfig = useMemo(() => {
@@ -10264,11 +10640,45 @@ function ProduceView({
 
   const isGlazingPart = Boolean(matchedGlazingConfig);
 
+  // Tab change handler for POs
+  const handlePoTabChange = (newTab: 'STANDARD' | 'RMA' | 'ODD' | 'REPAIR') => {
+    setPoTab(newTab);
+
+    if (selectedPoId) {
+      const curr = allAvailablePos.find((p: any) => p.id === selectedPoId);
+      if (curr && getPoCategory(curr) === newTab) {
+        return;
+      }
+    }
+
+    const candidates = allAvailablePos.filter((p: any) => getPoCategory(p) === newTab);
+    if (candidates.length === 0) return;
+
+    const matchPart = candidates.find((p: any) => p.partId === selectedPart);
+    if (matchPart) {
+      setSelectedPoId(matchPart.id);
+    } else {
+      handlePoChange(candidates[0].id);
+    }
+  };
+
   // Handlers for selection
   const handlePartChange = (partId: string) => {
     setSelectedPart(partId);
-    const pos = allAvailablePos.filter(p => p.partId === partId);
-    setSelectedPoId(pos.length > 0 ? pos[0].id : "");
+    // Find candidate PO in current tab first, or in all
+    const posInTab = tabFilteredPos.filter((p: any) => p.partId === partId);
+    const posAll = allAvailablePos.filter((p: any) => p.partId === partId);
+    const candidate = posInTab.length > 0 ? posInTab[0] : (posAll.length > 0 ? posAll[0] : null);
+
+    if (candidate) {
+      setSelectedPoId(candidate.id);
+      const candCat = getPoCategory(candidate);
+      if (candCat !== poTab) {
+        setPoTab(candCat);
+      }
+    } else {
+      setSelectedPoId("");
+    }
 
     const cleanId = partId.startsWith('GLZ-OUT-') ? partId.trim().toUpperCase() : partId.split(' - ')[0].trim().toUpperCase();
     const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
@@ -10293,23 +10703,29 @@ function ProduceView({
     setSelectedPoId(poId);
     if (poId) {
       const po = allAvailablePos.find(p => p.id === poId);
-      if (po && po.partId !== selectedPart) {
-        setSelectedPart(po.partId);
-        const cleanId = po.partId.split(' - ')[0].trim().toUpperCase();
-        const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
-        const glazingConfigs = storageService.getGlazingConfigs();
-        const isGlzThisStage = glazingConfigs.some(c => 
-          c.sourceStageId === selectedStage && (
-            c.partId.trim().toUpperCase() === cleanId || 
-            (partObj?.name && c.partName && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
-          )
-        );
-        if (sourceLocation === 'OUT') {
-          if (isGlzThisStage && selectedStage !== 'GLAZING') {
-            setTargetStageId('GLAZING');
-          } else {
-            const standardNext = (STAGES.find(s => s.id === selectedStage)?.nextStageId || 'BENDING') as StageId;
-            setTargetStageId(standardNext);
+      if (po) {
+        const cat = getPoCategory(po);
+        if (poTab !== cat) {
+          setPoTab(cat);
+        }
+        if (po.partId !== selectedPart) {
+          setSelectedPart(po.partId);
+          const cleanId = po.partId.split(' - ')[0].trim().toUpperCase();
+          const partObj = parts.find((p: any) => p.id.toUpperCase() === cleanId);
+          const glazingConfigs = storageService.getGlazingConfigs();
+          const isGlzThisStage = glazingConfigs.some(c => 
+            c.sourceStageId === selectedStage && (
+              c.partId.trim().toUpperCase() === cleanId || 
+              (partObj?.name && c.partName && c.partName.trim().toUpperCase() === partObj.name.trim().toUpperCase())
+            )
+          );
+          if (sourceLocation === 'OUT') {
+            if (isGlzThisStage && selectedStage !== 'GLAZING') {
+              setTargetStageId('GLAZING');
+            } else {
+              const standardNext = (STAGES.find(s => s.id === selectedStage)?.nextStageId || 'BENDING') as StageId;
+              setTargetStageId(standardNext);
+            }
           }
         }
       }
@@ -10399,8 +10815,30 @@ function ProduceView({
           )}>
             <div className="flex justify-between items-center">
               <div>
-                <div className="text-[11px] sm:text-xs font-bold uppercase text-blue-600 tracking-wider">Lệnh PO đã chọn</div>
-                <div className="font-mono font-bold text-blue-900 text-sm sm:text-lg flex items-center gap-1.5 sm:gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] sm:text-xs font-bold uppercase text-blue-600 tracking-wider">Lệnh PO đã chọn</span>
+                  {getPoCategory(activePo) === 'REPAIR' && (
+                    <span className="text-[10px] bg-red-100 text-red-800 border border-red-200 px-2 py-0.2 rounded-full font-bold">
+                      🛠️ Kế hoạch bù
+                    </span>
+                  )}
+                  {getPoCategory(activePo) === 'RMA' && (
+                    <span className="text-[10px] bg-purple-100 text-purple-800 border border-purple-200 px-2 py-0.2 rounded-full font-bold">
+                      ⚡ Kế hoạch RMA
+                    </span>
+                  )}
+                  {getPoCategory(activePo) === 'ODD' && (
+                    <span className="text-[10px] bg-amber-100 text-amber-900 border border-amber-200 px-2 py-0.2 rounded-full font-bold">
+                      📋 PO Dư lẻ
+                    </span>
+                  )}
+                  {getPoCategory(activePo) === 'STANDARD' && (
+                    <span className="text-[10px] bg-blue-100 text-blue-800 border border-blue-200 px-2 py-0.2 rounded-full font-bold">
+                      Sản xuất chính
+                    </span>
+                  )}
+                </div>
+                <div className="font-mono font-bold text-blue-900 text-sm sm:text-lg flex items-center gap-1.5 sm:gap-2 mt-0.5">
                   <span>{activePo.id}</span>
                   {activePo.id.startsWith('REPAIR') && (
                     <span className="text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded font-sans font-bold">LỆNH BÙ</span>
@@ -10418,8 +10856,19 @@ function ProduceView({
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-1.5 pt-2 border-t border-blue-200/60 text-xs">
-              <div className="font-medium text-gray-700 text-xs">
-                Còn lại theo PO: <span className="font-mono font-bold text-blue-900 text-sm">{poRemaining}</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="font-medium text-gray-700 text-xs">
+                  Còn lại theo PO: <span className="font-mono font-bold text-blue-900 text-sm">{poRemaining}</span>
+                </div>
+                {(() => {
+                  const ts = getPoTimestamp(activePo);
+                  return ts > 0 ? (
+                    <span className="text-[10px] font-medium text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md flex items-center gap-1 font-mono">
+                      <Sparkles size={11} className="text-emerald-600" />
+                      FIFO: Tạo ngày {format(new Date(ts), 'dd/MM HH:mm')}
+                    </span>
+                  ) : null;
+                })()}
               </div>
               {isOverPo ? (
                 <div className="flex items-center gap-1.5 text-red-800 font-bold bg-red-100 border border-red-300 px-2 py-0.5 rounded-lg text-[11px]">
@@ -10507,20 +10956,64 @@ function ProduceView({
           </div>
 
           {allAvailablePos.length > 0 && (
-            <div className="space-y-1.5 sm:space-y-3">
-              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1">
-                <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">3. Chọn Lệnh PO (Ràng buộc tiến độ)</label>
+            <div className="space-y-2">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="text-xs sm:text-sm font-bold uppercase tracking-wider text-gray-700">3. Chọn Lệnh PO (Ràng buộc tiến độ)</label>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Sparkles size={11} className="text-emerald-600" />
+                    FIFO: Cũ nhất làm trước
+                  </span>
+                </div>
                 {availablePos.length > 1 && (
                   <span className="text-[10px] sm:text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-md self-start sm:self-auto">
                     Linh kiện nằm trong {availablePos.length} PO khác nhau
                   </span>
                 )}
               </div>
+
+              {/* Quick Tab Selection (Ảnh 2: Phân tab PO Bù, Dư lẻ, Chính đỡ loạn) */}
+              <div className="flex bg-gray-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar gap-1">
+                {poTabs.map(tab => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => handlePoTabChange(tab.id as any)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg font-bold text-xs transition-all shrink-0 cursor-pointer flex items-center gap-1.5 whitespace-nowrap",
+                      poTab === tab.id
+                        ? (tab.id === 'REPAIR' 
+                            ? "bg-white text-red-600 shadow-sm" 
+                            : tab.id === 'RMA'
+                              ? "bg-white text-purple-700 shadow-sm font-bold"
+                              : tab.id === 'ODD'
+                                ? "bg-white text-amber-700 shadow-sm"
+                                : "bg-white text-blue-700 shadow-sm")
+                        : "text-gray-500 hover:text-gray-800"
+                    )}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={cn(
+                      "px-1.5 py-0.2 rounded-full text-[10px] font-mono",
+                      poTab === tab.id
+                        ? (tab.id === 'REPAIR' ? "bg-red-100 text-red-700" : tab.id === 'RMA' ? "bg-purple-100 text-purple-700" : tab.id === 'ODD' ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-700")
+                        : "bg-gray-200 text-gray-600"
+                    )}>
+                      {tab.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
               <SearchableSelect 
                 options={availablePoOptions}
                 value={selectedPoId}
                 onChange={handlePoChange}
                 placeholder="Tìm và chọn đúng Lệnh PO..."
+                tabs={poTabs}
+                activeTab={poTab}
+                onTabChange={handlePoTabChange}
+                showFifoNotice={true}
               />
             </div>
           )}
@@ -10705,16 +11198,110 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
   const [manualPart, setManualPart] = useState('');
   const [manualQty, setManualQty] = useState(0);
   const [selectedPoId, setSelectedPoId] = useState<string>("");
+  const [poTab, setPoTab] = useState<'STANDARD' | 'RMA' | 'ODD' | 'REPAIR'>('STANDARD');
   const [lastScanned, setLastScanned] = useState<any>(null);
 
   const selectedStage = 'WELDING';
   const targetLocation = 'OUT';
 
+  const getPoTimestamp = (po: any): number => {
+    if (po.createdAt && po.createdAt > 0) return po.createdAt;
+    if (po.masterPoId) {
+      const master = (productionOrders || []).find((p: any) => p.id === po.masterPoId);
+      if (master?.createdAt && master.createdAt > 0) return master.createdAt;
+    }
+    if (po.plannedStartTime && po.plannedStartTime > 0) return po.plannedStartTime;
+    if (po.excelRequiredDate && po.excelRequiredDate > 0) return po.excelRequiredDate;
+    const match = po.id.match(/-(\d{2})(\d{2})-/);
+    if (match) {
+      const day = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1;
+      const yr = new Date().getFullYear();
+      return new Date(yr, month, day).getTime();
+    }
+    return 0;
+  };
+
+  const getPoModel = (po: any): string => {
+    if (po.masterPoId) {
+      const master = (productionOrders || []).find((p: any) => p.id === po.masterPoId);
+      if (master?.partId) return master.partId;
+    }
+    const match = po.id.match(/^(?:PO|REPAIR)-([A-Z0-9_\-]+?)-\d{4}-/i);
+    if (match && match[1] && match[1] !== 'LE') return match[1];
+    const modelBoms = storageService.getModelBOM();
+    const b = modelBoms.find((x: any) => x.partId === po.partId);
+    if (b) return b.modelId;
+    return po.partId;
+  };
+
   const allAvailablePos = useMemo(() => {
-    return (productionOrders || []).filter(
+    const valid = (productionOrders || []).filter(
       (p: any) => p.stageId === selectedStage && p.status !== 'COMPLETED' && p.status !== 'PENDING_APPROVAL' && p.status !== 'REJECTED'
     );
+
+    const modelEarliestTime = new Map<string, number>();
+    valid.forEach((p: any) => {
+      const model = getPoModel(p);
+      const t = getPoTimestamp(p);
+      const prev = modelEarliestTime.get(model);
+      if (prev === undefined || (t > 0 && t < prev)) {
+        modelEarliestTime.set(model, t);
+      }
+    });
+
+    return [...valid].sort((a: any, b: any) => {
+      const modelA = getPoModel(a);
+      const modelB = getPoModel(b);
+
+      if (modelA === modelB) {
+        const tA = getPoTimestamp(a);
+        const tB = getPoTimestamp(b);
+        if (tA !== tB) {
+          if (tA === 0) return 1;
+          if (tB === 0) return -1;
+          return tA - tB;
+        }
+        return a.id.localeCompare(b.id);
+      }
+
+      const modelTimeA = modelEarliestTime.get(modelA) || 0;
+      const modelTimeB = modelEarliestTime.get(modelB) || 0;
+      if (modelTimeA !== modelTimeB) {
+        if (modelTimeA === 0) return 1;
+        if (modelTimeB === 0) return -1;
+        return modelTimeA - modelTimeB;
+      }
+
+      return modelA.localeCompare(modelB);
+    });
   }, [selectedStage, productionOrders]);
+
+  const poTabCounts = useMemo(() => {
+    let standard = 0;
+    let rma = 0;
+    let odd = 0;
+    let repair = 0;
+    allAvailablePos.forEach((p: any) => {
+      const cat = getPoCategory(p);
+      if (cat === 'REPAIR') repair++;
+      else if (cat === 'RMA') rma++;
+      else if (cat === 'ODD') odd++;
+      else standard++;
+    });
+    return { STANDARD: standard, RMA: rma, ODD: odd, REPAIR: repair };
+  }, [allAvailablePos]);
+
+  const poTabs = useMemo(() => [
+    { id: 'STANDARD', label: 'Sản xuất chính', count: poTabCounts.STANDARD },
+    { id: 'RMA', label: 'RMA', count: poTabCounts.RMA },
+    { id: 'ODD', label: 'PO Dư Lẻ', count: poTabCounts.ODD },
+    { id: 'REPAIR', label: 'Kế hoạch bù (Repair)', count: poTabCounts.REPAIR },
+  ], [poTabCounts]);
+
+  const tabFilteredPos = useMemo(() => {
+    return allAvailablePos.filter((p: any) => getPoCategory(p) === poTab);
+  }, [allAvailablePos, poTab]);
 
   const filteredParts = useMemo(() => {
     return parts.filter((p: any) => {
@@ -10731,18 +11318,51 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
 
   const availablePos = allAvailablePos.filter(p => p.partId === manualPart);
 
+  const handlePoTabChange = (newTab: 'STANDARD' | 'RMA' | 'ODD' | 'REPAIR') => {
+    setPoTab(newTab);
+
+    if (selectedPoId) {
+      const curr = allAvailablePos.find((p: any) => p.id === selectedPoId);
+      if (curr && getPoCategory(curr) === newTab) return;
+    }
+
+    const candidates = allAvailablePos.filter((p: any) => getPoCategory(p) === newTab);
+    if (candidates.length === 0) return;
+
+    const matchPart = candidates.find((p: any) => p.partId === manualPart);
+    if (matchPart) {
+      setSelectedPoId(matchPart.id);
+    } else {
+      setSelectedPoId(candidates[0].id);
+      setManualPart(candidates[0].partId);
+    }
+  };
+
   const handlePartChange = (partId: string) => {
     setManualPart(partId);
-    const pos = allAvailablePos.filter(p => p.partId === partId);
-    setSelectedPoId(pos.length > 0 ? pos[0].id : "");
+    const posInTab = tabFilteredPos.filter((p: any) => p.partId === partId);
+    const posAll = allAvailablePos.filter((p: any) => p.partId === partId);
+    const candidate = posInTab.length > 0 ? posInTab[0] : (posAll.length > 0 ? posAll[0] : null);
+
+    if (candidate) {
+      setSelectedPoId(candidate.id);
+      const candCat = getPoCategory(candidate);
+      if (candCat !== poTab) setPoTab(candCat);
+    } else {
+      setSelectedPoId("");
+    }
   };
 
   const handlePoChange = (poId: string) => {
     setSelectedPoId(poId);
     if (poId) {
       const po = allAvailablePos.find(p => p.id === poId);
-      if (po && po.partId !== manualPart) {
-        setManualPart(po.partId);
+      if (po) {
+        const cat = getPoCategory(po);
+        if (poTab !== cat) setPoTab(cat);
+        if (po.partId !== manualPart) {
+          setManualPart(po.partId);
+        }
       }
     }
   };
@@ -10755,6 +11375,45 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
       setSelectedPoId(pos.length > 0 ? pos[0].id : "");
     }
   }, [filteredParts, manualPart, allAvailablePos]);
+
+  const availablePoOptions = useMemo(() => {
+    const partsMap = new Map<string, any>(parts.map((p: any) => [p.id, p]));
+
+    const oldestPoInModel = new Set<string>();
+    const modelOldest = new Map<string, { id: string; time: number }>();
+    allAvailablePos.forEach((po: any) => {
+      const model = getPoModel(po);
+      const ts = getPoTimestamp(po);
+      const existing = modelOldest.get(model);
+      if (!existing || (ts > 0 && ts < existing.time)) {
+        modelOldest.set(model, { id: po.id, time: ts });
+      }
+    });
+    modelOldest.forEach(val => oldestPoInModel.add(val.id));
+
+    return tabFilteredPos.map((po: any) => {
+      const poPart = partsMap.get(po.partId);
+      const isCurrentPart = po.partId === manualPart;
+      const rem = Math.max(0, po.targetQuantity - po.producedQuantity);
+      const isOldest = oldestPoInModel.has(po.id);
+      const category = getPoCategory(po);
+      const ts = getPoTimestamp(po);
+      const dateStr = ts > 0 ? format(new Date(ts), 'dd/MM HH:mm') : '';
+      const model = getPoModel(po);
+
+      return {
+        id: po.id,
+        label: `${isCurrentPart ? '★ ' : ''}${isOldest ? '⚡ ' : ''}${po.id.startsWith('REPAIR') ? '🛠️ [BÙ] ' : ''}${po.id} - ${getProcessValue(poPart?.name || po.partId, poPart, selectedStage, targetLocation)} (${po.producedQuantity}/${po.targetQuantity} - Còn: ${rem})`,
+        category,
+        isFifo: isOldest,
+        dateStr,
+        model,
+        remaining: rem,
+        current: po.producedQuantity,
+        target: po.targetQuantity
+      };
+    });
+  }, [allAvailablePos, tabFilteredPos, parts, manualPart, selectedStage, targetLocation]);
 
   const selectedPo = allAvailablePos.find((p: any) => p.id === selectedPoId);
   const isOverPo = Boolean(selectedPo && manualQty > 0 && (selectedPo.producedQuantity + manualQty > selectedPo.targetQuantity));
@@ -10830,16 +11489,63 @@ function WeldingInboundView({ parts, onManualInbound, setDefectModal, production
           </div>
 
           {allAvailablePos.length > 0 && (
-            <div className="space-y-4">
-              <label className="text-sm font-bold uppercase tracking-widest opacity-50">Chọn Lệnh PO (Tiến độ)</label>
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="text-sm font-bold uppercase tracking-widest opacity-50">Chọn Lệnh PO (Tiến độ)</label>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                    ⚡ FIFO: Cũ nhất làm trước
+                  </span>
+                </div>
+                {availablePos.length > 1 && (
+                  <span className="text-[10px] sm:text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-md self-start sm:self-auto">
+                    Linh kiện nằm trong {availablePos.length} PO khác nhau
+                  </span>
+                )}
+              </div>
+
+              {/* Quick Tab Bar */}
+              <div className="flex bg-gray-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar gap-1">
+                {poTabs.map(tab => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => handlePoTabChange(tab.id as any)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg font-bold text-xs transition-all shrink-0 cursor-pointer flex items-center gap-1.5 whitespace-nowrap",
+                      poTab === tab.id
+                        ? (tab.id === 'REPAIR' 
+                            ? "bg-white text-red-600 shadow-sm" 
+                            : tab.id === 'RMA'
+                              ? "bg-white text-purple-700 shadow-sm font-bold"
+                              : tab.id === 'ODD'
+                                ? "bg-white text-amber-700 shadow-sm"
+                                : "bg-white text-blue-700 shadow-sm")
+                        : "text-gray-500 hover:text-gray-800"
+                    )}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={cn(
+                      "px-1.5 py-0.2 rounded-full text-[10px] font-mono",
+                      poTab === tab.id
+                        ? (tab.id === 'REPAIR' ? "bg-red-100 text-red-700" : tab.id === 'RMA' ? "bg-purple-100 text-purple-700" : tab.id === 'ODD' ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-700")
+                        : "bg-gray-200 text-gray-600"
+                    )}>
+                      {tab.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
               <SearchableSelect 
-                options={allAvailablePos.map(po => ({
-                  id: po.id,
-                  label: `${po.id.startsWith('REPAIR') ? '🛠️ [BÙ] ' : ''}${po.id} - ${getProcessValue(parts.find((p: any) => p.id === po.partId)?.name || po.partId, parts.find((p: any) => p.id === po.partId), selectedStage, targetLocation)} (${po.producedQuantity}/${po.targetQuantity})`
-                }))}
+                options={availablePoOptions}
                 value={selectedPoId}
                 onChange={handlePoChange}
-                placeholder="Tìm Lệnh PO..."
+                placeholder="Tìm và chọn đúng Lệnh PO..."
+                tabs={poTabs}
+                activeTab={poTab}
+                onTabChange={handlePoTabChange}
+                showFifoNotice={true}
               />
             </div>
           )}
@@ -11008,15 +11714,109 @@ function LaserInboundView({ parts, onManualInbound, setDefectModal, productionOr
   const [manualPart, setManualPart] = useState('');
   const [manualQty, setManualQty] = useState(0);
   const [selectedPoId, setSelectedPoId] = useState<string>("");
+  const [poTab, setPoTab] = useState<'STANDARD' | 'RMA' | 'ODD' | 'REPAIR'>('STANDARD');
   const [lastScanned, setLastScanned] = useState<any>(null);
 
   const selectedStage = 'LASER';
 
+  const getPoTimestamp = (po: any): number => {
+    if (po.createdAt && po.createdAt > 0) return po.createdAt;
+    if (po.masterPoId) {
+      const master = (productionOrders || []).find((p: any) => p.id === po.masterPoId);
+      if (master?.createdAt && master.createdAt > 0) return master.createdAt;
+    }
+    if (po.plannedStartTime && po.plannedStartTime > 0) return po.plannedStartTime;
+    if (po.excelRequiredDate && po.excelRequiredDate > 0) return po.excelRequiredDate;
+    const match = po.id.match(/-(\d{2})(\d{2})-/);
+    if (match) {
+      const day = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1;
+      const yr = new Date().getFullYear();
+      return new Date(yr, month, day).getTime();
+    }
+    return 0;
+  };
+
+  const getPoModel = (po: any): string => {
+    if (po.masterPoId) {
+      const master = (productionOrders || []).find((p: any) => p.id === po.masterPoId);
+      if (master?.partId) return master.partId;
+    }
+    const match = po.id.match(/^(?:PO|REPAIR)-([A-Z0-9_\-]+?)-\d{4}-/i);
+    if (match && match[1] && match[1] !== 'LE') return match[1];
+    const modelBoms = storageService.getModelBOM();
+    const b = modelBoms.find((x: any) => x.partId === po.partId);
+    if (b) return b.modelId;
+    return po.partId;
+  };
+
   const allAvailablePos = useMemo(() => {
-    return (productionOrders || []).filter(
+    const valid = (productionOrders || []).filter(
       (p: any) => p.stageId === selectedStage && p.status !== 'COMPLETED' && p.status !== 'PENDING_APPROVAL' && p.status !== 'REJECTED'
     );
+
+    const modelEarliestTime = new Map<string, number>();
+    valid.forEach((p: any) => {
+      const model = getPoModel(p);
+      const t = getPoTimestamp(p);
+      const prev = modelEarliestTime.get(model);
+      if (prev === undefined || (t > 0 && t < prev)) {
+        modelEarliestTime.set(model, t);
+      }
+    });
+
+    return [...valid].sort((a: any, b: any) => {
+      const modelA = getPoModel(a);
+      const modelB = getPoModel(b);
+
+      if (modelA === modelB) {
+        const tA = getPoTimestamp(a);
+        const tB = getPoTimestamp(b);
+        if (tA !== tB) {
+          if (tA === 0) return 1;
+          if (tB === 0) return -1;
+          return tA - tB;
+        }
+        return a.id.localeCompare(b.id);
+      }
+
+      const modelTimeA = modelEarliestTime.get(modelA) || 0;
+      const modelTimeB = modelEarliestTime.get(modelB) || 0;
+      if (modelTimeA !== modelTimeB) {
+        if (modelTimeA === 0) return 1;
+        if (modelTimeB === 0) return -1;
+        return modelTimeA - modelTimeB;
+      }
+
+      return modelA.localeCompare(modelB);
+    });
   }, [selectedStage, productionOrders]);
+
+  const poTabCounts = useMemo(() => {
+    let standard = 0;
+    let rma = 0;
+    let odd = 0;
+    let repair = 0;
+    allAvailablePos.forEach((p: any) => {
+      const cat = getPoCategory(p);
+      if (cat === 'REPAIR') repair++;
+      else if (cat === 'RMA') rma++;
+      else if (cat === 'ODD') odd++;
+      else standard++;
+    });
+    return { STANDARD: standard, RMA: rma, ODD: odd, REPAIR: repair };
+  }, [allAvailablePos]);
+
+  const poTabs = useMemo(() => [
+    { id: 'STANDARD', label: 'Sản xuất chính', count: poTabCounts.STANDARD },
+    { id: 'RMA', label: 'RMA', count: poTabCounts.RMA },
+    { id: 'ODD', label: 'PO Dư Lẻ', count: poTabCounts.ODD },
+    { id: 'REPAIR', label: 'Kế hoạch bù (Repair)', count: poTabCounts.REPAIR },
+  ], [poTabCounts]);
+
+  const tabFilteredPos = useMemo(() => {
+    return allAvailablePos.filter((p: any) => getPoCategory(p) === poTab);
+  }, [allAvailablePos, poTab]);
 
   const filteredParts = parts.filter((p: any) => {
     if (selectedPoId && targetLocation === 'OUT') {
@@ -11033,18 +11833,51 @@ function LaserInboundView({ parts, onManualInbound, setDefectModal, productionOr
 
   const availablePos = allAvailablePos.filter(p => p.partId === manualPart);
 
+  const handlePoTabChange = (newTab: 'STANDARD' | 'RMA' | 'ODD' | 'REPAIR') => {
+    setPoTab(newTab);
+
+    if (selectedPoId) {
+      const curr = allAvailablePos.find((p: any) => p.id === selectedPoId);
+      if (curr && getPoCategory(curr) === newTab) return;
+    }
+
+    const candidates = allAvailablePos.filter((p: any) => getPoCategory(p) === newTab);
+    if (candidates.length === 0) return;
+
+    const matchPart = candidates.find((p: any) => p.partId === manualPart);
+    if (matchPart) {
+      setSelectedPoId(matchPart.id);
+    } else {
+      setSelectedPoId(candidates[0].id);
+      if (targetLocation === 'OUT') setManualPart(candidates[0].partId);
+    }
+  };
+
   const handlePartChange = (partId: string) => {
     setManualPart(partId);
-    const pos = allAvailablePos.filter(p => p.partId === partId);
-    setSelectedPoId(pos.length > 0 ? pos[0].id : "");
+    const posInTab = tabFilteredPos.filter((p: any) => p.partId === partId);
+    const posAll = allAvailablePos.filter((p: any) => p.partId === partId);
+    const candidate = posInTab.length > 0 ? posInTab[0] : (posAll.length > 0 ? posAll[0] : null);
+
+    if (candidate) {
+      setSelectedPoId(candidate.id);
+      const candCat = getPoCategory(candidate);
+      if (candCat !== poTab) setPoTab(candCat);
+    } else {
+      setSelectedPoId("");
+    }
   };
 
   const handlePoChange = (poId: string) => {
     setSelectedPoId(poId);
     if (poId && targetLocation === 'OUT') {
       const po = allAvailablePos.find(p => p.id === poId);
-      if (po && po.partId !== manualPart) {
-        setManualPart(po.partId);
+      if (po) {
+        const cat = getPoCategory(po);
+        if (poTab !== cat) setPoTab(cat);
+        if (po.partId !== manualPart) {
+          setManualPart(po.partId);
+        }
       }
     }
   };
@@ -11057,6 +11890,45 @@ function LaserInboundView({ parts, onManualInbound, setDefectModal, productionOr
       setSelectedPoId(pos.length > 0 ? pos[0].id : "");
     }
   }, [filteredParts, manualPart, allAvailablePos]);
+
+  const availablePoOptions = useMemo(() => {
+    const partsMap = new Map<string, any>(parts.map((p: any) => [p.id, p]));
+
+    const oldestPoInModel = new Set<string>();
+    const modelOldest = new Map<string, { id: string; time: number }>();
+    allAvailablePos.forEach((po: any) => {
+      const model = getPoModel(po);
+      const ts = getPoTimestamp(po);
+      const existing = modelOldest.get(model);
+      if (!existing || (ts > 0 && ts < existing.time)) {
+        modelOldest.set(model, { id: po.id, time: ts });
+      }
+    });
+    modelOldest.forEach(val => oldestPoInModel.add(val.id));
+
+    return tabFilteredPos.map((po: any) => {
+      const poPart = partsMap.get(po.partId);
+      const isCurrentPart = po.partId === manualPart;
+      const rem = Math.max(0, po.targetQuantity - po.producedQuantity);
+      const isOldest = oldestPoInModel.has(po.id);
+      const category = getPoCategory(po);
+      const ts = getPoTimestamp(po);
+      const dateStr = ts > 0 ? format(new Date(ts), 'dd/MM HH:mm') : '';
+      const model = getPoModel(po);
+
+      return {
+        id: po.id,
+        label: `${isCurrentPart ? '★ ' : ''}${isOldest ? '⚡ ' : ''}${po.id.startsWith('REPAIR') ? '🛠️ [BÙ] ' : ''}${po.id} - ${getProcessValue(poPart?.name || po.partId, poPart, selectedStage, targetLocation)} (${po.producedQuantity}/${po.targetQuantity} - Còn: ${rem})`,
+        category,
+        isFifo: isOldest,
+        dateStr,
+        model,
+        remaining: rem,
+        current: po.producedQuantity,
+        target: po.targetQuantity
+      };
+    });
+  }, [allAvailablePos, tabFilteredPos, parts, manualPart, selectedStage, targetLocation]);
 
   const selectedPo = allAvailablePos.find(p => p.id === selectedPoId);
   const isOverPo = Boolean(targetLocation === 'OUT' && selectedPo && manualQty > 0 && (selectedPo.producedQuantity + manualQty > selectedPo.targetQuantity));
@@ -11149,16 +12021,63 @@ function LaserInboundView({ parts, onManualInbound, setDefectModal, productionOr
           </div>
 
           {targetLocation === 'OUT' && allAvailablePos.length > 0 && (
-            <div className="space-y-4">
-              <label className="text-sm font-bold uppercase tracking-widest opacity-50">Chọn Lệnh PO (Tiến độ)</label>
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="text-sm font-bold uppercase tracking-widest opacity-50">Chọn Lệnh PO (Tiến độ)</label>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                    ⚡ FIFO: Cũ nhất làm trước
+                  </span>
+                </div>
+                {availablePos.length > 1 && (
+                  <span className="text-[10px] sm:text-xs bg-purple-100 text-purple-700 font-bold px-2 py-0.5 rounded-md self-start sm:self-auto">
+                    Linh kiện nằm trong {availablePos.length} PO khác nhau
+                  </span>
+                )}
+              </div>
+
+              {/* Quick Tab Bar */}
+              <div className="flex bg-gray-100 p-1 rounded-xl w-full sm:w-fit overflow-x-auto no-scrollbar gap-1">
+                {poTabs.map(tab => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => handlePoTabChange(tab.id as any)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg font-bold text-xs transition-all shrink-0 cursor-pointer flex items-center gap-1.5 whitespace-nowrap",
+                      poTab === tab.id
+                        ? (tab.id === 'REPAIR' 
+                            ? "bg-white text-red-600 shadow-sm" 
+                            : tab.id === 'RMA'
+                              ? "bg-white text-purple-700 shadow-sm font-bold"
+                              : tab.id === 'ODD'
+                                ? "bg-white text-amber-700 shadow-sm"
+                                : "bg-white text-blue-700 shadow-sm")
+                        : "text-gray-500 hover:text-gray-800"
+                    )}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={cn(
+                      "px-1.5 py-0.2 rounded-full text-[10px] font-mono",
+                      poTab === tab.id
+                        ? (tab.id === 'REPAIR' ? "bg-red-100 text-red-700" : tab.id === 'RMA' ? "bg-purple-100 text-purple-700" : tab.id === 'ODD' ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-700")
+                        : "bg-gray-200 text-gray-600"
+                    )}>
+                      {tab.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
               <SearchableSelect 
-                options={allAvailablePos.map(po => ({
-                  id: po.id,
-                  label: `${po.id.startsWith('REPAIR') ? '🛠️ [BÙ] ' : ''}${po.id} - ${getProcessValue(parts.find((p: any) => p.id === po.partId)?.name || po.partId, parts.find((p: any) => p.id === po.partId), selectedStage, targetLocation)} (${po.producedQuantity}/${po.targetQuantity})`
-                }))}
+                options={availablePoOptions}
                 value={selectedPoId}
                 onChange={handlePoChange}
-                placeholder="Tìm Lệnh PO..."
+                placeholder="Tìm và chọn đúng Lệnh PO..."
+                tabs={poTabs}
+                activeTab={poTab}
+                onTabChange={handlePoTabChange}
+                showFifoNotice={true}
               />
             </div>
           )}
@@ -12294,6 +13213,15 @@ function GlazingView({ parts, inventory: globalInventory, onManualInbound, setDe
   useEffect(() => {
     setGlazingPlans(storageService.getGlazingPlans());
   }, [labels]);
+
+  useEffect(() => {
+    if (selectedPlanIdForPrint) {
+      const plan = glazingPlans.find(p => p.id === selectedPlanIdForPrint);
+      if (!plan || plan.status === 'COMPLETED') {
+        setSelectedPlanIdForPrint('');
+      }
+    }
+  }, [glazingPlans, selectedPlanIdForPrint]);
 
   const pendingGlazingLabels = useMemo(() => {
     return (labels || []).filter((l: any) => l.stageId === 'GLAZING' && l.type === 'STAGE_OUT' && l.printed === false);

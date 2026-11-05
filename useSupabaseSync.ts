@@ -156,7 +156,7 @@ export async function checkAndHandleSystemReset(client = supabase): Promise<{
   }
 }
 
-import { setRemoteHydrated, clearCache } from './storage';
+import { setRemoteHydrated, clearCache, storageService } from './storage';
 import { ProductionOrder, InventoryItem, Transaction, GlazingPlan } from './types';
 
 function mapDbPoToPo(dbRow: any): ProductionOrder {
@@ -293,15 +293,37 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
     })();
 
     const fetchInv = client.from('wip_inventory').select('*');
-    const fetchTxs = client.from('wip_transactions')
-      .select('*')
-      .gte('timestamp', cutoff35d)
-      .order('timestamp', { ascending: false });
+    const fetchTxs = (async () => {
+      const { count: totalTxCount } = await client
+        .from('wip_transactions')
+        .select('*', { count: 'exact', head: true })
+        .gte('timestamp', cutoff35d);
+
+      const total = totalTxCount || 0;
+      const txPageSize = 1000;
+      const pagePromises = [];
+      for (let from = 0; from < Math.max(total, 1); from += txPageSize) {
+        pagePromises.push(
+          client
+            .from('wip_transactions')
+            .select('*')
+            .gte('timestamp', cutoff35d)
+            .order('timestamp', { ascending: false })
+            .range(from, from + txPageSize - 1)
+        );
+      }
+      const pages = await Promise.all(pagePromises);
+      const allRows: any[] = [];
+      pages.forEach(p => {
+        if (!p.error && p.data) allRows.push(...p.data);
+      });
+      return allRows;
+    })();
     const fetchPlans = client.from('glazing_plans')
       .select('*')
       .order('created_at', { ascending: false });
 
-    const [cfgRes, poRows, invRes, txRes, gpRes] = await Promise.all([
+    const [cfgRes, poRows, invRes, txRows, gpRes] = await Promise.all([
       fetchConfigs,
       fetchPOs,
       fetchInv,
@@ -332,10 +354,13 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
       localStorage.setItem('wip_inventory', JSON.stringify(mappedInv));
     }
 
-    if (txRes.error) throw txRes.error;
-    if (txRes.data) {
-      const mappedTxs = txRes.data.map(mapDbTxToTx);
-      localStorage.setItem('wip_transactions', JSON.stringify(mappedTxs));
+    if (txRows && txRows.length > 0) {
+      const mappedTxs = txRows.map(mapDbTxToTx);
+      try {
+        localStorage.removeItem('wip_transactions');
+        localStorage.removeItem('wip_transactions');
+      } catch {}
+      storageService.rebuild35DaySummary(mappedTxs);
     }
 
     if (gpRes.error) throw gpRes.error;
@@ -345,6 +370,11 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
     }
 
     clearCache();
+    try {
+      storageService.reconcileProductionOrders();
+    } catch (recErr) {
+      console.warn('[SyncService] Lỗi khi reconcile POs:', recErr);
+    }
 
     return {
       success: true,
@@ -352,7 +382,7 @@ export async function pullLatestFromSupabase(client = supabase): Promise<{
         configs: cfgRes.data?.length || 0,
         productionOrders: poRows?.length || 0,
         inventory: invRes.data?.length || 0,
-        transactions: txRes.data?.length || 0,
+        transactions: txRows?.length || 0,
         glazingPlans: gpRes.data?.length || 0
       }
     };

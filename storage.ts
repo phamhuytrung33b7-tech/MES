@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, UserAccount, View, DeletedPOBackup, POSnapshot, HiddenInventoryItem } from './types';
+import { InventoryItem, Transaction, StageId, STAGES, INITIAL_PARTS, Part, BOMDefinition, BOMDefinitionV2, ProductionOrder, ModelBOMDefinition, ProductivityNorm, LaserNesting, ShiftConfig, PartTransformation, UserAccount, View, DeletedPOBackup, POSnapshot, HiddenInventoryItem, Chart35DaySummaryItem } from './types';
 import { format, addMilliseconds, setHours, setMinutes, setSeconds, getHours, getMinutes, isBefore, isAfter, startOfDay, addDays } from 'date-fns';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 const STORAGE_KEYS = {
   INVENTORY: 'wip_inventory',
   TRANSACTIONS: 'wip_transactions',
+  CHART_35D_SUMMARY: 'wip_chart_35d_summary',
   PARTS: 'wip_parts',
   BOM: 'wip_bom',
   BOM_V2: 'wip_bom_v2',
@@ -235,6 +236,103 @@ async function persistInventoryToSupabase(inventory: InventoryItem[]) {
   } catch (err: any) {
     quietWarn('persistInventory', 'persistInventory error:', err);
   }
+}
+
+const normKeyCache = new Map<string, string>();
+const partMatchCache = new Map<string, boolean>();
+
+export function normalizePartKey(s?: string): string {
+  if (!s) return '';
+  const cached = normKeyCache.get(s);
+  if (cached !== undefined) return cached;
+  const res = s
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/\s*-\s*(cd|h|s|c|p|g|w|b|l|ct|bd|glz|out|in|dán kính|dập\/chấn|hàn|sơn|cắt laser)$/gi, '')
+    .replace(/\s*[\(\[]\s*(bd|ct|cd|h|s|c)\s*[\)\]]$/gi, '')
+    .replace(/\s*,\s*/g, ',')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normKeyCache.size > 2000) normKeyCache.clear();
+  normKeyCache.set(s, res);
+  return res;
+}
+
+let catalogCachePartsRef: any[] | null = null;
+let catalogLookupMap: Map<string, any> = new Map();
+
+function getCatalogMap(partsList: any[]): Map<string, any> {
+  if (catalogCachePartsRef === partsList && catalogLookupMap.size > 0) return catalogLookupMap;
+  catalogLookupMap = new Map();
+  if (Array.isArray(partsList)) {
+    for (const p of partsList) {
+      if (!p) continue;
+      const rawId = (p.id || '').toUpperCase().trim();
+      const rawName = (p.name || '').toUpperCase().trim();
+      const normId = normalizePartKey(p.id);
+      const normName = normalizePartKey(p.name);
+      if (rawId) catalogLookupMap.set(rawId, p);
+      if (rawName) catalogLookupMap.set(rawName, p);
+      if (normId) catalogLookupMap.set(normId, p);
+      if (normName) catalogLookupMap.set(normName, p);
+    }
+  }
+  catalogCachePartsRef = partsList;
+  return catalogLookupMap;
+}
+
+export function isPartMatchingPO(partA?: string, partB?: string, partsList: any[] = []): boolean {
+  if (!partA || !partB) return false;
+  const rawA = partA.trim();
+  const rawB = partB.trim();
+  if (rawA.toUpperCase() === rawB.toUpperCase()) return true;
+
+  const cacheKey = `${rawA}|${rawB}`;
+  const cached = partMatchCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const normA = normalizePartKey(rawA);
+  const normB = normalizePartKey(rawB);
+  if (normA && normB && normA === normB) {
+    partMatchCache.set(cacheKey, true);
+    return true;
+  }
+
+  const catMap = getCatalogMap(partsList);
+  const catA = catMap.get(rawA.toUpperCase()) || catMap.get(normA);
+  const catB = catMap.get(rawB.toUpperCase()) || catMap.get(normB);
+
+  if (catA && catB && catA.id && catB.id && catA.id.toUpperCase() === catB.id.toUpperCase()) {
+    partMatchCache.set(cacheKey, true);
+    return true;
+  }
+  if (catA && (normalizePartKey(catA.id) === normB || normalizePartKey(catA.name) === normB)) {
+    partMatchCache.set(cacheKey, true);
+    return true;
+  }
+  if (catB && (normalizePartKey(catB.id) === normA || normalizePartKey(catB.name) === normA)) {
+    partMatchCache.set(cacheKey, true);
+    return true;
+  }
+
+  if (catA && catB) {
+    if (normalizePartKey(catA.name) === normalizePartKey(catB.name)) {
+      partMatchCache.set(cacheKey, true);
+      return true;
+    }
+  }
+
+  // Substring inclusion for long descriptive part names (>= 10 chars)
+  if (normA.length >= 10 && normB.length >= 10) {
+    if (normA.includes(normB) || normB.includes(normA)) {
+      partMatchCache.set(cacheKey, true);
+      return true;
+    }
+  }
+
+  if (partMatchCache.size > 5000) partMatchCache.clear();
+  partMatchCache.set(cacheKey, false);
+  return false;
 }
 
 // Helper function to extract canonical part ID, catalog name, and all possible suffix variants
@@ -628,6 +726,43 @@ const REMOTE_INIT_COOLDOWN_MS = 60000; // 60s cooldown between full Supabase tab
 export const HOURLY_DAY_SLOTS = ['6h-8h', '8h-10h', '10h-12h', '13h-15h', '15h-17h', '17h-19h'];
 export const HOURLY_NIGHT_SLOTS = ['19h-21h', '21h-23h', '23h-0h', '1h-3h', '3h-5h', '5h-6h'];
 export const ALL_HOURLY_TIME_SLOTS = [...HOURLY_DAY_SLOTS, ...HOURLY_NIGHT_SLOTS];
+
+export function isGlazingPlanFullyCompleted(
+  plan: import('./types').GlazingPlan,
+  allNorms?: import('./types').GlazingPlanNorm[]
+): boolean {
+  if (!plan || !plan.targetQuantity || plan.targetQuantity <= 0) return false;
+
+  const target = plan.targetQuantity;
+  const normsList = allNorms || storageService.getGlazingPlanNorms();
+  const modelIdUpper = (plan.modelId || '').trim().toUpperCase();
+  const components = normsList.filter(n => 
+    (n.appliedModel || '').trim().toUpperCase() === modelIdUpper || 
+    (n.modelName || '').trim().toUpperCase() === modelIdUpper
+  );
+
+  const producedMap = plan.producedQuantities || {};
+  const printedMap = plan.printedQuantities || {};
+
+  if (components.length > 0) {
+    return components.every(c => {
+      const prod = Number(producedMap[c.id]) || 0;
+      const print = Number(printedMap[c.id]) || 0;
+      return prod >= target && print >= target;
+    });
+  } else {
+    const producedKeys = Object.keys(producedMap);
+    const printedKeys = Object.keys(printedMap);
+    if (producedKeys.length === 0 || printedKeys.length === 0) return false;
+
+    const trackedPartIds = Array.from(new Set([...producedKeys, ...printedKeys]));
+    return trackedPartIds.length > 0 && trackedPartIds.every(pId => {
+      const prod = Number(producedMap[pId]) || 0;
+      const print = Number(printedMap[pId]) || 0;
+      return prod >= target && print >= target;
+    });
+  }
+}
 
 export const storageService = {
   normalize(s: string): string {
@@ -1105,13 +1240,16 @@ export const storageService = {
       return data ? JSON.parse(data) : [];
     });
 
-    // Reconcile printed quantities from labels history if needed
+    // Reconcile printed quantities from labels history if needed and auto-complete plans
     try {
       const rawLabels = localStorage.getItem('wip_labels');
+      const allNorms = this.getGlazingPlanNorms();
+      let hasUpdates = false;
+      const completedToPersist: import('./types').GlazingPlan[] = [];
+
       if (rawLabels) {
         const labels: Transaction[] = JSON.parse(rawLabels);
         if (Array.isArray(labels)) {
-          let hasUpdates = false;
           plans.forEach(plan => {
             const labelCounts: Record<string, number> = {};
             labels.filter(l => l && l.planId === plan.id && l.partId).forEach(l => {
@@ -1122,7 +1260,6 @@ export const storageService = {
             const reconciledMap: Record<string, number> = { ...currentMap };
             let isChanged = false;
 
-            // For all parts present in labelCounts, labelCounts is authoritative
             Object.entries(labelCounts).forEach(([partId, count]) => {
               if (reconciledMap[partId] !== count) {
                 reconciledMap[partId] = count;
@@ -1135,9 +1272,22 @@ export const storageService = {
               hasUpdates = true;
             }
           });
-          if (hasUpdates) {
-            localStorage.setItem(STORAGE_KEYS.GLAZING_PLANS, JSON.stringify(plans));
-          }
+        }
+      }
+
+      // Auto-complete plans if all components are fully produced AND printed
+      plans.forEach(plan => {
+        if (plan.status !== 'COMPLETED' && isGlazingPlanFullyCompleted(plan, allNorms)) {
+          plan.status = 'COMPLETED';
+          hasUpdates = true;
+          completedToPersist.push(plan);
+        }
+      });
+
+      if (hasUpdates) {
+        localStorage.setItem(STORAGE_KEYS.GLAZING_PLANS, JSON.stringify(plans));
+        if (completedToPersist.length > 0) {
+          persistGlazingPlansToSupabase(completedToPersist);
         }
       }
     } catch {}
@@ -1717,9 +1867,20 @@ export const storageService = {
       const producedQuantities = { ...(plan.producedQuantities || {}) };
       producedQuantities[partId] = (producedQuantities[partId] || 0) + quantity;
       
-      plans[planIndex] = { ...plan, producedQuantities, status: 'IN_PROGRESS' };
+      const allNorms = this.getGlazingPlanNorms();
+      let updatedPlan: import('./types').GlazingPlan = {
+        ...plan,
+        producedQuantities,
+        status: 'IN_PROGRESS'
+      };
+
+      if (isGlazingPlanFullyCompleted(updatedPlan, allNorms)) {
+        updatedPlan.status = 'COMPLETED';
+      }
+
+      plans[planIndex] = updatedPlan;
       this.saveGlazingPlans(plans);
-      persistGlazingPlansToSupabase([plans[planIndex]]);
+      persistGlazingPlansToSupabase([updatedPlan]);
     }
   },
 
@@ -1729,12 +1890,21 @@ export const storageService = {
     if (planIndex !== -1) {
       const plan = plans[planIndex];
       const printedQuantities = { ...(plan.printedQuantities || {}) };
-      if (!printedQuantities[partId]) {
-        printedQuantities[partId] = quantity;
-        plans[planIndex] = { ...plan, printedQuantities };
+      printedQuantities[partId] = (printedQuantities[partId] || 0) + quantity;
+
+      const allNorms = this.getGlazingPlanNorms();
+      let updatedPlan: import('./types').GlazingPlan = {
+        ...plan,
+        printedQuantities
+      };
+
+      if (isGlazingPlanFullyCompleted(updatedPlan, allNorms)) {
+        updatedPlan.status = 'COMPLETED';
       }
+
+      plans[planIndex] = updatedPlan;
       this.saveGlazingPlans(plans);
-      persistGlazingPlansToSupabase([plans[planIndex]]);
+      persistGlazingPlansToSupabase([updatedPlan]);
     }
   },
 
@@ -1904,19 +2074,10 @@ export const storageService = {
   },
 
   getTransactions(): Transaction[] {
-    const data = getCached(STORAGE_KEYS.TRANSACTIONS, () => {
-      const data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      let parsed = data ? JSON.parse(data) : [];
-      // Auto purge scan log data older than 35 days to free local storage
-      const cutoff = Date.now() - 35 * 24 * 60 * 60 * 1000;
-      const initialLength = parsed.length;
-      parsed = parsed.filter((t: any) => t && t.timestamp && t.timestamp >= cutoff);
-      if (parsed.length !== initialLength) {
-        localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(parsed));
-      }
-      return parsed;
-    });
-    return [...data];
+    if (cache[STORAGE_KEYS.TRANSACTIONS]) {
+      return [...cache[STORAGE_KEYS.TRANSACTIONS]];
+    }
+    return [];
   },
 
   /**
@@ -2181,14 +2342,112 @@ export const storageService = {
     // WRITE-THROUGH ONLY: Không tự động push toàn bộ mảng inventory lên Cloud!
   },
 
+  get35DayChartSummary(): Chart35DaySummaryItem[] {
+    return getCached(STORAGE_KEYS.CHART_35D_SUMMARY, () => {
+      const data = localStorage.getItem(STORAGE_KEYS.CHART_35D_SUMMARY);
+      return data ? JSON.parse(data) : [];
+    });
+  },
+
+  rebuild35DaySummary(txs?: Transaction[]): Chart35DaySummaryItem[] {
+    const sourceTxs = txs || cache[STORAGE_KEYS.TRANSACTIONS] || [];
+    const laserHSQDMap = new Map<string, number>(this.getLaserHSQD().map(n => [n.partId.toUpperCase(), n.hsqd]));
+    const bwHSQDMap = new Map<string, number>(this.getBendingWeldingHSQD().map(n => [n.partId.toUpperCase(), n.hsqd]));
+    const paintingHSQDMap = new Map<string, number>(this.getPaintingHSQD().map(n => [n.partId.toUpperCase(), n.hsqd]));
+    const glazingStageHSQDMap = new Map<string, number>(this.getGlazingStageHSQD().map(n => [n.partId.toUpperCase(), n.hsqd]));
+
+    const summaryList: Chart35DaySummaryItem[] = [];
+    const now = new Date();
+
+    for (let daysAgo = 34; daysAgo >= 0; daysAgo--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - daysAgo);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${m}-${day}`;
+
+      const startMs = new Date(y, Number(m) - 1, Number(day), 0, 0, 0, 0).getTime();
+      const endMs = new Date(y, Number(m) - 1, Number(day), 23, 59, 59, 999).getTime();
+
+      const dayTxs = sourceTxs.filter(t => t && t.timestamp >= startMs && t.timestamp <= endMs);
+
+      const stagesResult: Chart35DaySummaryItem['stages'] = {};
+
+      (['LASER', 'BENDING', 'WELDING', 'PAINTING', 'GLAZING'] as StageId[]).forEach(stage => {
+        const stageTxs = dayTxs.filter(t => t.stageId === stage && (t.type === 'STAGE_OUT' || t.type === 'EXPORT'));
+        let produced = 0;
+        let spqd = 0;
+
+        stageTxs.forEach(t => {
+          const qty = Number(t.quantity) || 0;
+          produced += qty;
+          const pid = (t.partId || '').toUpperCase();
+          if (stage === 'LASER') {
+            spqd += qty * Number(laserHSQDMap.get(pid) || 1);
+          } else if (stage === 'BENDING' || stage === 'WELDING') {
+            spqd += qty * Number(bwHSQDMap.get(pid) || 1);
+          } else if (stage === 'PAINTING') {
+            spqd += qty * Number(paintingHSQDMap.get(pid) || 1);
+          } else if (stage === 'GLAZING') {
+            spqd += qty * Number(glazingStageHSQDMap.get(pid) || 1);
+          } else {
+            spqd += qty;
+          }
+        });
+
+        const workers = this.getDailyStagePeopleAverage(stage, dateStr) || 0;
+        const normPerShift = stage === 'LASER' ? 120 : (stage === 'BENDING' ? 226 : (stage === 'WELDING' ? 90 : (stage === 'PAINTING' ? 226 : 226)));
+        const nsld = workers > 0 ? Math.round((spqd / (workers * normPerShift)) * 100) : 0;
+
+        stagesResult[stage] = {
+          produced: Math.round(produced * 10) / 10,
+          spqd: Math.round(spqd * 10) / 10,
+          workers,
+          nsld
+        };
+      });
+
+      const totalMechanicalSPQD = (stagesResult.PAINTING?.spqd || 0) + (stagesResult.GLAZING?.spqd || 0);
+      const mandays = this.getDailyTotalMandays(dateStr) || 0;
+      const mechanicalNSLD = mandays > 0 ? Math.round((totalMechanicalSPQD / (mandays * 28.3)) * 100) : 0;
+
+      stagesResult.MECHANICAL = {
+        produced: Math.round(((stagesResult.PAINTING?.produced || 0) + (stagesResult.GLAZING?.produced || 0)) * 10) / 10,
+        spqd: Math.round(totalMechanicalSPQD * 10) / 10,
+        workers: Math.round(mandays),
+        nsld: mechanicalNSLD
+      };
+
+      summaryList.push({
+        date: dateStr,
+        totalSPQD: Math.round(totalMechanicalSPQD * 10) / 10,
+        mandays: Math.round(mandays * 10) / 10,
+        stages: stagesResult
+      });
+    }
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.CHART_35D_SUMMARY, JSON.stringify(summaryList));
+    } catch (e) {
+      console.warn('[Storage] Error caching 35d summary:', e);
+    }
+    cache[STORAGE_KEYS.CHART_35D_SUMMARY] = summaryList;
+    return summaryList;
+  },
+
   saveTransactions(transactions: Transaction[]) {
     const cutoff = Date.now() - 35 * 24 * 60 * 60 * 1000;
     const filtered = transactions.filter((t: any) => t && t.timestamp && t.timestamp >= cutoff);
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(filtered));
     cache[STORAGE_KEYS.TRANSACTIONS] = filtered;
+    try {
+      localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
+      localStorage.removeItem('wip_transactions');
+    } catch {}
     if (filtered.length > 0 && filtered[0]?.id) {
       queueTransactionInsert(filtered[0]);
     }
+    this.rebuild35DaySummary(filtered);
   },
 
   saveLabels(labels: Transaction[]) {
@@ -2837,9 +3096,35 @@ export const storageService = {
   recordStageOut(partId: string, stageId: StageId, quantity: number, sourceLocation: 'IN' | 'OUT' = 'IN', targetStageId?: StageId, poId?: string, force?: boolean, customTimestamp?: number) {
     const cleanId = partId.startsWith('GLZ-OUT-') ? partId.trim().toUpperCase() : partId.split(' - ')[0].trim().toUpperCase();
     const pos = this.getProductionOrders();
-    const poIndex = poId 
-      ? pos.findIndex(p => p.id === poId)
-      : pos.findIndex(p => p.partId === cleanId && p.stageId === stageId && p.status !== 'COMPLETED');
+    const partsCatalog = this.getParts();
+    let poIndex = -1;
+    if (poId) {
+      poIndex = pos.findIndex(p => p.id === poId);
+    }
+    if (poIndex === -1) {
+      // Find matching PO by stage and part using isPartMatchingPO
+      const matching = pos
+        .map((p, idx) => ({ p, idx }))
+        .filter(({ p }) => {
+          if (p.stageId !== stageId) return false;
+          if (p.status === 'COMPLETED' || p.status === 'PENDING_APPROVAL' || p.status === 'REJECTED') return false;
+          return isPartMatchingPO(cleanId, p.partId, partsCatalog) || isPartMatchingPO(partId, p.partId, partsCatalog);
+        });
+
+      if (matching.length > 0) {
+        // Enforce FIFO: sort by earliest scheduled time (plannedStartTime or createdAt)
+        matching.sort((a, b) => {
+          const timeA = a.p.plannedStartTime || a.p.createdAt || 0;
+          const timeB = b.p.plannedStartTime || b.p.createdAt || 0;
+          return timeA - timeB;
+        });
+        const unfulfilled = matching.find(({ p }) => {
+          const currentQty = sourceLocation === 'IN' ? p.producedQuantity : (p.exportedQuantity || 0);
+          return currentQty < p.targetQuantity;
+        });
+        poIndex = unfulfilled ? unfulfilled.idx : matching[0].idx;
+      }
+    }
       
     let linkedPoId = poId;
     if (poIndex !== -1) {
@@ -3187,15 +3472,16 @@ export const storageService = {
     // Strict PO limit check for currentStageId (Never allow exceeding PO limit at any stage)
     if (linkedPoId) {
       const pos = this.getProductionOrders();
+      const partsCatalog = this.getParts();
       let targetPo = pos.find(p => p.id === linkedPoId && p.stageId === currentStageId);
       if (!targetPo) {
         const sourcePo = pos.find(p => p.id === linkedPoId);
         if (sourcePo && sourcePo.masterPoId) {
-          targetPo = pos.find(p => p.masterPoId === sourcePo.masterPoId && p.stageId === currentStageId && (p.partId.toUpperCase() === finalPartId.toUpperCase() || p.partId.toUpperCase() === partId.toUpperCase()));
+          targetPo = pos.find(p => p.masterPoId === sourcePo.masterPoId && p.stageId === currentStageId && (isPartMatchingPO(p.partId, finalPartId, partsCatalog) || isPartMatchingPO(p.partId, partId, partsCatalog)));
         }
       }
       if (!targetPo) {
-        targetPo = pos.find(p => (p.partId.toUpperCase() === finalPartId.toUpperCase() || p.partId.toUpperCase() === partId.toUpperCase()) && p.stageId === currentStageId && p.status !== 'COMPLETED');
+        targetPo = pos.find(p => (isPartMatchingPO(p.partId, finalPartId, partsCatalog) || isPartMatchingPO(p.partId, partId, partsCatalog)) && p.stageId === currentStageId && p.status !== 'COMPLETED');
       }
 
       if (targetPo) {
@@ -3261,9 +3547,30 @@ export const storageService = {
 
     // Check for required PO
     const pos = this.getProductionOrders();
-    const poIndex = poId 
-      ? pos.findIndex(p => p.id === poId)
-      : pos.findIndex(p => p.partId === cleanId && p.stageId === stageId && p.status !== 'COMPLETED');
+    const partsCatalog = this.getParts();
+    let poIndex = -1;
+    if (poId) {
+      poIndex = pos.findIndex(p => p.id === poId);
+    }
+    if (poIndex === -1) {
+      const matching = pos
+        .map((p, idx) => ({ p, idx }))
+        .filter(({ p }) => {
+          if (p.stageId !== stageId) return false;
+          if (p.status === 'COMPLETED' || p.status === 'PENDING_APPROVAL' || p.status === 'REJECTED') return false;
+          return isPartMatchingPO(cleanId, p.partId, partsCatalog) || isPartMatchingPO(partId, p.partId, partsCatalog);
+        });
+      if (matching.length > 0) {
+        // Enforce FIFO: sort by earliest scheduled time (plannedStartTime or createdAt)
+        matching.sort((a, b) => {
+          const timeA = a.p.plannedStartTime || a.p.createdAt || 0;
+          const timeB = b.p.plannedStartTime || b.p.createdAt || 0;
+          return timeA - timeB;
+        });
+        const unfulfilled = matching.find(({ p }) => p.producedQuantity < p.targetQuantity);
+        poIndex = unfulfilled ? unfulfilled.idx : matching[0].idx;
+      }
+    }
       
     const currentPoId = poIndex !== -1 ? pos[poIndex].id : poId;
 
@@ -3845,8 +4152,35 @@ export const storageService = {
     persistProductionOrdersToSupabase([masterPo, ...subPos]);
   },
 
-  async createMasterPO(modelId: string, quantity: number, plannedStartTime?: number, customLeadTime?: number, idPrefix: string = "PO", targetStageId?: string, selectedLaserPartIds?: string[], customNote?: string, excelRequiredDate?: number) {
-    const { masterPo, allChildPOs } = this.calculateMasterPOSchedule(modelId, quantity, plannedStartTime, customLeadTime, idPrefix, targetStageId, selectedLaserPartIds, customNote, excelRequiredDate);
+  async createMasterPO(
+    modelId: string, 
+    quantity: number, 
+    plannedStartTime?: number, 
+    customLeadTime?: number, 
+    idPrefix: string = "PO", 
+    targetStageId?: string, 
+    selectedLaserPartIds?: string[], 
+    customNote?: string, 
+    excelRequiredDate?: number,
+    isRMA?: boolean
+  ) {
+    if (isRMA && idPrefix === "PO") {
+      idPrefix = "PO-RMA";
+    }
+    const { masterPo, allChildPOs } = this.calculateMasterPOSchedule(
+      modelId, 
+      quantity, 
+      plannedStartTime, 
+      customLeadTime, 
+      idPrefix, 
+      targetStageId, 
+      selectedLaserPartIds, 
+      customNote, 
+      excelRequiredDate,
+      undefined,
+      undefined,
+      isRMA
+    );
     const pos = this.getProductionOrders();
     const updatedPOs = [masterPo, ...allChildPOs, ...pos];
     // 1. Lưu tức thì vào Cache & LocalStorage (UI hiển thị 0ms lag)
@@ -3934,11 +4268,16 @@ export const storageService = {
       modelBom?: ModelBOMDefinition[];
       bomV2?: BOMDefinitionV2[];
       laserNesting?: LaserNesting[];
-    }
+    },
+    isRMA?: boolean
   ) {
     const isOddPO = Array.isArray(selectedLaserPartIds) && selectedLaserPartIds.length > 0;
     if (isOddPO && idPrefix === "PO") {
       idPrefix = "PO-LE";
+    }
+    const isRMAOrder = Boolean(isRMA || idPrefix === "PO-RMA" || idPrefix.startsWith("RMA"));
+    if (isRMAOrder && idPrefix === "PO") {
+      idPrefix = "PO-RMA";
     }
     const pos = existingIdSet ? [] : this.getProductionOrders(); // Still needed for unique ID check if no existingIdSet provided
     const timestamp = Date.now();
@@ -4073,7 +4412,9 @@ export const storageService = {
         producedQuantity: 0,
         exportedQuantity: 0,
         status: 'PENDING',
-        createdAt: timestamp
+        createdAt: timestamp,
+        isRMA: isRMAOrder || undefined,
+        note: isRMAOrder ? 'Kế hoạch RMA' : undefined
       });
     };
 
@@ -4422,7 +4763,8 @@ export const storageService = {
       leadTime: customLeadTime,
       expectedCompletionTime: bestEnd,
       isOddPO: isOddPO || undefined,
-      note: customNote || (isOddPO ? `PO Dư Lẻ (${selectedLaserPartIds!.length} LK Cắt Laser)` : undefined),
+      isRMA: isRMAOrder || undefined,
+      note: customNote || (isOddPO ? `PO Dư Lẻ (${selectedLaserPartIds!.length} LK Cắt Laser)` : (isRMAOrder ? 'Kế hoạch RMA' : undefined)),
       excelRequiredDate: excelRequiredDate
     };
     return { masterPo, allChildPOs: bestChildPOs };
@@ -4799,6 +5141,144 @@ export const storageService = {
 
     this.saveProductionOrders(pos);
     persistProductionOrdersToSupabase([targetPo]);
+  },
+
+  reconcileProductionOrders(): { updatedCount: number; changedPOs: ProductionOrder[] } {
+    const pos = this.getProductionOrders();
+    const txs = this.getTransactions();
+    const parts = this.getParts();
+    if (!pos || pos.length === 0 || !txs || txs.length === 0) return { updatedCount: 0, changedPOs: [] };
+
+    const changedPOs: ProductionOrder[] = [];
+    let updatedTxs = false;
+
+    // Group POs by stageId for fast O(1) lookup
+    const posByStage = new Map<string, ProductionOrder[]>();
+    for (const p of pos) {
+      if (p.stageId) {
+        let list = posByStage.get(p.stageId);
+        if (!list) {
+          list = [];
+          posByStage.set(p.stageId, list);
+        }
+        list.push(p);
+      }
+    }
+    // Sort each stage's candidate PO list in strict FIFO order
+    posByStage.forEach(list => {
+      list.sort((a, b) => (a.plannedStartTime || a.createdAt || 0) - (b.plannedStartTime || b.createdAt || 0));
+    });
+
+    // 1. Link unlinked transactions that represent completed output or export
+    for (const t of txs) {
+      if (!t.poId && t.stageId) {
+        const isProd = (t.type === 'STAGE_OUT' && t.location === 'IN') || (t.type === 'STAGE_IN' && t.location === 'OUT');
+        const isExp = (t.type === 'STAGE_OUT' && t.location === 'OUT');
+        if (isProd || isExp) {
+          const stagePos = posByStage.get(t.stageId) || [];
+          const matchPo = stagePos.find(p => 
+            p.status !== 'COMPLETED' && 
+            p.status !== 'PENDING_APPROVAL' && 
+            p.status !== 'REJECTED' &&
+            (isPartMatchingPO(t.partId, p.partId, parts) || (t.partName && isPartMatchingPO(t.partName, p.partId, parts)))
+          ) || stagePos.find(p => 
+            isPartMatchingPO(t.partId, p.partId, parts) || (t.partName && isPartMatchingPO(t.partName, p.partId, parts))
+          );
+
+          if (matchPo) {
+            t.poId = matchPo.id;
+            updatedTxs = true;
+          }
+        }
+      }
+    }
+
+    if (updatedTxs) {
+      this.saveTransactions(txs);
+    }
+
+    // 2. Pre-aggregate transactions by poId in ONE SINGLE PASS O(T)
+    const prodByPoId = new Map<string, number>();
+    const expByPoId = new Map<string, number>();
+
+    for (const t of txs) {
+      if (t.poId) {
+        if ((t.type === 'STAGE_OUT' && t.location === 'IN') || (t.type === 'STAGE_IN' && t.location === 'OUT')) {
+          prodByPoId.set(t.poId, (prodByPoId.get(t.poId) || 0) + (t.quantity || 0));
+        } else if (t.type === 'STAGE_OUT' && t.location === 'OUT') {
+          expByPoId.set(t.poId, (expByPoId.get(t.poId) || 0) + (t.quantity || 0));
+        }
+      }
+    }
+
+    // 3. Accumulate actual produced and exported quantities for each sub-PO in ONE PASS O(P)
+    pos.forEach(po => {
+      if (!po.stageId) return;
+
+      const prodFromTxs = prodByPoId.get(po.id) || 0;
+      const expFromTxs = expByPoId.get(po.id) || 0;
+
+      const targetProduced = Math.max(po.producedQuantity || 0, prodFromTxs);
+      const targetExported = Math.max(po.exportedQuantity || 0, expFromTxs);
+
+      let changed = false;
+      if (targetProduced !== po.producedQuantity) {
+        po.producedQuantity = targetProduced;
+        changed = true;
+      }
+      if (targetExported !== (po.exportedQuantity || 0)) {
+        po.exportedQuantity = targetExported;
+        changed = true;
+      }
+
+      const isTargetReached = po.targetQuantity > 0 && po.producedQuantity >= po.targetQuantity;
+      const isExportReached = po.targetQuantity > 0 && (po.exportedQuantity || 0) >= po.targetQuantity;
+
+      if (isTargetReached && isExportReached) {
+        if (po.status !== 'COMPLETED') {
+          po.status = 'COMPLETED';
+          if (!po.completedAt) po.completedAt = Date.now();
+          changed = true;
+        }
+      } else if (po.producedQuantity > 0 || (po.exportedQuantity && po.exportedQuantity > 0)) {
+        if (po.status === 'PENDING') {
+          po.status = 'IN_PROGRESS';
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        changedPOs.push(po);
+      }
+    });
+
+    // 4. Reconcile Master POs
+    const masterPOs = pos.filter(p => !p.stageId || !p.masterPoId);
+    masterPOs.forEach(master => {
+      const subs = pos.filter(p => p.masterPoId === master.id);
+      if (subs.length > 0) {
+        const allCompleted = subs.every(s => s.status === 'COMPLETED');
+        const hasStarted = subs.some(s => s.status === 'IN_PROGRESS' || s.producedQuantity > 0 || (s.exportedQuantity && s.exportedQuantity > 0));
+        let newStatus = master.status;
+        if (allCompleted) {
+          newStatus = 'COMPLETED';
+        } else if (hasStarted) {
+          newStatus = 'IN_PROGRESS';
+        }
+        if (newStatus !== master.status) {
+          master.status = newStatus;
+          if (newStatus === 'COMPLETED' && !master.completedAt) master.completedAt = Date.now();
+          changedPOs.push(master);
+        }
+      }
+    });
+
+    if (changedPOs.length > 0) {
+      this.saveProductionOrders(pos);
+      persistProductionOrdersToSupabase(changedPOs);
+    }
+
+    return { updatedCount: changedPOs.length, changedPOs };
   },
 
   getStorageStats() {
@@ -5201,19 +5681,15 @@ export const storageService = {
       }
     } catch {}
 
-    // 2. Cleanup transactions / scan logs (keep only within 35 days)
+    // 2. Cleanup transactions / scan logs (purge raw wip_transactions from localStorage to maintain <50KB storage limit)
     try {
-      const rawTxs = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      if (rawTxs) {
-        const parsedTxs = JSON.parse(rawTxs);
-        if (Array.isArray(parsedTxs)) {
-          const validTxs = parsedTxs.filter((t: any) => t && t.timestamp && t.timestamp >= thirtyFiveDaysCutoff);
-          txsRemoved = parsedTxs.length - validTxs.length;
-          if (txsRemoved > 0) {
-            localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(validTxs));
-            cache[STORAGE_KEYS.TRANSACTIONS] = validTxs;
-          }
-        }
+      localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
+      localStorage.removeItem('wip_transactions');
+      if (cache[STORAGE_KEYS.TRANSACTIONS]) {
+        const validTxs = cache[STORAGE_KEYS.TRANSACTIONS].filter((t: any) => t && t.timestamp && t.timestamp >= thirtyFiveDaysCutoff);
+        txsRemoved = cache[STORAGE_KEYS.TRANSACTIONS].length - validTxs.length;
+        cache[STORAGE_KEYS.TRANSACTIONS] = validTxs;
+        this.rebuild35DaySummary(validTxs);
       }
     } catch {}
 
@@ -5575,8 +6051,10 @@ export const storageService = {
         }));
         cache[STORAGE_KEYS.TRANSACTIONS] = txs;
         try {
-          localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+          localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
+          localStorage.removeItem('wip_transactions');
         } catch {}
+        this.rebuild35DaySummary(txs);
       }
 
       if (!gpRes.error && gpRes.data) {
@@ -5764,8 +6242,10 @@ export const storageService = {
       }));
       cache[STORAGE_KEYS.TRANSACTIONS] = txs;
       try {
-        localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(txs));
+        localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
+        localStorage.removeItem('wip_transactions');
       } catch {}
+      this.rebuild35DaySummary(txs);
 
       lastSyncTime = Date.now();
       isRemoteHydrated = true;

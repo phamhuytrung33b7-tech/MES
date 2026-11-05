@@ -92,6 +92,7 @@ export interface ProductionOrder {
   expectedCompletionTime?: number;
   note?: string;
   isOddPO?: boolean;
+  isRMA?: boolean;
   excelRequiredDate?: number;
   createdBy?: string;
   createdByName?: string;
@@ -187,6 +188,27 @@ export interface GlazingPlan {
   printedQuantities?: Record<string, number>;  // Track printed label count per component ID
   note?: string;
   excelRequiredDate?: number;
+}
+
+export interface StageSummaryData {
+  produced: number;
+  spqd: number;
+  workers: number;
+  nsld: number;
+}
+
+export interface Chart35DaySummaryItem {
+  date: string; // YYYY-MM-DD
+  totalSPQD: number;
+  mandays: number;
+  stages: {
+    LASER?: StageSummaryData;
+    BENDING?: StageSummaryData;
+    WELDING?: StageSummaryData;
+    PAINTING?: StageSummaryData;
+    GLAZING?: StageSummaryData;
+    MECHANICAL?: StageSummaryData;
+  };
 }
 
 export const STAGES: { id: StageId; name: string; nextStageId?: StageId }[] = [
