@@ -178,26 +178,60 @@ export const exportDetailedProductionPlan = (
     }
   });
 
-  // Sheet Sơn: lấy từ tab định mức chữ "Sơn" (stageId === 'PAINTING' trong Định mức năng suất)
-  const paintingNorms = storageService.getNorms().filter(n => n.stageId === 'PAINTING');
-  const paintingNormsMap = new Map<string, number>();
-  paintingNorms.forEach(n => {
-    if (n.partId && n.secondsPerUnit > 0) {
-      paintingNormsMap.set(n.partId.trim().toUpperCase(), n.secondsPerUnit);
-      const pt = parts.find(p => p.id.toUpperCase() === n.partId.trim().toUpperCase());
-      if (pt && pt.name) {
-        paintingNormsMap.set(pt.name.trim().toUpperCase(), n.secondsPerUnit);
-      }
-    }
-  });
+  // Helper chuẩn hóa mã và tên linh kiện để so khớp chính xác
+  const normKey = (s: string): string => {
+    if (!s) return '';
+    return s.normalize('NFC').toUpperCase().replace(/[\s\-_]+/g, ' ').trim();
+  };
+  const cleanKey = (s: string): string => {
+    if (!s) return '';
+    return s
+      .normalize('NFC')
+      .toUpperCase()
+      .replace(/^PNT-OUT-/i, '')
+      .replace(/^PAINT-OUT-/i, '')
+      .replace(/\s*-\s*(SƠN|SON|S|BD|CT|H|CD|GLZ|OUT|IN)$/i, '')
+      .replace(/\s*\((BD|CT|H|CD|SƠN|SON|S)\)$/i, '')
+      .replace(/[\s\-_]+/g, ' ')
+      .trim();
+  };
 
-  // Dự phòng thêm từ tab HSQĐ Sơn nếu người dùng cài đặt ở tab HSQĐ Sơn
+  // Sheet Sơn: lấy CHÍNH XÁC từ tab định mức năng suất "HSQĐ SƠN" (storageService.getPaintingHSQD() - Ảnh 3)
   const paintingHSQD = storageService.getPaintingHSQD();
   const paintingHSQDMap = new Map<string, number>();
-  paintingHSQD.forEach(n => {
-    if (n.hsqd > 0) {
-      if (n.partId) paintingHSQDMap.set(n.partId.trim().toUpperCase(), n.hsqd);
-      if (n.partName) paintingHSQDMap.set(n.partName.trim().toUpperCase(), n.hsqd);
+  paintingHSQD.forEach(item => {
+    if (item && item.hsqd > 0) {
+      const val = item.hsqd;
+      if (item.partId) {
+        const rawId = item.partId.trim().toUpperCase();
+        paintingHSQDMap.set(rawId, val);
+        const nk = normKey(item.partId);
+        if (nk) paintingHSQDMap.set(nk, val);
+        const ck = cleanKey(item.partId);
+        if (ck) paintingHSQDMap.set(ck, val);
+
+        const pt = parts.find(p => p.id.toUpperCase() === rawId || normKey(p.id) === nk);
+        if (pt && pt.name) {
+          paintingHSQDMap.set(pt.name.trim().toUpperCase(), val);
+          paintingHSQDMap.set(normKey(pt.name), val);
+          paintingHSQDMap.set(cleanKey(pt.name), val);
+        }
+      }
+      if (item.partName) {
+        const rawName = item.partName.trim().toUpperCase();
+        paintingHSQDMap.set(rawName, val);
+        const nk = normKey(item.partName);
+        if (nk) paintingHSQDMap.set(nk, val);
+        const ck = cleanKey(item.partName);
+        if (ck) paintingHSQDMap.set(ck, val);
+
+        const pt = parts.find(p => p.name && (p.name.toUpperCase() === rawName || normKey(p.name) === nk));
+        if (pt) {
+          paintingHSQDMap.set(pt.id.trim().toUpperCase(), val);
+          paintingHSQDMap.set(normKey(pt.id), val);
+          paintingHSQDMap.set(cleanKey(pt.id), val);
+        }
+      }
     }
   });
 
@@ -311,57 +345,71 @@ export const exportDetailedProductionPlan = (
       return 1;
     }
 
-    // PAINTING: Lấy HSQĐ từ tab định mức chữ "Sơn" (paintingNorms), phụ thêm từ paintingHSQDMap
+    // PAINTING: Lấy HSQĐ CHÍNH XÁC từ chức năng định mức năng suất tab "HSQĐ SƠN" (storageService.getPaintingHSQD() - Ảnh 3)
     if (stageId === 'PAINTING') {
-      if (paintingNormsMap.has(pId)) return paintingNormsMap.get(pId)!;
-      if (paintingNormsMap.has(pName)) return paintingNormsMap.get(pName)!;
+      // 1. Tra cứu trực tiếp theo partId
+      if (pId && paintingHSQDMap.has(pId)) return paintingHSQDMap.get(pId)!;
+      const nkPid = normKey(pId);
+      if (nkPid && paintingHSQDMap.has(nkPid)) return paintingHSQDMap.get(nkPid)!;
+      const ckPid = cleanKey(pId);
+      if (ckPid && paintingHSQDMap.has(ckPid)) return paintingHSQDMap.get(ckPid)!;
 
-      const cleanId = pId.replace(/\s*-\s*SƠN$/i, '').replace(/\s*-\s*S$/i, '').replace(/^PAINT-OUT-/i, '').trim().toUpperCase();
-      if (cleanId && paintingNormsMap.has(cleanId)) return paintingNormsMap.get(cleanId)!;
+      // 2. Tra cứu trực tiếp theo partName
+      if (pName && paintingHSQDMap.has(pName)) return paintingHSQDMap.get(pName)!;
+      const nkPname = normKey(pName);
+      if (nkPname && paintingHSQDMap.has(nkPname)) return paintingHSQDMap.get(nkPname)!;
+      const ckPname = cleanKey(pName);
+      if (ckPname && paintingHSQDMap.has(ckPname)) return paintingHSQDMap.get(ckPname)!;
 
-      const pt = parts.find(p => p.id.toUpperCase() === pId || p.name.toUpperCase() === pName || (cleanId && (p.id.toUpperCase() === cleanId || p.name.toUpperCase() === cleanId)));
-      if (pt) {
-        if (paintingNormsMap.has(pt.id.toUpperCase())) return paintingNormsMap.get(pt.id.toUpperCase())!;
-        if (paintingNormsMap.has(pt.name.toUpperCase())) return paintingNormsMap.get(pt.name.toUpperCase())!;
-      }
-
-      for (const norm of paintingNorms) {
-        if (norm.partId.toUpperCase().trim() === pId || (cleanId && norm.partId.toUpperCase().trim() === cleanId)) {
-          return norm.secondsPerUnit;
-        }
-        const np = parts.find(p => p.id === norm.partId);
-        if (np && (np.name.toUpperCase().trim() === pName || np.name.toUpperCase().trim() === cleanId || np.name.toUpperCase().trim() === pId)) {
-          return norm.secondsPerUnit;
-        }
-      }
-
-      if (modelId) {
-        const mId = modelId.trim().toUpperCase();
-        if (paintingNormsMap.has(mId)) return paintingNormsMap.get(mId)!;
-        const mPart = parts.find(p => p.id.toUpperCase() === mId || p.name.toUpperCase() === mId);
-        if (mPart) {
-          if (paintingNormsMap.has(mPart.id.toUpperCase())) return paintingNormsMap.get(mPart.id.toUpperCase())!;
-          if (paintingNormsMap.has(mPart.name.toUpperCase())) return paintingNormsMap.get(mPart.name.toUpperCase())!;
-        }
-      }
-
-      // Dự phòng từ tab HSQĐ Sơn (paintingHSQD)
-      if (paintingHSQDMap.has(pId)) return paintingHSQDMap.get(pId)!;
-      if (paintingHSQDMap.has(pName)) return paintingHSQDMap.get(pName)!;
-      if (cleanId && paintingHSQDMap.has(cleanId)) return paintingHSQDMap.get(cleanId)!;
+      // 3. Tra chéo qua danh mục parts
+      const pt = parts.find(p => 
+        p.id.toUpperCase() === pId || 
+        (p.name && p.name.toUpperCase() === pName) ||
+        (ckPid && (cleanKey(p.id) === ckPid || (p.name && cleanKey(p.name) === ckPid))) ||
+        (ckPname && (cleanKey(p.id) === ckPname || (p.name && cleanKey(p.name) === ckPname)))
+      );
       if (pt) {
         if (paintingHSQDMap.has(pt.id.toUpperCase())) return paintingHSQDMap.get(pt.id.toUpperCase())!;
-        if (paintingHSQDMap.has(pt.name.toUpperCase())) return paintingHSQDMap.get(pt.name.toUpperCase())!;
+        if (paintingHSQDMap.has(normKey(pt.id))) return paintingHSQDMap.get(normKey(pt.id))!;
+        if (paintingHSQDMap.has(cleanKey(pt.id))) return paintingHSQDMap.get(cleanKey(pt.id))!;
+        if (pt.name) {
+          if (paintingHSQDMap.has(pt.name.toUpperCase())) return paintingHSQDMap.get(pt.name.toUpperCase())!;
+          if (paintingHSQDMap.has(normKey(pt.name))) return paintingHSQDMap.get(normKey(pt.name))!;
+          if (paintingHSQDMap.has(cleanKey(pt.name))) return paintingHSQDMap.get(cleanKey(pt.name))!;
+        }
       }
 
-      // Dự phòng cũ từ DCLR nếu chưa có
+      // 4. Duyệt mảng gốc của paintingHSQD để so khớp mềm
+      for (const item of paintingHSQD) {
+        if (item.hsqd > 0) {
+          const itemId = (item.partId || '').trim().toUpperCase();
+          const itemName = (item.partName || '').trim().toUpperCase();
+          if (itemId && (itemId === pId || cleanKey(itemId) === ckPid || itemId === pName || cleanKey(itemId) === ckPname)) {
+            return item.hsqd;
+          }
+          if (itemName && (itemName === pName || cleanKey(itemName) === ckPname || itemName === pId || cleanKey(itemName) === ckPid)) {
+            return item.hsqd;
+          }
+        }
+      }
+
+      // 5. Nếu là Model thành phẩm
+      if (modelId) {
+        const mId = modelId.trim().toUpperCase();
+        if (paintingHSQDMap.has(mId)) return paintingHSQDMap.get(mId)!;
+        const nkMid = normKey(mId);
+        if (nkMid && paintingHSQDMap.has(nkMid)) return paintingHSQDMap.get(nkMid)!;
+        const mPart = parts.find(p => p.id.toUpperCase() === mId || (p.name && p.name.toUpperCase() === mId));
+        if (mPart) {
+          if (paintingHSQDMap.has(mPart.id.toUpperCase())) return paintingHSQDMap.get(mPart.id.toUpperCase())!;
+          if (mPart.name && paintingHSQDMap.has(mPart.name.toUpperCase())) return paintingHSQDMap.get(mPart.name.toUpperCase())!;
+        }
+      }
+
+      // 6. Dự phòng DCLR (nếu có cài đặt ở DCLR)
       if (dclrNormsMap.has(pId)) return dclrNormsMap.get(pId)!;
       if (dclrNormsMap.has(pName)) return dclrNormsMap.get(pName)!;
-      if (cleanId && dclrNormsMap.has(cleanId)) return dclrNormsMap.get(cleanId)!;
-      if (pt) {
-        if (dclrNormsMap.has(pt.id.toUpperCase())) return dclrNormsMap.get(pt.id.toUpperCase())!;
-        if (dclrNormsMap.has(pt.name.toUpperCase())) return dclrNormsMap.get(pt.name.toUpperCase())!;
-      }
+      if (ckPid && dclrNormsMap.has(ckPid)) return dclrNormsMap.get(ckPid)!;
 
       return 1;
     }
