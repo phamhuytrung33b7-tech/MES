@@ -5135,7 +5135,7 @@ export const storageService = {
     persistProductionOrdersToSupabase([targetPo]);
   },
 
-  updateSubPoTime(id: string, newExpectedTime: number) {
+  async updateSubPoTime(id: string, newExpectedTime: number) {
     const pos = this.getProductionOrders();
     const targetPo = pos.find(p => p.id === id);
     if (!targetPo) return;
@@ -5143,11 +5143,13 @@ export const storageService = {
     if (targetPo.expectedCompletionTime && targetPo.plannedStartTime) {
       const timeDiff = newExpectedTime - targetPo.expectedCompletionTime;
       targetPo.plannedStartTime += timeDiff;
+    } else if (!targetPo.plannedStartTime) {
+      targetPo.plannedStartTime = newExpectedTime - (targetPo.leadTime ? targetPo.leadTime * 1000 : 0);
     }
     targetPo.expectedCompletionTime = newExpectedTime;
 
     this.saveProductionOrders(pos);
-    persistProductionOrdersToSupabase([targetPo]);
+    await persistProductionOrdersToSupabase([targetPo]);
   },
 
   reconcileProductionOrders(): { updatedCount: number; changedPOs: ProductionOrder[] } {

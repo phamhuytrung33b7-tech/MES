@@ -405,6 +405,16 @@ export function UserManagementView({ currentUser, onUserUpdated }: UserManagemen
                                 ✦ Duyệt PO lẻ
                               </span>
                             )}
+                            {user.canEditPOTime && (
+                              <span className="text-[10px] bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-md font-bold border border-blue-200" title="Được quyền sửa ngày dự kiến hoàn thành PO con không cần mật khẩu Admin">
+                                ✦ Sửa ngày PO
+                              </span>
+                            )}
+                            {user.canInstantInboundQR && (
+                              <span className="text-[10px] bg-teal-50 text-teal-700 px-1.5 py-0.5 rounded-md font-bold border border-teal-200" title="Được quyền Nhập kho ngay tại Danh sách nhãn QR không cần mật khẩu Admin">
+                                ✦ Nhập kho ngay QR
+                              </span>
+                            )}
                           </div>
                         )}
                       </td>
@@ -581,6 +591,8 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
   const [canViewOwnStageExportedLabels, setCanViewOwnStageExportedLabels] = useState<boolean>(initialData?.canViewOwnStageExportedLabels ?? true);
   const [canViewAllStageLabels, setCanViewAllStageLabels] = useState<boolean>(initialData?.canViewAllStageLabels ?? (initialData?.role === 'ADMIN' ? true : false));
   const [canAddInventory, setCanAddInventory] = useState<boolean>(initialData?.canAddInventory ?? (initialData?.role === 'ADMIN' ? true : false));
+  const [canEditPOTime, setCanEditPOTime] = useState<boolean>(initialData?.canEditPOTime ?? (initialData?.role === 'ADMIN' ? true : false));
+  const [canInstantInboundQR, setCanInstantInboundQR] = useState<boolean>(initialData?.canInstantInboundQR ?? (initialData?.role === 'ADMIN' ? true : false));
   const [allowedViews, setAllowedViews] = useState<View[]>(() => {
     if (initialData?.allowedViews) return [...initialData.allowedViews];
     return ['dashboard', 'produce', 'inbound'];
@@ -633,6 +645,8 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
       canViewOwnStageExportedLabels: role === 'ADMIN' ? true : canViewOwnStageExportedLabels,
       canViewAllStageLabels: role === 'ADMIN' ? true : canViewAllStageLabels,
       canAddInventory: role === 'ADMIN' ? true : canAddInventory,
+      canEditPOTime: role === 'ADMIN' ? true : canEditPOTime,
+      canInstantInboundQR: role === 'ADMIN' ? true : canInstantInboundQR,
       isActive,
     });
   };
@@ -882,6 +896,56 @@ function UserFormModal({ title, initialData, isEditing = false, onClose, onSave 
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+          </div>
+
+          {/* Quyền sửa ngày dự kiến hoàn thành của PO con */}
+          <div className="flex items-center justify-between p-3.5 bg-sky-50/80 rounded-xl border border-sky-200">
+            <div>
+              <span className="text-xs font-bold text-sky-950 flex items-center gap-1.5">
+                <Clock size={16} className="text-sky-600" />
+                <span>Sửa ngày giờ dự kiến hoàn thành của PO con (không cần mật khẩu)</span>
+              </span>
+              <p className="text-[11px] text-sky-700 mt-0.5">
+                {role === 'ADMIN' 
+                  ? 'Quản trị viên (Admin) luôn được sửa ngày hoàn thành dự kiến của PO con trực tiếp mà không cần nhập mật khẩu' 
+                  : 'Cho phép tài khoản này bấm vào bút sửa ngày giờ hoàn thành của PO con và cập nhật trực tiếp lên Supabase mà không cần nhập mật khẩu Admin'}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+              <input
+                type="checkbox"
+                checked={role === 'ADMIN' || canEditPOTime}
+                disabled={role === 'ADMIN'}
+                onChange={(e) => setCanEditPOTime(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
+            </label>
+          </div>
+
+          {/* Quyền Nhập kho ngay tại Danh sách nhãn QR */}
+          <div className="flex items-center justify-between p-3.5 bg-teal-50/80 rounded-xl border border-teal-200">
+            <div>
+              <span className="text-xs font-bold text-teal-950 flex items-center gap-1.5">
+                <QrCode size={16} className="text-teal-600" />
+                <span>Nhập kho ngay tại Danh sách nhãn QR (không cần mật khẩu)</span>
+              </span>
+              <p className="text-[11px] text-teal-700 mt-0.5">
+                {role === 'ADMIN' 
+                  ? 'Quản trị viên (Admin) luôn được phép bấm Nhập kho ngay tại Danh sách nhãn QR mà không cần nhập mật khẩu' 
+                  : 'Cho phép tài khoản này sử dụng nút "Nhập kho ngay" trong mục Danh sách nhãn QR trực tiếp mà không cần nhập mật khẩu Admin'}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+              <input
+                type="checkbox"
+                checked={role === 'ADMIN' || canInstantInboundQR}
+                disabled={role === 'ADMIN'}
+                onChange={(e) => setCanInstantInboundQR(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-600"></div>
             </label>
           </div>
 

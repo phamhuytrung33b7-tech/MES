@@ -1953,6 +1953,7 @@ export default function App() {
                   onUpdate={refreshData} 
                   productionOrders={productionOrders} 
                   onNavigateToOddPO={() => setCurrentView('odd_po')}
+                  currentUser={currentUser}
                 />
               )}
               {currentView === 'defects' && (
@@ -3001,10 +3002,12 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
     }
   };
 
-  const handleUpdateSubPoTime = () => {
-    if (storageService.verifyAdminPassword(password, currentUser)) {
+  const handleUpdateSubPoTime = async () => {
+    const activeUser = currentUser || storageService.getCurrentUser();
+    const canEditTime = activeUser?.role === 'ADMIN' || Boolean(activeUser?.canEditPOTime);
+    if (canEditTime || storageService.verifyAdminPassword(password, activeUser)) {
       if (showEditTimeModal && showEditTimeModal.timeStr) {
-        storageService.updateSubPoTime(showEditTimeModal.id, new Date(showEditTimeModal.timeStr).getTime());
+        await storageService.updateSubPoTime(showEditTimeModal.id, new Date(showEditTimeModal.timeStr).getTime());
         onUpdate();
         setShowEditTimeModal(null);
         setPassword("");
@@ -3759,59 +3762,70 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
 
       {/* Edit PO Time Modal */}
       <AnimatePresence>
-        {showEditTimeModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6"
-            >
-              <div className="flex items-center gap-4 text-blue-600">
-                <Edit2 size={32} />
-                <h3 className="text-xl font-bold">Sửa ngày giờ hoàn thành PO</h3>
-              </div>
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold uppercase opacity-50">Thời gian hoàn thành dự kiến</label>
-                  <input 
-                    type="datetime-local"
-                    value={showEditTimeModal.timeStr}
-                    onChange={e => setShowEditTimeModal({...showEditTimeModal, timeStr: e.target.value})}
-                    className="w-full p-4 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-lg font-bold"
-                  />
+        {showEditTimeModal && (() => {
+          const activeUser = currentUser || storageService.getCurrentUser();
+          const canEditTime = activeUser?.role === 'ADMIN' || Boolean(activeUser?.canEditPOTime);
+          return (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6"
+              >
+                <div className="flex items-center gap-4 text-blue-600">
+                  <Edit2 size={32} />
+                  <h3 className="text-xl font-bold">Sửa ngày giờ hoàn thành PO</h3>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-bold uppercase opacity-50">Mật khẩu xác nhận (Admin)</label>
-                  <input 
-                    type="password"
-                    autoComplete="off"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    className="w-full p-4 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-lg"
-                    placeholder="Nhập mật khẩu..."
-                    onKeyDown={(e) => e.key === 'Enter' && handleUpdateSubPoTime()}
-                  />
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase opacity-50">Thời gian hoàn thành dự kiến</label>
+                    <input 
+                      type="datetime-local"
+                      value={showEditTimeModal.timeStr}
+                      onChange={e => setShowEditTimeModal({...showEditTimeModal, timeStr: e.target.value})}
+                      className="w-full p-4 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-lg font-bold"
+                    />
+                  </div>
+                  {canEditTime ? (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs font-semibold text-emerald-800 flex items-center gap-2">
+                      <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+                      <span>Tài khoản của bạn ({activeUser?.username || 'Admin'}) có quyền sửa ngày hoàn thành PO không cần mật khẩu.</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase opacity-50">Mật khẩu xác nhận (Admin)</label>
+                      <input 
+                        type="password"
+                        autoComplete="off"
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        className="w-full p-4 rounded-lg border border-gray-200 focus:border-blue-500 outline-none text-lg"
+                        placeholder="Nhập mật khẩu..."
+                        onKeyDown={(e) => e.key === 'Enter' && handleUpdateSubPoTime()}
+                      />
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={() => { setShowEditTimeModal(null); setPassword(''); }}
-                  className="flex-1 py-4 bg-gray-100 rounded-lg font-bold text-sm uppercase hover:bg-gray-200 transition-all"
-                >
-                  Hủy
-                </button>
-                <button 
-                  onClick={handleUpdateSubPoTime}
-                  disabled={!showEditTimeModal.timeStr || !password}
-                  className="flex-1 py-4 bg-blue-600 text-white rounded-lg font-bold text-sm uppercase hover:bg-blue-700 transition-all shadow-lg disabled:opacity-50"
-                >
-                  Cập nhật
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    onClick={() => { setShowEditTimeModal(null); setPassword(''); }}
+                    className="flex-1 py-4 bg-gray-100 rounded-lg font-bold text-sm uppercase hover:bg-gray-200 transition-all"
+                  >
+                    Hủy
+                  </button>
+                  <button 
+                    onClick={handleUpdateSubPoTime}
+                    disabled={!showEditTimeModal.timeStr || (!canEditTime && !password)}
+                    className="flex-1 py-4 bg-blue-600 text-white rounded-lg font-bold text-sm uppercase hover:bg-blue-700 transition-all shadow-lg disabled:opacity-50"
+                  >
+                    Cập nhật
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
       </AnimatePresence>
 
       {/* Edit PO Quantity Modal */}
@@ -4396,8 +4410,9 @@ function LabelHistoryView({
   };
 
   const handleManualInbound = () => {
-    const isAdmin = currentUser?.role === 'ADMIN';
-    if (isAdmin || storageService.verifyAdminPassword(password, currentUser)) {
+    const activeUser = currentUser || storageService.getCurrentUser();
+    const canInstantInbound = activeUser?.role === 'ADMIN' || Boolean(activeUser?.canInstantInboundQR);
+    if (canInstantInbound || storageService.verifyAdminPassword(password, activeUser)) {
       if (showInboundModal) {
         const label = labels.find(l => l.id === showInboundModal);
         if (label) {
@@ -5120,48 +5135,62 @@ function LabelHistoryView({
           );
         })()}
 
-        {showInboundModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6 border-t-4 border-green-600"
-            >
-              <div className="flex items-center gap-4 text-green-600">
-                <PackagePlus size={32} />
-                <h3 className="text-xl font-bold">Xác nhận nhập kho ngay</h3>
-              </div>
-              <p className="text-sm text-gray-500">Bạn đang thực hiện nhập kho tức thì dựa trên thông tin nhãn QR mà không cần quét mã. Vui lòng nhập mật khẩu Admin để xác nhận.</p>
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase opacity-50">Nhập mật khẩu Admin</label>
-                <input 
-                  type="password"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  className="w-full p-4 rounded-lg border border-gray-200 focus:border-green-500 outline-none text-lg"
-                  placeholder="Vui lòng nhập mật khẩu..."
-                  onKeyDown={(e) => e.key === 'Enter' && handleManualInbound()}
-                  autoFocus
-                />
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={() => { setShowInboundModal(null); setPassword(''); }}
-                  className="flex-1 py-4 bg-gray-100 rounded-lg font-bold text-sm uppercase hover:bg-gray-200 transition-all"
-                >
-                  Hủy bỏ
-                </button>
-                <button 
-                  onClick={handleManualInbound}
-                  className="flex-1 py-4 bg-green-600 text-white rounded-lg font-bold text-sm uppercase hover:bg-green-700 transition-all"
-                >
-                  Xác nhận nhập kho
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+        {showInboundModal && (() => {
+          const activeUser = currentUser || storageService.getCurrentUser();
+          const canInstantInbound = activeUser?.role === 'ADMIN' || Boolean(activeUser?.canInstantInboundQR);
+          return (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6 border-t-4 border-green-600"
+              >
+                <div className="flex items-center gap-4 text-green-600">
+                  <PackagePlus size={32} />
+                  <h3 className="text-xl font-bold">Xác nhận nhập kho ngay</h3>
+                </div>
+                <p className="text-sm text-gray-500">Bạn đang thực hiện nhập kho tức thì dựa trên thông tin nhãn QR mà không cần quét mã.</p>
+
+                {canInstantInbound ? (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs font-semibold text-emerald-800 flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+                    <span>Tài khoản của bạn ({activeUser?.username || 'Admin'}) có quyền Nhập kho ngay trực tiếp không cần mật khẩu.</span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase opacity-50">Nhập mật khẩu Admin</label>
+                    <input 
+                      type="password"
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      className="w-full p-4 rounded-lg border border-gray-200 focus:border-green-500 outline-none text-lg"
+                      placeholder="Vui lòng nhập mật khẩu..."
+                      onKeyDown={(e) => e.key === 'Enter' && handleManualInbound()}
+                      autoFocus
+                    />
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button 
+                    onClick={() => { setShowInboundModal(null); setPassword(''); }}
+                    className="flex-1 py-4 bg-gray-100 rounded-lg font-bold text-sm uppercase hover:bg-gray-200 transition-all"
+                  >
+                    Hủy bỏ
+                  </button>
+                  <button 
+                    onClick={handleManualInbound}
+                    disabled={!canInstantInbound && !password}
+                    className="flex-1 py-4 bg-green-600 text-white rounded-lg font-bold text-sm uppercase hover:bg-green-700 transition-all shadow-lg disabled:opacity-50"
+                  >
+                    Xác nhận nhập kho
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
       </AnimatePresence>
     </motion.div>
   );
