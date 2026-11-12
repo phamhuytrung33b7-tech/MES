@@ -5489,12 +5489,15 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
   ];
 
   const getWorkerCount = (stageId: string, sLabel: string) => {
-    if (stageId === 'LASER') return hourlyPeopleLaser[sLabel] !== undefined ? hourlyPeopleLaser[sLabel] : 0;
-    if (stageId === 'PAINTING') return hourlyPeoplePainting[sLabel] !== undefined ? hourlyPeoplePainting[sLabel] : 8;
-    if (stageId === 'GLAZING') return hourlyPeopleGlazing[sLabel] !== undefined ? hourlyPeopleGlazing[sLabel] : 8;
-    if (stageId === 'BENDING') return hourlyPeopleBending[sLabel] !== undefined ? hourlyPeopleBending[sLabel] : 8;
-    if (stageId === 'WELDING') return hourlyPeopleWelding[sLabel] !== undefined ? hourlyPeopleWelding[sLabel] : 8;
-    return 8;
+    let count: number | undefined = undefined;
+    if (stageId === 'LASER') count = hourlyPeopleLaser[sLabel];
+    else if (stageId === 'PAINTING') count = hourlyPeoplePainting[sLabel];
+    else if (stageId === 'GLAZING') count = hourlyPeopleGlazing[sLabel];
+    else if (stageId === 'BENDING') count = hourlyPeopleBending[sLabel];
+    else if (stageId === 'WELDING') count = hourlyPeopleWelding[sLabel];
+
+    if (count === undefined || count === null || isNaN(count)) return 0;
+    return Number(count);
   };
 
   const titleDate = `${String(sD).padStart(2, '0')}/${String(sM).padStart(2, '0')}/${sY}`;
@@ -5758,6 +5761,7 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
       // Target calculations for shift
       const targetQDs = timeSlots.map(s => {
         const workerCount = getWorkerCount(stageInfo.id, s.label);
+        if (workerCount <= 0) return 0;
         const factor = s.factor;
         if (stageInfo.id === 'LASER') {
           return Math.round(workerCount * 250 * factor * 10) / 10;
@@ -5776,27 +5780,29 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
         }
         return Math.round(workerCount * 64 * factor * 10) / 10;
       });
-      const totalTarget = targetQDs.reduce((a, b) => a + b, 0);
+      const totalTarget = Math.round(targetQDs.reduce((a, b) => a + b, 0) * 10) / 10;
 
       // Năng suất lao động:
-      // Cơ chế mới: Nếu khung giờ đó có ghi người nhưng không tạo ra sản phẩm quy đổi (s == 0)
-      // thì tính NSLĐ khung giờ đó bằng 0 (0%).
-      // Năng suất lao động của cả ca công đoạn sẽ tính bằng cách trung bình cộng của các khung giờ có ghi người
-      // (bao gồm cả các khung giờ 0% nếu có ghi số người).
+      // Cơ chế: Nếu khung giờ đó không điền người (workerCount <= 0) thì không tính NSLĐ (để trống).
+      // Khung giờ đó cũng không được tính vào NSLĐ trung bình của cả ca hay cả ngày.
+      // Chỉ tính NSLĐ cho các khung giờ có điền người (workerCount > 0).
+      // Nếu khung giờ có ghi người mà sản phẩm quy đổi = 0 thì tính NSLĐ là 0 (0%).
       const tlRow: any[] = ['Năng suất lao động', '', '', '', '', '', ''];
       const validProductivities: number[] = [];
       sumSlots_QD.forEach((s, i) => {
         const workerCount = getWorkerCount(stageInfo.id, timeSlots[i].label);
         const tgt = targetQDs[i];
-        if (workerCount > 0) {
-          const prod = tgt > 0 ? (s / tgt) : 0;
+        if (workerCount > 0 && tgt > 0) {
+          const prod = s / tgt;
           tlRow.push(prod);
           validProductivities.push(prod);
         } else {
           tlRow.push('');
         }
       });
-      const avgProductivity = validProductivities.length > 0 ? (validProductivities.reduce((a, b) => a + b, 0) / validProductivities.length) : 0;
+      const avgProductivity = validProductivities.length > 0 
+        ? (validProductivities.reduce((a, b) => a + b, 0) / validProductivities.length) 
+        : '';
       tlRow.push(avgProductivity);
       sheetData.push(tlRow);
 
