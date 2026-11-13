@@ -5152,6 +5152,56 @@ export const storageService = {
     await persistProductionOrdersToSupabase([targetPo]);
   },
 
+  async updateSubPoProgress(id: string, producedQuantity: number, exportedQuantity: number) {
+    const pos = this.getProductionOrders();
+    const targetPo = pos.find(p => p.id === id);
+    if (!targetPo) return;
+
+    const cleanProduced = Math.max(0, Math.round(Number(producedQuantity) || 0));
+    const cleanExported = Math.max(0, Math.round(Number(exportedQuantity) || 0));
+
+    targetPo.producedQuantity = cleanProduced;
+    targetPo.exportedQuantity = cleanExported;
+
+    const isProduced = targetPo.producedQuantity >= targetPo.targetQuantity;
+    const isExported = (targetPo.exportedQuantity || 0) >= targetPo.targetQuantity;
+
+    if (isProduced && isExported) {
+      targetPo.status = 'COMPLETED';
+      if (!targetPo.completedAt) targetPo.completedAt = Date.now();
+    } else {
+      targetPo.status = (targetPo.producedQuantity > 0 || (targetPo.exportedQuantity && targetPo.exportedQuantity > 0))
+        ? 'IN_PROGRESS'
+        : 'PENDING';
+      targetPo.completedAt = undefined;
+    }
+
+    let masterPo: ProductionOrder | undefined;
+    if (targetPo.masterPoId) {
+      masterPo = pos.find(p => p.id === targetPo.masterPoId);
+      if (masterPo && masterPo.status !== 'PAUSED') {
+        const subs = pos.filter(p => p.masterPoId === masterPo!.id);
+        if (subs.length > 0) {
+          const allCompleted = subs.every(s => s.status === 'COMPLETED');
+          const hasStarted = subs.some(s => s.status === 'IN_PROGRESS' || s.status === 'COMPLETED' || s.producedQuantity > 0 || (s.exportedQuantity || 0) > 0);
+          if (allCompleted) {
+            masterPo.status = 'COMPLETED';
+            if (!masterPo.completedAt) masterPo.completedAt = Date.now();
+          } else if (hasStarted) {
+            masterPo.status = 'IN_PROGRESS';
+            masterPo.completedAt = undefined;
+          } else {
+            masterPo.status = 'PENDING';
+            masterPo.completedAt = undefined;
+          }
+        }
+      }
+    }
+
+    this.saveProductionOrders(pos);
+    await persistProductionOrdersToSupabase(masterPo ? [targetPo, masterPo] : [targetPo]);
+  },
+
   reconcileProductionOrders(): { updatedCount: number; changedPOs: ProductionOrder[] } {
     const pos = this.getProductionOrders();
     const txs = this.getTransactions();

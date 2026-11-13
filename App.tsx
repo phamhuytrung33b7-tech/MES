@@ -93,7 +93,7 @@ import { supabase, SUPABASE_URL, SUPABASE_SQL_SCHEMA, testSupabaseConnection, is
 import { exportPreparationReport } from './exportPreparationReport';
 import { exportDetailedProductionPlan } from './exportDetailedPlan';
 import { importExcelToPO, downloadSamplePOExcelTemplate, MissingBomModelInfo } from './importExcelToPO';
-import { downloadNormTemplate } from './downloadNormTemplate';
+import { downloadNormTemplate, exportNormData, exportSettingsTabExcel } from './downloadNormTemplate';
 import { MobileQRScannerModal } from './MobileQRScanner';
 import { importExcelToGlazingPlan, MissingNormModelInfo } from './importExcelToGlazingPlan';
 import { UserManagementView, LoginModal, ChangePasswordModal, AdminActionPasswordModal } from './UserManagement';
@@ -2830,6 +2830,16 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
   const [showEditModal, setShowEditModal] = useState<{ id: string, qty: number } | null>(null);
   const [showEditTimeModal, setShowEditTimeModal] = useState<{ id: string, timeStr: string } | null>(null);
+  const [showEditProgressModal, setShowEditProgressModal] = useState<{
+    id: string;
+    partName: string;
+    stageName: string;
+    targetQuantity: number;
+    producedQuantity: number;
+    exportedQuantity: number;
+    focusField: 'produced' | 'exported';
+  } | null>(null);
+  const [isSavingProgress, setIsSavingProgress] = useState(false);
   const [showRollbackModal, setShowRollbackModal] = useState(false);
   const [deletedBackupsCount, setDeletedBackupsCount] = useState<number>(() => storageService.getDeletedPOBackups().length);
   const [password, setPassword] = useState("");
@@ -3014,6 +3024,28 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
       }
     } else {
       alert('Mật khẩu quản trị không chính xác!');
+    }
+  };
+
+  const handleUpdateSubPoProgress = async () => {
+    const activeUser = currentUser || storageService.getCurrentUser();
+    if (activeUser?.role !== 'ADMIN' || !showEditProgressModal || isSavingProgress) return;
+    setIsSavingProgress(true);
+    try {
+      await storageService.updateSubPoProgress(
+        showEditProgressModal.id,
+        showEditProgressModal.producedQuantity,
+        showEditProgressModal.exportedQuantity
+      );
+      onUpdate();
+      setPoFeedback({
+        message: `✓ Đã cập nhật Thực tế (${showEditProgressModal.producedQuantity}) & Đã xuất (${showEditProgressModal.exportedQuantity}) cho PO ${showEditProgressModal.id} và đồng bộ Supabase!`,
+        type: 'success'
+      });
+      setTimeout(() => setPoFeedback(null), 5000);
+      setShowEditProgressModal(null);
+    } finally {
+      setIsSavingProgress(false);
     }
   };
 
@@ -3631,8 +3663,52 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
                             </span>
                           </td>
                           <td className="px-8 py-4 text-right font-bold">{sub.targetQuantity}</td>
-                          <td className="px-8 py-4 text-right font-bold text-blue-600">{sub.producedQuantity}</td>
-                          <td className="px-8 py-4 text-right font-bold text-orange-600">{sub.exportedQuantity || 0}</td>
+                          <td className="px-8 py-4 text-right font-bold text-blue-600">
+                            {(currentUser || storageService.getCurrentUser())?.role === 'ADMIN' ? (
+                              <button
+                                type="button"
+                                onClick={() => setShowEditProgressModal({
+                                  id: sub.id,
+                                  partName: getProcessValue(parts.find(p => p.id === sub.partId)?.name, parts.find(p => p.id === sub.partId), sub.stageId as StageId, 'OUT') || sub.partId,
+                                  stageName: STAGES.find(s => s.id === sub.stageId)?.name || String(sub.stageId || ''),
+                                  targetQuantity: sub.targetQuantity,
+                                  producedQuantity: sub.producedQuantity || 0,
+                                  exportedQuantity: sub.exportedQuantity || 0,
+                                  focusField: 'produced'
+                                })}
+                                className="inline-flex items-center justify-end gap-1.5 px-2 py-1 -mr-2 rounded-lg hover:bg-blue-50 hover:underline transition-all cursor-pointer group"
+                                title="Admin: Chỉnh sửa số lượng Thực tế & Đã xuất"
+                              >
+                                <span>{sub.producedQuantity}</span>
+                                <Edit2 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </button>
+                            ) : (
+                              sub.producedQuantity
+                            )}
+                          </td>
+                          <td className="px-8 py-4 text-right font-bold text-orange-600">
+                            {(currentUser || storageService.getCurrentUser())?.role === 'ADMIN' ? (
+                              <button
+                                type="button"
+                                onClick={() => setShowEditProgressModal({
+                                  id: sub.id,
+                                  partName: getProcessValue(parts.find(p => p.id === sub.partId)?.name, parts.find(p => p.id === sub.partId), sub.stageId as StageId, 'OUT') || sub.partId,
+                                  stageName: STAGES.find(s => s.id === sub.stageId)?.name || String(sub.stageId || ''),
+                                  targetQuantity: sub.targetQuantity,
+                                  producedQuantity: sub.producedQuantity || 0,
+                                  exportedQuantity: sub.exportedQuantity || 0,
+                                  focusField: 'exported'
+                                })}
+                                className="inline-flex items-center justify-end gap-1.5 px-2 py-1 -mr-2 rounded-lg hover:bg-orange-50 hover:underline transition-all cursor-pointer group"
+                                title="Admin: Chỉnh sửa số lượng Thực tế & Đã xuất"
+                              >
+                                <span>{sub.exportedQuantity || 0}</span>
+                                <Edit2 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </button>
+                            ) : (
+                              sub.exportedQuantity || 0
+                            )}
+                          </td>
                           <td className="px-8 py-4">
                             <div className="w-full bg-gray-100 rounded-full h-1.5">
                               <div className={cn(
@@ -3879,6 +3955,101 @@ function ProductionOrderView({ parts, onUpdate, productionOrders, onNavigateToOd
                   className="flex-1 py-4 bg-blue-600 text-white rounded-lg font-bold text-sm uppercase hover:bg-blue-700 transition-all shadow-lg disabled:opacity-50"
                 >
                   Cập nhật
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Sub-PO Produced & Exported Quantities Modal (Admin only) */}
+      <AnimatePresence>
+        {showEditProgressModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl space-y-6"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 text-blue-600">
+                  <Edit2 size={28} />
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-900">Sửa Thực tế & Đã xuất (PO Con)</h3>
+                    <p className="text-xs font-mono text-gray-500 mt-0.5">{showEditProgressModal.id}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowEditProgressModal(null)}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 text-sm space-y-1">
+                <div className="font-bold text-gray-900">{showEditProgressModal.partName}</div>
+                <div className="flex items-center justify-between text-xs text-gray-600">
+                  <span>Công đoạn: <strong className="text-gray-800">{showEditProgressModal.stageName}</strong></span>
+                  <span>Kế hoạch: <strong className="text-gray-900">{showEditProgressModal.targetQuantity}</strong></span>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase text-blue-600">Số lượng Thực tế (màu xanh)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    autoFocus={showEditProgressModal.focusField === 'produced'}
+                    value={showEditProgressModal.producedQuantity}
+                    onChange={e => setShowEditProgressModal({
+                      ...showEditProgressModal,
+                      producedQuantity: Math.max(0, parseInt(e.target.value, 10) || 0)
+                    })}
+                    onKeyDown={e => e.key === 'Enter' && handleUpdateSubPoProgress()}
+                    className="w-full p-4 rounded-xl border-2 border-blue-200 focus:border-blue-500 outline-none text-lg font-bold text-blue-600 bg-blue-50/30"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold uppercase text-orange-600">Số lượng Đã xuất (màu đỏ/cam)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    autoFocus={showEditProgressModal.focusField === 'exported'}
+                    value={showEditProgressModal.exportedQuantity}
+                    onChange={e => setShowEditProgressModal({
+                      ...showEditProgressModal,
+                      exportedQuantity: Math.max(0, parseInt(e.target.value, 10) || 0)
+                    })}
+                    onKeyDown={e => e.key === 'Enter' && handleUpdateSubPoProgress()}
+                    className="w-full p-4 rounded-xl border-2 border-orange-200 focus:border-orange-500 outline-none text-lg font-bold text-orange-600 bg-orange-50/30"
+                  />
+                </div>
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center gap-2">
+                  <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+                  <span>Sau khi lưu sẽ tự động cập nhật trạng thái PO, đồng bộ Supabase và cập nhật các tab chức năng.</span>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowEditProgressModal(null)}
+                  disabled={isSavingProgress}
+                  className="flex-1 py-3.5 bg-gray-100 rounded-xl font-bold text-sm uppercase hover:bg-gray-200 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUpdateSubPoProgress}
+                  disabled={isSavingProgress || showEditProgressModal.producedQuantity < 0 || showEditProgressModal.exportedQuantity < 0}
+                  className="flex-1 py-3.5 bg-blue-600 text-white rounded-xl font-bold text-sm uppercase hover:bg-blue-700 transition-all shadow-lg disabled:opacity-50 cursor-pointer"
+                >
+                  {isSavingProgress ? 'Đang đồng bộ...' : 'Lưu & Đồng bộ'}
                 </button>
               </div>
             </motion.div>
@@ -15881,6 +16052,8 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
           let childId = '';
           let parentId = '';
           let weightVal: any = 0;
+          let compWeightVal: any = undefined;
+          let scrapWeightVal: any = undefined;
 
           Object.keys(row).forEach(key => {
             const k = key.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '').replace(/\n/g, '');
@@ -15888,7 +16061,11 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                childId = row[key];
             } else if (k.includes('malinhkiencha') || k.includes('malinhkienton') || k.includes('parentid') || k.includes('macha')) {
                parentId = row[key];
-            } else if (k.includes('khoiluong') || k.includes('componentweight') || k.includes('kg') || k.includes('weight')) {
+            } else if (k.includes('kllinhkien') || k.includes('componentweight') || k.includes('khoiluonglinhkien')) {
+               compWeightVal = row[key];
+            } else if (k.includes('klphe') || k.includes('scrapweight') || k.includes('khoiluongphe')) {
+               scrapWeightVal = row[key];
+            } else if (k.includes('khoiluong') || k.includes('kg') || k.includes('weight')) {
                weightVal = row[key];
             }
           });
@@ -15903,14 +16080,16 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
           
           if (!childId) return;
 
-          let weight = 0;
-          if (typeof weightVal === 'string') {
-            const clean = weightVal.replace(/[()]/g, '').replace(/,/g, '.');
-            weight = parseFloat(clean) || 0;
-          } else if (typeof weightVal === 'number') {
-            weight = Math.abs(weightVal);
-          }
-          
+          const parseWeight = (v: any) => {
+            if (typeof v === 'string') {
+              const clean = v.replace(/[()]/g, '').replace(/,/g, '.');
+              return parseFloat(clean) || 0;
+            } else if (typeof v === 'number') {
+              return Math.abs(v);
+            }
+            return 0;
+          };
+
           if (!bomMap.has(childId)) {
             bomMap.set(childId, {
               parentPartId: '',
@@ -15921,13 +16100,20 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
           }
 
           const def = bomMap.get(childId)!;
-          
-          const upperParentId = parentId.toUpperCase();
-          if (upperParentId.includes('PL-') || upperParentId.includes('PHẾ') || upperParentId.includes('P-')) {
-            def.scrapWeight += weight;
+
+          if (compWeightVal !== undefined || scrapWeightVal !== undefined) {
+            if (parentId && !def.parentPartId) def.parentPartId = parentId;
+            def.componentWeight += parseWeight(compWeightVal);
+            def.scrapWeight += parseWeight(scrapWeightVal);
           } else {
-            if (parentId && !def.parentPartId) def.parentPartId = parentId; // Keep the first valid parent ID
-            def.componentWeight += weight;
+            const weight = parseWeight(weightVal);
+            const upperParentId = parentId.toUpperCase();
+            if (upperParentId.includes('PL-') || upperParentId.includes('PHẾ') || upperParentId.includes('P-')) {
+              def.scrapWeight += weight;
+            } else {
+              if (parentId && !def.parentPartId) def.parentPartId = parentId; // Keep the first valid parent ID
+              def.componentWeight += weight;
+            }
           }
         });
 
@@ -16397,8 +16583,17 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                   <p className="text-sm text-gray-500">Tự động trừ linh kiện Level 2 khi nhập kho OUT công đoạn Hàn</p>
                 </div>
               </div>
-              <div className="flex gap-4">
-                <label className="bg-white border-2 border-orange-600 text-orange-600 px-6 py-3 rounded-xl font-bold uppercase cursor-pointer hover:bg-orange-50 transition-all flex items-center gap-2">
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => exportSettingsTabExcel('bom_v2', parts)}
+                  className="bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold uppercase cursor-pointer hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-sm active:scale-95 text-sm"
+                  title="Xuất định mức Hàn (BOM v2) ra file Excel chuẩn mẫu"
+                >
+                  <FileDown size={18} />
+                  Xuất Excel BOM v2
+                </button>
+                <label className="bg-white border-2 border-orange-600 text-orange-600 px-6 py-3 rounded-xl font-bold uppercase cursor-pointer hover:bg-orange-50 transition-all flex items-center gap-2 text-sm">
                   <FileUp size={20} />
                   {isImportingBOMV2 ? 'Đang xử lý...' : 'Nhập Excel BOM v2'}
                   <input type="file" accept=".xlsx, .xls" className="hidden" onChange={(e) => {
@@ -16497,8 +16692,17 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                   <p className="text-sm text-gray-500">Liên kết Model với các linh kiện Level 1</p>
                 </div>
               </div>
-              <div className="flex gap-4">
-                <label className="bg-white border-2 border-purple-600 text-purple-600 px-6 py-3 rounded-xl font-bold uppercase cursor-pointer hover:bg-purple-50 transition-all flex items-center gap-2">
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => exportSettingsTabExcel('model_bom', parts)}
+                  className="bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold uppercase cursor-pointer hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-sm active:scale-95 text-sm"
+                  title="Xuất định mức Model ra file Excel chuẩn mẫu"
+                >
+                  <FileDown size={18} />
+                  Xuất Excel Model BOM
+                </button>
+                <label className="bg-white border-2 border-purple-600 text-purple-600 px-6 py-3 rounded-xl font-bold uppercase cursor-pointer hover:bg-purple-50 transition-all flex items-center gap-2 text-sm">
                   <FileUp size={20} />
                   {isImportingModelBOM ? 'Đang xử lý...' : 'Nhập Excel Model BOM'}
                   <input type="file" accept=".xlsx, .xls" className="hidden" onChange={(e) => {
@@ -16703,7 +16907,16 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                   <p className="text-sm text-gray-500">Tự động chuyển đổi tên linh kiện khi nhập kho công đoạn Sơn</p>
                 </div>
               </div>
-              <div className="flex gap-4">
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => exportSettingsTabExcel('transformations', parts)}
+                  className="bg-emerald-600 text-white px-5 py-3 rounded-xl font-bold uppercase hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-sm active:scale-95 text-sm cursor-pointer"
+                  title="Xuất quy tắc chuyển đổi linh kiện ra file Excel chuẩn mẫu"
+                >
+                  <FileDown size={18} />
+                  Xuất Excel
+                </button>
                 <button 
                   onClick={() => {
                     if (!confirm('Bạn có chắc chắn muốn đảo ngược tất cả dữ liệu Nguồn và Đích trong bảng này không?')) return;
@@ -16717,12 +16930,12 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                     onPartsChange();
                     alert('Đã đảo ngược dữ liệu thành công!');
                   }}
-                  className="bg-white border-2 border-orange-500 text-orange-500 px-6 py-3 rounded-xl font-bold uppercase hover:bg-orange-50 transition-all flex items-center gap-2"
+                  className="bg-white border-2 border-orange-500 text-orange-500 px-6 py-3 rounded-xl font-bold uppercase hover:bg-orange-50 transition-all flex items-center gap-2 text-sm"
                 >
                   <RotateCcw size={20} />
                   Đảo ngược Nguồn/Đích
                 </button>
-                <label className="bg-white border-2 border-cyan-600 text-cyan-600 px-6 py-3 rounded-xl font-bold uppercase cursor-pointer hover:bg-cyan-100 transition-all flex items-center gap-2">
+                <label className="bg-white border-2 border-cyan-600 text-cyan-600 px-6 py-3 rounded-xl font-bold uppercase cursor-pointer hover:bg-cyan-100 transition-all flex items-center gap-2 text-sm">
                   <FileUp size={20} />
                   {isImportingTransformations ? 'Đang xử lý...' : 'Nhập Excel Chuyển đổi'}
                   <input type="file" accept=".xlsx, .xls" className="hidden" onChange={(e) => {
@@ -17329,20 +17542,31 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                     </span>
                   )}
                 </div>
-                <label className={cn(
-                  "flex items-center gap-2.5 px-5 py-2.5 bg-green-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest cursor-pointer hover:bg-green-700 transition-all shadow-sm active:scale-95 shrink-0",
-                  isImporting && "opacity-50 cursor-not-allowed"
-                )}>
-                  <FileUp size={18} />
-                  {isImporting ? 'Đang nhập...' : 'Nhập Excel'}
-                  <input 
-                    type="file" 
-                    accept=".xlsx, .xls" 
-                    className="hidden" 
-                    onChange={handleExcelImport}
-                    disabled={isImporting}
-                  />
-                </label>
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => exportSettingsTabExcel('parts', parts)}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-emerald-600 text-emerald-700 rounded-xl text-xs font-bold uppercase tracking-widest cursor-pointer hover:bg-emerald-50 transition-all shadow-sm active:scale-95"
+                    title="Xuất toàn bộ danh mục linh kiện ra file Excel chuẩn mẫu"
+                  >
+                    <FileDown size={17} className="text-emerald-600" />
+                    Xuất Excel
+                  </button>
+                  <label className={cn(
+                    "flex items-center gap-2.5 px-5 py-2.5 bg-green-600 text-white rounded-xl text-xs font-bold uppercase tracking-widest cursor-pointer hover:bg-green-700 transition-all shadow-sm active:scale-95 shrink-0",
+                    isImporting && "opacity-50 cursor-not-allowed"
+                  )}>
+                    <FileUp size={18} />
+                    {isImporting ? 'Đang nhập...' : 'Nhập Excel'}
+                    <input 
+                      type="file" 
+                      accept=".xlsx, .xls" 
+                      className="hidden" 
+                      onChange={handleExcelImport}
+                      disabled={isImporting}
+                    />
+                  </label>
+                </div>
               </div>
 
               {/* Fast Search & Level Filter Controls */}
@@ -17481,20 +17705,31 @@ function SettingsView({ parts, onPartsChange, labelSettings, onLabelSettingsChan
                 <h2 className="font-bold text-2xl tracking-tight">Định mức sản xuất (KG)</h2>
                 <p className="text-xs text-gray-400">Cột yêu cầu: Mã linh kiện, Mã linh kiện tôn, Khối lượng (Kg)</p>
               </div>
-              <label className={cn(
-                "flex items-center gap-3 px-6 py-3 bg-blue-600 text-white rounded-lg text-sm font-bold uppercase tracking-widest cursor-pointer hover:bg-blue-700 transition-all",
-                isImportingBOM && "opacity-50 cursor-not-allowed"
-              )}>
-                <FileUp size={20} />
-                {isImportingBOM ? 'Đang nhập...' : 'Nhập Định Mức'}
-                <input 
-                  type="file" 
-                  accept=".xlsx, .xls" 
-                  className="hidden" 
-                  onChange={handleBOMImport}
-                  disabled={isImportingBOM}
-                />
-              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => exportSettingsTabExcel('bom', parts)}
+                  className="flex items-center gap-2.5 px-5 py-3 bg-emerald-600 text-white rounded-lg text-sm font-bold uppercase tracking-widest cursor-pointer hover:bg-emerald-700 transition-all shadow-sm active:scale-95"
+                  title="Xuất định mức sản xuất (BOM) ra file Excel chuẩn mẫu"
+                >
+                  <FileDown size={18} />
+                  Xuất Excel BOM
+                </button>
+                <label className={cn(
+                  "flex items-center gap-3 px-6 py-3 bg-blue-600 text-white rounded-lg text-sm font-bold uppercase tracking-widest cursor-pointer hover:bg-blue-700 transition-all",
+                  isImportingBOM && "opacity-50 cursor-not-allowed"
+                )}>
+                  <FileUp size={20} />
+                  {isImportingBOM ? 'Đang nhập...' : 'Nhập Định Mức'}
+                  <input 
+                    type="file" 
+                    accept=".xlsx, .xls" 
+                    className="hidden" 
+                    onChange={handleBOMImport}
+                    disabled={isImportingBOM}
+                  />
+                </label>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
@@ -17596,15 +17831,20 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
             if (!rawGrid || rawGrid.length === 0) continue;
 
             let headerRowIdx = -1;
-            let nestCol = -1, partCol = -1, qtyCol = -1, secCol = -1, modelCol = -1;
+            let nestCol = -1, partCol = -1, nameCol = -1, qtyCol = -1, secCol = -1, modelCol = -1;
 
             for (let r = 0; r < Math.min(rawGrid.length, 10); r++) {
               const row = rawGrid[r] || [];
-              let nC = -1, pC = -1, qC = -1, sC = -1, mC = -1;
+              let nC = -1, pC = -1, nmC = -1, qC = -1, sC = -1, mC = -1;
               row.forEach((cell, cIdx) => {
                 const k = cleanKey(cell);
+                if (!k) return;
                 if (k.includes('nesting') || k.includes('maban') || k.includes('matohop') || k.includes('maphoi') || k.includes('matam') || k.includes('idtohop')) nC = cIdx;
-                if (k.includes('partid') || k.includes('malinhkien') || k.includes('malk') || k.includes('masp') || k.includes('mahang') || k.includes('linhkien') || k.includes('part')) pC = cIdx;
+                if (k.includes('tenlinhkien') || k.includes('partname') || k.startsWith('ten')) {
+                  nmC = cIdx;
+                } else if (k.includes('partid') || k.includes('malinhkien') || k.includes('malk') || k.includes('masp') || k.includes('mahang') || k.includes('linhkien') || k.includes('part')) {
+                  pC = cIdx;
+                }
                 if (k.includes('qty') || k.includes('soluong') || k.includes('sltam')) qC = cIdx;
                 if (k.includes('giay') || k.includes('seconds') || k.includes('thoigian') || k.includes('dinhmuc')) sC = cIdx;
                 if (k.includes('model')) mC = cIdx;
@@ -17614,6 +17854,7 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                 headerRowIdx = r;
                 nestCol = nC;
                 partCol = pC !== -1 ? pC : 1;
+                nameCol = nmC;
                 qtyCol = qC !== -1 ? qC : 2;
                 secCol = sC !== -1 ? sC : 3;
                 modelCol = mC;
@@ -17627,14 +17868,15 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
                 if (!row) continue;
                 const nestId = String(row[nestCol] || '').trim();
                 const partIdRaw = String(row[partCol] || '').trim();
+                const partNameRaw = nameCol !== -1 ? String(row[nameCol] || '').trim() : '';
                 const qty = parseNum(row[qtyCol]);
                 const seconds = parseNum(row[secCol]);
                 const model = modelCol !== -1 && row[modelCol] ? String(row[modelCol]).trim() : undefined;
 
-                if (nestId && (partIdRaw || qty > 0)) {
+                if (nestId && (partIdRaw || partNameRaw || qty > 0)) {
                   let finalPartId = partIdRaw;
-                  if (!finalPartId) {
-                    const found = parts.find(p => cleanKey(p.name) === cleanKey(partIdRaw));
+                  if (!finalPartId && partNameRaw) {
+                    const found = parts.find(p => cleanKey(p.name) === cleanKey(partNameRaw));
                     if (found) finalPartId = found.id;
                   }
                   rawImported.push({
@@ -18136,8 +18378,20 @@ function NormsView({ parts, onNormsChange }: { parts: Part[], onNormsChange: () 
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
+            {/* Nút Xuất dữ liệu Excel chuẩn mẫu theo từng Tab */}
+            <button
+              type="button"
+              onClick={() => exportNormData(activeTab, parts)}
+              className="flex items-center gap-2 px-5 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm cursor-pointer active:scale-95"
+              title="Xuất toàn bộ dữ liệu định mức của tab hiện tại ra file Excel chuẩn mẫu"
+            >
+              <FileDown size={18} />
+              <span>Xuất Excel</span>
+            </button>
+
             {/* Nút Tải File Mẫu cho từng Tab */}
             <button
+              type="button"
               onClick={() => downloadNormTemplate(activeTab)}
               className="flex items-center gap-2 px-5 py-3.5 bg-white border-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-sm cursor-pointer"
               title="Tải file Excel mẫu chuẩn cho tab hiện tại"
