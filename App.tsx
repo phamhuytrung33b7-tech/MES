@@ -5955,15 +5955,20 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
 
       // Năng suất lao động:
       // Cơ chế: Nếu khung giờ đó không điền người (workerCount <= 0) thì không tính NSLĐ (để trống).
-      // Khung giờ đó cũng không được tính vào NSLĐ trung bình của cả ca hay cả ngày.
-      // Chỉ tính NSLĐ cho các khung giờ có điền người (workerCount > 0).
-      // Nếu khung giờ có ghi người mà sản phẩm quy đổi = 0 thì tính NSLĐ là 0 (0%).
+      // Nếu là ngày hiện tại và khung giờ chưa tới (slotStartMs > nowMs) thì chưa tính vào NSLĐ trung bình.
+      // Qua ngày xem lại thì toàn bộ khung giờ đều đã qua nên tự động tính đủ cả ngày / cả ca.
+      const nowMs = Date.now();
       const tlRow: any[] = ['Năng suất lao động', '', '', '', '', '', ''];
       const validProductivities: number[] = [];
       sumSlots_QD.forEach((s, i) => {
-        const workerCount = getWorkerCount(stageInfo.id, timeSlots[i].label);
+        const slot = timeSlots[i];
+        const isNightNextDaySlot = slot.start < 6;
+        const slotStartMs = isNightNextDaySlot
+          ? new Date(sY, sM - 1, sD + 1, slot.start, 0, 0, 0).getTime()
+          : new Date(sY, sM - 1, sD, slot.start, 0, 0, 0).getTime();
+        const workerCount = getWorkerCount(stageInfo.id, slot.label);
         const tgt = targetQDs[i];
-        if (workerCount > 0 && tgt > 0) {
+        if (workerCount > 0 && tgt > 0 && slotStartMs <= nowMs) {
           const prod = s / tgt;
           tlRow.push(prod);
           validProductivities.push(prod);
@@ -6769,6 +6774,13 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   const [showExportHourlyModal, setShowExportHourlyModal] = useState(false);
   const [activeChartTab, setActiveChartTab] = useState<'MECHANICAL' | 'LASER' | 'BENDING' | 'WELDING' | 'PAINTING' | 'GLAZING'>('MECHANICAL');
   const [activeChartShift, setActiveChartShift] = useState<'DAY' | 'NIGHT'>('DAY');
+  const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTimeMs(Date.now());
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
   const [chartDimensions, setChartDimensions] = useState<{ width: number; height: number } | null>(null);
   const chartWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -7443,6 +7455,10 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       slotData['targetQDChanDap'] = targetQDChanDap;
       slotData['hanConverted'] = hanConverted;
       slotData['targetQDHan'] = targetQDHan;
+      const isNightNextDaySlot = activeChartShift === 'NIGHT' && slot.start < 6;
+      slotData['slotStartMs'] = isNightNextDaySlot
+        ? new Date(sY, sM - 1, sD + 1, slot.start, 0, 0, 0).getTime()
+        : new Date(sY, sM - 1, sD, slot.start, 0, 0, 0).getTime();
 
       return slotData;
     });
@@ -7928,15 +7944,18 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
   const activeStageConfig = activeChartTab !== 'MECHANICAL' ? STAGE_CHART_CONFIGS[activeChartTab] : null;
 
   const stageDaySummary = useMemo(() => {
+    const isSlotReached = (d: any) => !d.slotStartMs || d.slotStartMs <= currentTimeMs;
+
     if (activeChartTab === 'MECHANICAL') {
       const totalConv = productionChartData.reduce((acc, d) => acc + (d.totalConvertedMechanical || 0), 0);
       const totalMandays = productionChartData.reduce((acc, d) => acc + (d.slotMandays || 0), 0);
       const totalTarget = totalMandays * 28.3;
       
-      // Trung bình cộng NSLĐ của các khung giờ có ghi nhận người (dù sản phẩm = 0 vẫn tính 0% vào trung bình)
+      // Trung bình cộng NSLĐ của các khung giờ ĐÃ ĐẾN THỜI ĐIỂM HIỆN TẠI có ghi nhận người
+      // (Nếu ngày hôm nay có điền người trước cho các khung giờ tương lai thì chưa tính vào NSLĐ trung bình; qua ngày xem lại thì tính đủ cả ngày)
       const validSlotPercentages: number[] = [];
       productionChartData.forEach(d => {
-        if ((d.totalWorkersMechanical || 0) > 0) {
+        if (isSlotReached(d) && (d.totalWorkersMechanical || 0) > 0) {
           const slotTarget = (d.slotMandays || 0) * 28.3;
           const slotNsld = slotTarget > 0 ? ((d.totalConvertedMechanical || 0) / slotTarget) : 0;
           validSlotPercentages.push(slotNsld);
@@ -7944,7 +7963,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       });
       const avgNsld = validSlotPercentages.length > 0 
         ? (validSlotPercentages.reduce((a, b) => a + b, 0) / validSlotPercentages.length)
-        : (totalTarget > 0 ? (totalConv / totalTarget) : 0);
+        : 0;
 
       return {
         totalConv: totalConv.toFixed(1),
@@ -7959,10 +7978,10 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     const totalConv = productionChartData.reduce((acc, d) => acc + (d[cfg.convertedKey] || 0), 0);
     const totalTarget = productionChartData.reduce((acc, d) => acc + (d[cfg.targetKey] || 0), 0);
     
-    // Trung bình cộng NSLĐ của các khung giờ có ghi nhận người (dù sản phẩm = 0 vẫn tính 0% vào trung bình)
+    // Trung bình cộng NSLĐ của các khung giờ ĐÃ ĐẾN THỜI ĐIỂM HIỆN TẠI có ghi nhận người
     const validSlotPercentages: number[] = [];
     productionChartData.forEach(d => {
-      if ((d[cfg.targetKey] || 0) > 0) {
+      if (isSlotReached(d) && (d[cfg.targetKey] || 0) > 0) {
         const slotTarget = d[cfg.targetKey] || 0;
         const slotConv = d[cfg.convertedKey] || 0;
         const slotNsld = slotTarget > 0 ? (slotConv / slotTarget) : 0;
@@ -7971,7 +7990,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     });
     const avgNsld = validSlotPercentages.length > 0 
       ? (validSlotPercentages.reduce((a, b) => a + b, 0) / validSlotPercentages.length)
-      : (totalTarget > 0 ? (totalConv / totalTarget) : 0);
+      : 0;
 
     return {
       totalActual: Math.round(totalActual),
@@ -7979,7 +7998,7 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       totalTarget: Math.round(totalTarget * 10) / 10,
       avgNsld: Math.round(avgNsld * 100),
     };
-  }, [activeChartTab, activeStageConfig, productionChartData]);
+  }, [activeChartTab, activeStageConfig, productionChartData, currentTimeMs]);
 
   return (
     <motion.div 
