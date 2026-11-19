@@ -12457,7 +12457,29 @@ function OddProductionOrderView({
   const [isCreating, setIsCreating] = useState(false);
 
   // Quyền duyệt: Admin hoặc tài khoản được Admin phân quyền duyệt PO dư lẻ
-  const canApprove = currentUser?.role === 'ADMIN' || currentUser?.canApproveOddPO === true;
+  const activeUser = currentUser || storageService.getCurrentUser();
+  const isAdmin = activeUser?.role === 'ADMIN';
+  const canApprove = isAdmin || activeUser?.canApproveOddPO === true;
+
+  const repairedOddIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!isAdmin) return;
+    const staleIds = (productionOrders || [])
+      .filter(po => {
+        const isOdd = Boolean(po.isOddPO || po.id.startsWith('PO-LE') || (po.note && (po.note.includes('Dư Lẻ') || po.note.includes('Tồn Lẻ'))));
+        const tQty = Math.max(0, Number(po.targetQuantity) || 0);
+        return isOdd && po.status === 'COMPLETED' && tQty > 0 && ((po.producedQuantity || 0) < tQty || (po.exportedQuantity || 0) < tQty);
+      })
+      .map(po => po.id)
+      .filter(id => !repairedOddIdsRef.current.has(id));
+
+    if (staleIds.length > 0) {
+      staleIds.forEach(id => repairedOddIdsRef.current.add(id));
+      storageService.repairCompletedOddPOs().then(count => {
+        if (count > 0) onUpdate();
+      });
+    }
+  }, [isAdmin, productionOrders, onUpdate]);
 
   // Filters for PO list: Đặt 'PENDING_APPROVAL' (Chờ duyệt) lên hàng đầu theo yêu cầu
   const [statusFilter, setStatusFilter] = useState<'PENDING_APPROVAL' | 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'ALL'>('PENDING_APPROVAL');
@@ -12588,8 +12610,13 @@ function OddProductionOrderView({
     }
   };
 
-  const handleCompletePO = (poId: string) => {
-    storageService.forceCompleteMasterPO(poId);
+  const handleCompletePO = async (poId: string) => {
+    const user = currentUser || storageService.getCurrentUser();
+    if (user?.role !== 'ADMIN') {
+      alert('Chỉ Quản trị viên (Admin) mới có quyền hoàn thành PO Dư Lẻ!');
+      return;
+    }
+    await storageService.forceCompleteOddPO(poId);
     onUpdate();
   };
 
@@ -12844,10 +12871,10 @@ function OddProductionOrderView({
               const partObj = parts.find(p => p.id === po.partId);
               const stageName = STAGES.find(s => s.id === po.stageId)?.name || (po.stageId ? po.stageId : 'Cắt Laser');
               const stageIcon = po.stageId === 'LASER' ? '⚡' : '⚙️';
-              const produced = po.producedQuantity || 0;
-              const exported = po.exportedQuantity || 0;
               const target = po.targetQuantity || 1;
-              const pct = Math.min(100, Math.round((produced / target) * 100));
+              const produced = po.status === 'COMPLETED' ? Math.max(po.producedQuantity || 0, po.targetQuantity || 0) : (po.producedQuantity || 0);
+              const exported = po.status === 'COMPLETED' ? Math.max(po.exportedQuantity || 0, po.targetQuantity || 0) : (po.exportedQuantity || 0);
+              const pct = po.status === 'COMPLETED' ? 100 : Math.min(100, Math.round((produced / target) * 100));
 
               return (
                 <div key={po.id} className={cn(
@@ -12980,11 +13007,11 @@ function OddProductionOrderView({
                             <Edit2 size={16} />
                           </button>
 
-                          {po.status !== 'COMPLETED' && po.status !== 'REJECTED' && (
+                          {isAdmin && po.status !== 'COMPLETED' && po.status !== 'REJECTED' && (
                             <button
                               onClick={() => handleCompletePO(po.id)}
-                              className="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl text-xs font-bold transition-colors"
-                              title="Đánh dấu hoàn thành PO này"
+                              className="px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                              title="Admin: Hoàn tất PO Dư Lẻ và chạy đầy 100% tiến độ sản xuất"
                             >
                               Hoàn tất
                             </button>

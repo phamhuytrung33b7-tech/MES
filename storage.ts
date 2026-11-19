@@ -4159,6 +4159,62 @@ export const storageService = {
     persistProductionOrdersToSupabase([masterPo, ...subPos]);
   },
 
+  async forceCompleteOddPO(poId: string) {
+    const pos = this.getProductionOrders();
+    const targetPo = pos.find(p => p.id === poId);
+    if (!targetPo) return;
+
+    const now = Date.now();
+    const targetQty = Math.max(0, Number(targetPo.targetQuantity) || 0);
+    targetPo.producedQuantity = Math.max(targetPo.producedQuantity || 0, targetQty);
+    targetPo.exportedQuantity = Math.max(targetPo.exportedQuantity || 0, targetQty);
+    targetPo.status = 'COMPLETED';
+    if (!targetPo.completedAt) targetPo.completedAt = now;
+
+    const subPos = pos.filter(p => p.masterPoId === poId);
+    subPos.forEach(sub => {
+      const subTarget = Math.max(0, Number(sub.targetQuantity) || 0);
+      sub.producedQuantity = Math.max(sub.producedQuantity || 0, subTarget);
+      sub.exportedQuantity = Math.max(sub.exportedQuantity || 0, subTarget);
+      sub.status = 'COMPLETED';
+      if (!sub.completedAt) sub.completedAt = now;
+    });
+
+    this.saveProductionOrders(pos);
+    await persistProductionOrdersToSupabase([targetPo, ...subPos]);
+  },
+
+  async repairCompletedOddPOs(): Promise<number> {
+    const pos = this.getProductionOrders();
+    const updated: ProductionOrder[] = [];
+
+    pos.forEach(po => {
+      const isOdd = Boolean(
+        po.isOddPO ||
+        po.id.startsWith('PO-LE') ||
+        (po.note && (po.note.includes('Dư Lẻ') || po.note.includes('Tồn Lẻ')))
+      );
+      const targetQty = Math.max(0, Number(po.targetQuantity) || 0);
+      if (
+        isOdd &&
+        po.status === 'COMPLETED' &&
+        targetQty > 0 &&
+        ((po.producedQuantity || 0) < targetQty || (po.exportedQuantity || 0) < targetQty)
+      ) {
+        po.producedQuantity = Math.max(po.producedQuantity || 0, targetQty);
+        po.exportedQuantity = Math.max(po.exportedQuantity || 0, targetQty);
+        if (!po.completedAt) po.completedAt = Date.now();
+        updated.push(po);
+      }
+    });
+
+    if (updated.length > 0) {
+      this.saveProductionOrders(pos);
+      await persistProductionOrdersToSupabase(updated);
+    }
+    return updated.length;
+  },
+
   async createMasterPO(
     modelId: string, 
     quantity: number, 
