@@ -5954,12 +5954,11 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
       const totalTarget = Math.round(targetQDs.reduce((a, b) => a + b, 0) * 10) / 10;
 
       // Năng suất lao động:
-      // Cơ chế: Nếu khung giờ đó không điền người (workerCount <= 0) thì không tính NSLĐ (để trống).
-      // Nếu là ngày hiện tại và khung giờ chưa tới (slotStartMs > nowMs) thì chưa tính vào NSLĐ trung bình.
-      // Qua ngày xem lại thì toàn bộ khung giờ đều đã qua nên tự động tính đủ cả ngày / cả ca.
+      // Cơ chế từng khung giờ: Nếu khung giờ đó không điền người (workerCount <= 0) hoặc khung giờ chưa tới (slotStartMs > nowMs) thì để trống.
+      // Cơ chế cột Tổng (cả ca / cả ngày): Lấy Tổng Sản phẩm quy đổi thực tế chia cho Tổng Sản lượng quy đổi cần đạt được tính tới thời điểm hiện tại xuất báo cáo (nếu qua ngày thì tính cả ngày/ca).
       const nowMs = Date.now();
       const tlRow: any[] = ['Năng suất lao động', '', '', '', '', '', ''];
-      const validProductivities: number[] = [];
+      let elapsedTargetQD = 0;
       sumSlots_QD.forEach((s, i) => {
         const slot = timeSlots[i];
         const isNightNextDaySlot = slot.start < 6;
@@ -5968,16 +5967,18 @@ const exportHourlyProductionReport = (transactions: Transaction[], parts: Part[]
           : new Date(sY, sM - 1, sD, slot.start, 0, 0, 0).getTime();
         const workerCount = getWorkerCount(stageInfo.id, slot.label);
         const tgt = targetQDs[i];
+        if (slotStartMs <= nowMs) {
+          elapsedTargetQD += tgt;
+        }
         if (workerCount > 0 && tgt > 0 && slotStartMs <= nowMs) {
           const prod = s / tgt;
           tlRow.push(prod);
-          validProductivities.push(prod);
         } else {
           tlRow.push('');
         }
       });
-      const avgProductivity = validProductivities.length > 0 
-        ? (validProductivities.reduce((a, b) => a + b, 0) / validProductivities.length) 
+      const avgProductivity = elapsedTargetQD > 0 
+        ? (totalQD / elapsedTargetQD) 
         : '';
       tlRow.push(avgProductivity);
       sheetData.push(tlRow);
@@ -7950,20 +7951,11 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
       const totalConv = productionChartData.reduce((acc, d) => acc + (d.totalConvertedMechanical || 0), 0);
       const totalMandays = productionChartData.reduce((acc, d) => acc + (d.slotMandays || 0), 0);
       const totalTarget = totalMandays * 28.3;
-      
-      // Trung bình cộng NSLĐ của các khung giờ ĐÃ ĐẾN THỜI ĐIỂM HIỆN TẠI có ghi nhận người
-      // (Nếu ngày hôm nay có điền người trước cho các khung giờ tương lai thì chưa tính vào NSLĐ trung bình; qua ngày xem lại thì tính đủ cả ngày)
-      const validSlotPercentages: number[] = [];
-      productionChartData.forEach(d => {
-        if (isSlotReached(d) && (d.totalWorkersMechanical || 0) > 0) {
-          const slotTarget = (d.slotMandays || 0) * 28.3;
-          const slotNsld = slotTarget > 0 ? ((d.totalConvertedMechanical || 0) / slotTarget) : 0;
-          validSlotPercentages.push(slotNsld);
-        }
-      });
-      const avgNsld = validSlotPercentages.length > 0 
-        ? (validSlotPercentages.reduce((a, b) => a + b, 0) / validSlotPercentages.length)
-        : 0;
+
+      // NSLĐ trung bình ca = Tổng SPQĐ thực tế / Tổng SPQĐ cần đạt được tính tới thời điểm hiện tại (qua ngày thì tính cả ca)
+      const elapsedMandays = productionChartData.reduce((acc, d) => acc + (isSlotReached(d) ? (d.slotMandays || 0) : 0), 0);
+      const elapsedTarget = elapsedMandays * 28.3;
+      const avgNsld = elapsedTarget > 0 ? (totalConv / elapsedTarget) : 0;
 
       return {
         totalConv: totalConv.toFixed(1),
@@ -7977,20 +7969,10 @@ function DashboardView({ inventory, parts, transactions, labels, refreshData, se
     const totalActual = productionChartData.reduce((acc, d) => acc + (d[cfg.barKey] || 0), 0);
     const totalConv = productionChartData.reduce((acc, d) => acc + (d[cfg.convertedKey] || 0), 0);
     const totalTarget = productionChartData.reduce((acc, d) => acc + (d[cfg.targetKey] || 0), 0);
-    
-    // Trung bình cộng NSLĐ của các khung giờ ĐÃ ĐẾN THỜI ĐIỂM HIỆN TẠI có ghi nhận người
-    const validSlotPercentages: number[] = [];
-    productionChartData.forEach(d => {
-      if (isSlotReached(d) && (d[cfg.targetKey] || 0) > 0) {
-        const slotTarget = d[cfg.targetKey] || 0;
-        const slotConv = d[cfg.convertedKey] || 0;
-        const slotNsld = slotTarget > 0 ? (slotConv / slotTarget) : 0;
-        validSlotPercentages.push(slotNsld);
-      }
-    });
-    const avgNsld = validSlotPercentages.length > 0 
-      ? (validSlotPercentages.reduce((a, b) => a + b, 0) / validSlotPercentages.length)
-      : 0;
+
+    // Khớp 100% với báo cáo Excel: Tổng SPQĐ thực tế / Tổng mục tiêu SPQĐ tính tới thời điểm hiện tại (qua ngày thì tính cả ca)
+    const elapsedTarget = productionChartData.reduce((acc, d) => acc + (isSlotReached(d) ? (d[cfg.targetKey] || 0) : 0), 0);
+    const avgNsld = elapsedTarget > 0 ? (totalConv / elapsedTarget) : 0;
 
     return {
       totalActual: Math.round(totalActual),
